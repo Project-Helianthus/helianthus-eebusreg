@@ -55,7 +55,7 @@ echo "==> public API AST boundary"
 go run ./internal/apiboundary
 
 echo "==> no premature runtime surfaces"
-if git_grep_checked -nE 'net\\.Listen|tls\\.Listen|ListenAndServe|/data/eebus|TrustStore|trust_store|truststore' -- '*.go' ':!internal/apiboundary/**' ':!*_test.go'; then
+if git_grep_checked -nE 'net\\.Listen|tls\\.Listen|ListenAndServe|/data/eebus|TrustStore|trust_store|truststore' -- '*.go' ':!internal/apiboundary/**' ':!internal/eebusinteropsmoke/**' ':!*_test.go'; then
   echo "Implementation must not contain listener or trust-store code in this milestone."
   exit 1
 fi

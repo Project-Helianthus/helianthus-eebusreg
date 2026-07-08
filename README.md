@@ -3,10 +3,11 @@
 Raw eeBUS runtime and evidence contracts for Helianthus.
 
 This repository intentionally starts as a narrow contract shell. Alongside the
-raw contract packages, it now contains an internal `enbility/eebus-go` facade
-spike; it does not contain a listener, pairing implementation,
-trust-store implementation, gateway adapter, GraphQL surface, Portal surface,
-Home Assistant surface, command routing, raw writes, or promoted facts.
+raw contract packages, it now contains internal `enbility/eebus-go`
+feasibility harnesses. It does not contain a production listener, production
+pairing implementation, trust-store implementation, gateway adapter, GraphQL
+surface, Portal surface, Home Assistant surface, command routing, raw writes,
+or promoted facts.
 
 ## Public Boundary
 
@@ -30,8 +31,9 @@ Public packages must not expose `enbility`, SHIP, or SPINE types.
 
 The repository was bootstrapped by MSP-020. The current public contracts cover
 raw identity plus raw snapshot/evidence envelope descriptors only. MSP-03A adds
-an internal-only compile-time facade proof for `eebus-go/api`; it does not start
-the runtime or add trust, pairing, MCP, gateway, or consumer behavior.
+an internal-only compile-time facade proof for `eebus-go/api`; MSP-03D adds an
+internal-only disposable interop smoke harness. Neither milestone adds
+production trust, MCP, gateway, or consumer behavior.
 
 Canonical platform ownership and doc-gate policy lives in
 `helianthus-docs-ebus/docs/platform`. eeBUS-native protocol and device notes
@@ -44,6 +46,7 @@ Local contract documents:
 - `docs/snapshot-envelope-evidence.md`
 - `docs/internal-facade-spike.md`
 - `docs/toolchain-boundary-proof.md`
+- `docs/interop-smoke-harness.md`
 
 ## Local CI
 
