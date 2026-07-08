@@ -6,7 +6,7 @@ cd "$repo_root"
 export GOWORK=off
 
 echo "==> public package boundary"
-bad_packages="$(go list -f '{{.Name}} {{.ImportPath}}' ./... | awk '$1 !~ /^(eebusruntime|eebusraw|eebusevidence)$/ {print}')"
+bad_packages="$(go list -f '{{.Name}} {{.ImportPath}}' ./... | awk '$2 !~ /\/internal(\/|$)/ && $1 !~ /^(eebusruntime|eebusraw|eebusevidence)$/ {print}')"
 if [ -n "$bad_packages" ]; then
   echo "Unexpected public package names:"
   echo "$bad_packages"

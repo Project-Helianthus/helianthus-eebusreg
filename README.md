@@ -9,11 +9,15 @@ Home Assistant surface, command routing, raw writes, or promoted facts.
 
 ## Public Boundary
 
-Allowed public package names:
+Reserved public package names:
 
 - `eebusruntime`
 - `eebusraw`
 - `eebusevidence`
+
+MSP-020 does not define public runtime identity, pairing, trust, snapshot, or
+evidence reference contracts. Those shapes are deliberately deferred to later
+gated issues.
 
 Future `enbility/eebus-go` integration is hidden behind `internal/...` and is
 introduced only by the M3 facade spike. Public packages must not expose

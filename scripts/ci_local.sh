@@ -13,6 +13,20 @@ fi
 
 ./scripts/api_boundary_gate.sh
 
+echo "==> internal package allowance smoke"
+mkdir -p internal
+tmp_internal="$(mktemp -d internal/boundary-smoke-XXXXXX)"
+cleanup() {
+  rm -rf "$tmp_internal"
+}
+trap cleanup EXIT
+cat > "$tmp_internal/doc.go" <<'GO'
+package facade
+GO
+./scripts/api_boundary_gate.sh
+cleanup
+trap - EXIT
+
 echo "==> gofmt"
 unformatted="$(git ls-files '*.go' | xargs -n 50 gofmt -l || true)"
 if [ -n "$unformatted" ]; then
