@@ -2,7 +2,10 @@ module github.com/Project-Helianthus/helianthus-eebusreg
 
 go 1.22.0
 
-require github.com/enbility/eebus-go v0.7.0
+require (
+	github.com/enbility/eebus-go v0.7.0
+	golang.org/x/mod v0.21.0
+)
 
 require (
 	github.com/enbility/go-avahi v0.0.0-20240909195612-d5de6b280d7a // indirect
@@ -13,7 +16,6 @@ require (
 	github.com/miekg/dns v1.1.62 // indirect
 	github.com/rickb777/date v1.21.1 // indirect
 	github.com/rickb777/plural v1.4.2 // indirect
-	golang.org/x/mod v0.21.0 // indirect
 	golang.org/x/net v0.29.0 // indirect
 	golang.org/x/sync v0.8.0 // indirect
 	golang.org/x/sys v0.25.0 // indirect
