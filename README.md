@@ -43,6 +43,7 @@ Local contract documents:
 - `docs/security/raw-identity-redaction-gate.md`
 - `docs/snapshot-envelope-evidence.md`
 - `docs/internal-facade-spike.md`
+- `docs/toolchain-boundary-proof.md`
 
 ## Local CI
 

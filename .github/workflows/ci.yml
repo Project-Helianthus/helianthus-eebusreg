@@ -15,4 +15,20 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - run: ./scripts/ci_local.sh
+      - run: HELIANTHUS_EEBUSREG_MAX_GO_VERSION=1.22 GOTOOLCHAIN=local ./scripts/ci_local.sh
+
+  build-container-proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run toolchain proof in build container
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${PWD}:/workspace" \
+            -w /workspace \
+            -e HELIANTHUS_EEBUSREG_MAX_GO_VERSION=1.26 \
+            golang:1.26-alpine \
+            sh -c 'apk add --no-cache bash git && export PATH=/usr/local/go/bin:$PATH && git config --global --add safe.directory /workspace && ./scripts/toolchain_boundary_proof.sh'

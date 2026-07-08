@@ -4,12 +4,31 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 export GOWORK=off
+export GOTOOLCHAIN=local
+
+git_grep_checked() {
+  set +e
+  git grep "$@"
+  status=$?
+  set -e
+  case "$status" in
+    0) return 0 ;;
+    1) return 1 ;;
+    *)
+      echo "git grep failed with status $status" >&2
+      exit "$status"
+      ;;
+  esac
+}
 
 echo "==> terminology gate"
-if git grep -nIwiE 'm[a]ster|s[l]ave' -- ':!vendor/'; then
+if git_grep_checked -nIwiE 'm[a]ster|s[l]ave' -- ':!vendor/'; then
   echo "Found legacy terminology."
   exit 1
 fi
+
+echo "==> toolchain boundary proof"
+./scripts/toolchain_boundary_proof.sh
 
 ./scripts/api_boundary_gate.sh
 
