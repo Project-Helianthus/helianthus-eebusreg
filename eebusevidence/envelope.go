@@ -272,6 +272,12 @@ func (r Reference) Validate() error {
 	if err := r.Runtime.Validate(); err != nil {
 		return fmt.Errorf("runtime: %w", err)
 	}
+	if r.Runtime.Digest == "" {
+		return errors.New("runtime digest is required")
+	}
+	if !validSHA256Digest(r.Runtime.Digest) {
+		return errors.New("runtime digest must use lowercase sha256:<64 hex chars>")
+	}
 	if err := r.Contract.Validate(); err != nil {
 		return fmt.Errorf("contract: %w", err)
 	}
@@ -369,6 +375,9 @@ func (o Object) Validate() error {
 		if err := unknown.Validate(); err != nil {
 			return fmt.Errorf("unknown field %d: %w", i, err)
 		}
+		if unknown.Value.Digest != "" && !validSHA256Digest(unknown.Value.Digest) {
+			return fmt.Errorf("unknown field %d digest must use lowercase sha256:<64 hex chars>", i)
+		}
 	}
 	return nil
 }
@@ -412,12 +421,16 @@ func NewEnvelope(ref Reference, capturedAt time.Time, dataTimestamp time.Time, o
 		Reference:     ref,
 		CapturedAt:    capturedAt.UTC(),
 		DataTimestamp: dataTimestamp.UTC(),
-		Objects:       append([]Object(nil), objects...),
+		Objects:       copyObjects(objects),
 	}
 }
 
 // Validate rejects malformed envelope descriptors.
 func (e Envelope) Validate() error {
+	return e.validate(true)
+}
+
+func (e Envelope) validate(checkDataHash bool) error {
 	if err := e.Reference.Validate(); err != nil {
 		return fmt.Errorf("ref: %w", err)
 	}
@@ -435,6 +448,12 @@ func (e Envelope) Validate() error {
 	if e.DataHash != "" && !validSHA256Digest(e.DataHash) {
 		return errors.New("data_hash must use sha256:<64 hex chars>")
 	}
+	if checkDataHash && e.DataHash != "" {
+		expected := e.computeDataHash()
+		if e.DataHash != expected {
+			return errors.New("data_hash does not match envelope content")
+		}
+	}
 	return nil
 }
 
@@ -446,12 +465,16 @@ func (e Envelope) Validate() error {
 // lexicographic object keys, no insignificant whitespace, UTC timestamps, and
 // decimal integer sizes.
 func (e Envelope) ComputeDataHash() (string, error) {
-	if err := e.Validate(); err != nil {
+	if err := e.validate(false); err != nil {
 		return "", err
 	}
+	return e.computeDataHash(), nil
+}
+
+func (e Envelope) computeDataHash() string {
 	payload := canonicalHashPayload(e)
 	sum := sha256.Sum256(payload)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // WithDataHash returns a copy of the envelope with DataHash populated.
@@ -461,6 +484,7 @@ func (e Envelope) WithDataHash() (Envelope, error) {
 		return Envelope{}, err
 	}
 	e.DataHash = hash
+	e.Objects = copyObjects(e.Objects)
 	return e, nil
 }
 
@@ -522,7 +546,7 @@ func newObjectJSON(o Object) objectJSON {
 }
 
 func sortedObjects(objects []Object) []Object {
-	sorted := append([]Object(nil), objects...)
+	sorted := copyObjects(objects)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		left := sorted[i]
 		right := sorted[j]
@@ -543,6 +567,16 @@ func sortedObjects(objects []Object) []Object {
 		return canonicalUnknownFields(left.Unknown) < canonicalUnknownFields(right.Unknown)
 	})
 	return sorted
+}
+
+func copyObjects(objects []Object) []Object {
+	copied := make([]Object, len(objects))
+	for i, object := range objects {
+		copied[i] = object
+		copied[i].DataTimestamp = object.DataTimestamp.UTC()
+		copied[i].Unknown = sortedUnknownFields(object.Unknown)
+	}
+	return copied
 }
 
 func canonicalHashPayload(e Envelope) []byte {
@@ -710,7 +744,7 @@ func canonicalTime(t time.Time) string {
 }
 
 func validSHA256Digest(value string) bool {
-	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") || value != strings.ToLower(value) {
 		return false
 	}
 	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))

@@ -27,6 +27,12 @@ func TestReferenceBindsRequiredIdentityFields(t *testing.T) {
 	if err := changed.Validate(); err == nil {
 		t.Fatal("Validate() succeeded for caller-controlled auth scope")
 	}
+
+	changed = ref
+	changed.Runtime.Digest = ""
+	if err := changed.Validate(); err == nil {
+		t.Fatal("Validate() succeeded without runtime digest")
+	}
 }
 
 func TestEnvelopeHashIsDeterministicAndOrderIndependent(t *testing.T) {
@@ -131,6 +137,76 @@ func TestEnvelopeHashCanonicalizesUnknownFieldOrder(t *testing.T) {
 	}
 }
 
+func TestDigestValidationRequiresLowercase(t *testing.T) {
+	ref := testReference(t)
+	dataTime := time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC)
+	upperDigest := uppercaseDigest(DigestBytes([]byte("payload-a")))
+
+	changedRef := ref
+	changedRef.Runtime.Digest = upperDigest
+	if err := changedRef.Validate(); err == nil {
+		t.Fatal("Validate() succeeded for uppercase runtime digest")
+	}
+
+	obj := NewObject(ObjectKindIdentity, upperDigest, 9, dataTime)
+	if err := obj.Validate(); err == nil {
+		t.Fatal("Validate() succeeded for uppercase object digest")
+	}
+
+	unknownValue := eebusraw.OpaqueBytes([]byte("unknown"))
+	unknownValue.Digest = upperDigest
+	obj = NewObject(ObjectKindUnknown, DigestBytes([]byte("payload-b")), 9, dataTime)
+	obj.Unknown = []eebusraw.UnknownField{{
+		Path:  eebusraw.UnknownPathDocument,
+		Value: unknownValue,
+	}}
+	if err := obj.Validate(); err == nil {
+		t.Fatal("Validate() succeeded for uppercase unknown digest")
+	}
+
+	env, err := NewEnvelope(ref, dataTime, dataTime, []Object{
+		NewObject(ObjectKindIdentity, DigestBytes([]byte("payload-c")), 9, dataTime),
+	}).WithDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.DataHash = uppercaseDigest(env.DataHash)
+	if err := env.Validate(); err == nil {
+		t.Fatal("Validate() succeeded for uppercase data_hash")
+	}
+}
+
+func TestNewEnvelopeDeepCopiesObjectUnknownFields(t *testing.T) {
+	ref := testReference(t)
+	dataTime := time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC)
+	object := NewObject(ObjectKindUnknown, DigestBytes([]byte("payload-a")), 9, dataTime)
+	object.Unknown = []eebusraw.UnknownField{{
+		Path:  eebusraw.UnknownPathDocument,
+		Value: eebusraw.OpaqueBytes([]byte("document-raw")),
+	}}
+	objects := []Object{object}
+	env := NewEnvelope(ref, dataTime, dataTime, objects)
+	before, err := env.ComputeDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	objects[0].Unknown[0] = eebusraw.UnknownField{
+		Path:  eebusraw.UnknownPathRemote,
+		Value: eebusraw.OpaqueBytes([]byte("remote-raw")),
+	}
+	after, err := env.ComputeDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("hash changed after caller mutated source object unknown field: %s != %s", before, after)
+	}
+	if env.Objects[0].Unknown[0].Path != eebusraw.UnknownPathDocument {
+		t.Fatalf("envelope unknown field was aliased to caller memory: %+v", env.Objects[0].Unknown[0])
+	}
+}
+
 func TestEnvelopeJSONNormalizesAndSortsObjects(t *testing.T) {
 	ref := testReference(t)
 	dataUTC := time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC)
@@ -204,6 +280,30 @@ func TestEnvelopeHashChangesWithBinding(t *testing.T) {
 	}
 	if firstHash == secondHash {
 		t.Fatal("hash did not change after reference binding changed")
+	}
+}
+
+func TestEnvelopeRejectsForgedDataHash(t *testing.T) {
+	ref := testReference(t)
+	dataTime := time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC)
+	obj := NewObject(ObjectKindIdentity, DigestBytes([]byte("payload-a")), 9, dataTime)
+	env, err := NewEnvelope(ref, dataTime, dataTime, []Object{obj}).WithDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.Reference.Scope = ScopeServices
+	if err := env.Validate(); err == nil {
+		t.Fatal("Validate() succeeded for stale data_hash after envelope mutation")
+	}
+	if _, err := json.Marshal(env); err == nil {
+		t.Fatal("json.Marshal succeeded for stale data_hash after envelope mutation")
+	}
+	hash, err := env.ComputeDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash == env.DataHash {
+		t.Fatal("ComputeDataHash returned stale data_hash")
 	}
 }
 
@@ -297,4 +397,8 @@ func testReference(t *testing.T) Reference {
 		t.Fatal(err)
 	}
 	return NewReference(runtimeID, ToolCapture, ScopeWholeRoot, AuthScopeReadRaw)
+}
+
+func uppercaseDigest(digest string) string {
+	return "sha256:" + strings.ToUpper(strings.TrimPrefix(digest, "sha256:"))
 }

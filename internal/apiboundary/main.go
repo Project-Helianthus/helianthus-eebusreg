@@ -21,6 +21,8 @@ var forbiddenExportFragments = []string{
 	"SHIP",
 	"Spine",
 	"SPINE",
+	"Snapshot",
+	"EvidenceRef",
 	"Dereference",
 	"GraphQL",
 	"Portal",

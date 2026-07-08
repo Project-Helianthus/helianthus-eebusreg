@@ -33,7 +33,7 @@ It does not cover:
 
 `Reference` binds:
 
-- `runtime`: `eebusraw.RedactedID`;
+- `runtime`: `eebusraw.RedactedID` with required redacted digest;
 - `contract`: `helianthus.eebus.raw.evidence-envelope.v1alpha1`;
 - `tool`: allowlisted raw MCP tool id;
 - `scope`: allowlisted static scope;
@@ -48,7 +48,7 @@ fingerprint, peer, session, or payload bytes cannot leak through metadata.
 `Object` descriptors contain:
 
 - allowlisted object kind;
-- `sha256:<hex>` digest;
+- lowercase `sha256:<hex>` digest;
 - byte size;
 - `data_timestamp`;
 - optional redacted `eebusraw.UnknownField` entries.
@@ -68,9 +68,10 @@ argument before conversion.
 
 The hash material is encoded as restricted RFC 8785 canonical JSON: static
 lexicographic field order, no caller-provided map keys, no insignificant
-whitespace, UTC RFC3339 timestamps, and decimal integer sizes. This keeps
-replay hashes portable across Go versions and construction paths while this
-milestone still has no live capture or dereference implementation.
+whitespace, UTC RFC3339 timestamps, decimal integer sizes, and lowercase digest
+strings only. This keeps replay hashes portable across Go versions and
+construction paths while this milestone still has no live capture or
+dereference implementation.
 
 It intentionally excludes:
 
@@ -78,3 +79,6 @@ It intentionally excludes:
 - `data_hash`;
 - live runtime state;
 - dereferenced payload bytes.
+
+If an envelope carries `data_hash`, validation recomputes the hash and rejects
+stale or forged values before public JSON serialization.
