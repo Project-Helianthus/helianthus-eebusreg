@@ -19,14 +19,17 @@ if git grep -n 'github.com/enbility' -- '*.go' ':!internal/**'; then
   exit 1
 fi
 
-echo "==> public export boundary"
-if git grep -nE '^(type|func|const|var) +(.*Registry|.*Projection|.*Semantic|.*Enbility|.*Ship|.*SHIP|.*Spine|.*SPINE)' -- '*.go' ':!internal/**'; then
-  echo "Public API exposes a forbidden boundary term."
+echo "==> public API AST boundary"
+go run ./internal/apiboundary
+
+echo "==> no premature runtime surfaces"
+if git grep -nE 'net\\.Listen|tls\\.Listen|ListenAndServe|/data/eebus|TrustStore|trust_store|truststore' -- '*.go' ':!internal/**'; then
+  echo "Public API must not contain listener or trust-store code."
   exit 1
 fi
 
-echo "==> no premature runtime surfaces"
-if git grep -nE 'net\\.Listen|tls\\.Listen|ListenAndServe|/data/eebus|TrustStore|trust_store|truststore' -- '*.go'; then
-  echo "Bootstrap must not contain listener or trust-store code."
+echo "==> no premature trust or pairing mutation API"
+if git grep -nE '^(type|func|const|var) +(RegisterRemoteSKI|UnregisterRemoteSKI|SetPairingWindow|.*PairingWindow|.*TrustStore|.*TrustMutation)' -- '*.go' ':!internal/**'; then
+  echo "Public API exposes premature trust or pairing mutation surface."
   exit 1
 fi

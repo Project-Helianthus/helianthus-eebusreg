@@ -5,8 +5,8 @@ Platform.
 
 ## Repository Boundary
 
-`helianthus-eebusreg` is raw eeBUS runtime and evidence plumbing. It is not a
-semantic registry fork and does not own consumer-facing meaning.
+`helianthus-eebusreg` is raw eeBUS runtime and evidence plumbing. It does not
+own interpreted consumer-facing meaning.
 
 Public Go packages are limited to:
 
@@ -25,5 +25,5 @@ M3.5 raw contract freeze and the later gateway sidecar issue.
 3. Run `./scripts/ci_local.sh` before pushing.
 4. Link the canonical doc-gate result from
    `helianthus-docs-ebus/docs/platform`.
-5. Keep raw eeBUS facts raw. Candidate or promoted semantic facts belong to
+5. Keep raw eeBUS facts raw. Candidate or promoted interpreted facts belong to
    later gated milestones.
