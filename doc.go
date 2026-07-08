@@ -1,7 +1,6 @@
-// Package eebusruntime reserves the public runtime package boundary for
-// future raw eeBUS work.
+// Package eebusruntime reserves the public runtime package boundary for raw
+// eeBUS work.
 //
-// MSP-020 intentionally exposes no runtime contract. Runtime identity,
-// pairing, snapshot, and trust shapes are introduced only by later gated
-// issues.
+// MSP-02A intentionally keeps runtime identity shapes in eebusraw and exposes
+// no listener, trust-store, pairing mutation, or gateway integration surface.
 package eebusruntime

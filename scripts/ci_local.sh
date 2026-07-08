@@ -27,6 +27,25 @@ GO
 cleanup
 trap - EXIT
 
+echo "==> public API boundary negative smoke"
+tmp_bad="boundary_negative_smoke.go"
+cat > "$tmp_bad" <<'GO'
+package eebusruntime
+
+type (
+	SpineProjection struct{}
+)
+
+func AcceptPairing() {}
+GO
+if ./scripts/api_boundary_gate.sh >/tmp/eebusreg-boundary-negative.out 2>&1; then
+  cat /tmp/eebusreg-boundary-negative.out
+  rm -f "$tmp_bad" /tmp/eebusreg-boundary-negative.out
+  echo "Boundary gate accepted forbidden public API smoke fixture."
+  exit 1
+fi
+rm -f "$tmp_bad" /tmp/eebusreg-boundary-negative.out
+
 echo "==> gofmt"
 unformatted="$(git ls-files '*.go' | xargs -n 50 gofmt -l || true)"
 if [ -n "$unformatted" ]; then

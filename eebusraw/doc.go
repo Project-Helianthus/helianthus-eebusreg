@@ -1,6 +1,6 @@
-// Package eebusraw reserves the public raw eeBUS package boundary.
+// Package eebusraw defines public raw eeBUS data contracts.
 //
-// MSP-020 intentionally exposes no raw SHIP/SPINE data structures. Raw
-// identity and snapshot shapes are introduced only after the documentation
-// and security gates for those contracts are accepted.
+// MSP-02A introduces a redaction-safe raw runtime identity contract. The
+// package keeps unknown protocol fields opaque and does not expose transport
+// facade, listener, trust-store, or pairing mutation surfaces.
 package eebusraw

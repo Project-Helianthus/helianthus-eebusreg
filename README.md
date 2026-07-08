@@ -15,9 +15,10 @@ Reserved public package names:
 - `eebusraw`
 - `eebusevidence`
 
-MSP-020 does not define public runtime identity, pairing, trust, snapshot, or
-evidence reference contracts. Those shapes are deliberately deferred to later
-gated issues.
+MSP-02A defines the first public raw runtime identity contract. The contract is
+read-only, redaction-safe, and deliberately excludes pairing mutation, trust
+store mutation, listeners, snapshots, evidence dereference, and runtime
+facades.
 
 Future `enbility/eebus-go` integration is hidden behind `internal/...` and is
 introduced only by the M3 facade spike. Public packages must not expose
@@ -25,13 +26,17 @@ introduced only by the M3 facade spike. Public packages must not expose
 
 ## Milestone Scope
 
-This bootstrap corresponds to MSP-020 in the eeBUS VR940f raw-first execution
-plan. It creates the repo boundary needed before MSP-02A can draft the raw
-runtime identity contract.
+The repository was bootstrapped by MSP-020. The current public contract starts
+with MSP-02A, which adds raw identity shapes only.
 
 Canonical platform ownership and doc-gate policy lives in
 `helianthus-docs-ebus/docs/platform`. eeBUS-native protocol and device notes
 live in `helianthus-docs-eebus`.
+
+Local contract documents:
+
+- `docs/raw-identity-contract.md`
+- `docs/security/raw-identity-redaction-gate.md`
 
 ## Local CI
 
