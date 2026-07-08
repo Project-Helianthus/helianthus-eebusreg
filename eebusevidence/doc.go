@@ -1,6 +1,6 @@
-// Package eebusevidence reserves the public raw evidence package boundary.
+// Package eebusevidence defines raw evidence envelope contracts.
 //
-// MSP-020 intentionally exposes no evidence reference format. Evidence
-// identity, hashing, masking, and dereference rules are introduced only by
-// later gated issues.
+// MSP-02B introduces reference binding, envelope, object descriptor, and
+// deterministic hash rules. It does not implement runtime capture, evidence
+// dereference, trust storage, or MCP serving.
 package eebusevidence
