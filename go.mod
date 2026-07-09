@@ -8,6 +8,7 @@ require (
 	github.com/enbility/spine-go v0.7.0
 	golang.org/x/mod v0.21.0
 	golang.org/x/net v0.29.0
+	golang.org/x/sys v0.25.0
 )
 
 require (
@@ -22,6 +23,5 @@ require (
 	github.com/rickb777/plural v1.4.2 // indirect
 	gitlab.com/c0b/go-ordered-json v0.0.0-20201030195603-febf46534d5a // indirect
 	golang.org/x/sync v0.8.0 // indirect
-	golang.org/x/sys v0.25.0 // indirect
 	golang.org/x/tools v0.25.0 // indirect
 )

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"golang.org/x/net/ipv4"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -152,11 +153,11 @@ func listenMDNSPacket(ctx context.Context) (net.PacketConn, error) {
 		Control: func(_, _ string, c syscall.RawConn) error {
 			var controlErr error
 			if err := c.Control(func(fd uintptr) {
-				controlErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+				controlErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
 				if controlErr != nil {
 					return
 				}
-				controlErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+				controlErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
 			}); err != nil {
 				return err
 			}
