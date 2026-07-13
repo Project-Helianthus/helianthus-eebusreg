@@ -156,17 +156,33 @@ func TestG19FailurePreservesCompletedTransportStages(t *testing.T) {
 
 func TestG19NegativeCasesAreTerminalAndDeterministic(t *testing.T) {
 	observation := passingG19Observation()
-	observation.DeniedAccessObserved = false
+	observation.DeniedAccess.Satisfied = false
 	result := evaluateG19(observation)
 	if result.Status != resultFail || result.Error != "denied_access_negative_required" {
 		t.Fatalf("missing denied-access negative = %+v", result)
 	}
 
 	observation = passingG19Observation()
-	observation.ReconnectFailureObserved = false
+	observation.ReconnectFailure.Satisfied = false
 	result = evaluateG19(observation)
 	if result.Status != resultFail || result.Error != "reconnect_failure_negative_required" {
 		t.Fatalf("missing reconnect-failure negative = %+v", result)
+	}
+}
+
+func TestG19RequiresFirstSPINEFromCurrentConnectionGeneration(t *testing.T) {
+	observation := passingG19Observation()
+	observation.FirstSPINEGeneration++
+	result := evaluateG19(observation)
+	if result.Status != resultFail || result.Error != "first_spine_generation_mismatch" {
+		t.Fatalf("generation mismatch = %+v", result)
+	}
+
+	observation = passingG19Observation()
+	observation.CurrentConnection = false
+	result = evaluateG19(observation)
+	if result.Status != resultFail || result.Error != "current_connection_generation_required" {
+		t.Fatalf("stale connection = %+v", result)
 	}
 }
 
@@ -184,11 +200,23 @@ func TestLiveEvidenceSeparatesOperatorProofFromCIReplay(t *testing.T) {
 	}
 }
 
+func TestLiveEvidenceBindsFirstSPINEDataHash(t *testing.T) {
+	evidence := passingLiveGateEvidence()
+	evidence.OperatorLiveProof.FirstSPINEDataHash = "sha256:" + strings.Repeat("0", 64)
+	if err := evidence.validate(); err == nil || !strings.Contains(err.Error(), "operator live proof evidence") {
+		t.Fatalf("accepted mismatched SPINE data hash: %v", err)
+	}
+}
+
 func TestLiveEvidenceJSONAndHashAreDeterministic(t *testing.T) {
 	left := passingLiveGateEvidence()
 	right := passingLiveGateEvidence()
 	right.Commands[0], right.Commands[1] = right.Commands[1], right.Commands[0]
+	right.Commands = append(right.Commands, right.Commands[0])
 	right.CIReplayAuthority.Fixtures[0], right.CIReplayAuthority.Fixtures[1] = right.CIReplayAuthority.Fixtures[1], right.CIReplayAuthority.Fixtures[0]
+	right.CIReplayAuthority.Fixtures = append(right.CIReplayAuthority.Fixtures, right.CIReplayAuthority.Fixtures[0])
+	right.OperatorLiveProof.TranscriptHashes = append(right.OperatorLiveProof.TranscriptHashes, right.OperatorLiveProof.TranscriptHashes[0])
+	right.OperatorLiveProof.FirstSPINEData.EntityTypes = append(right.OperatorLiveProof.FirstSPINEData.EntityTypes, right.OperatorLiveProof.FirstSPINEData.EntityTypes[0])
 
 	leftJSON, err := left.jsonBytes()
 	if err != nil {
@@ -203,6 +231,25 @@ func TestLiveEvidenceJSONAndHashAreDeterministic(t *testing.T) {
 	}
 	if left.dataHash() != right.dataHash() {
 		t.Fatalf("data hash differs: %s != %s", left.dataHash(), right.dataHash())
+	}
+	if left.Commands[0] == right.Commands[0] {
+		t.Fatal("test precondition lost distinct input ordering")
+	}
+}
+
+func TestLiveEvidenceRejectsReplayClaimedAsLive(t *testing.T) {
+	evidence := passingLiveGateEvidence()
+	evidence.NegativeCases.DeniedAccess.LiveObserved = true
+	if err := evidence.validate(); err == nil || !strings.Contains(err.Error(), "denied-access") {
+		t.Fatalf("accepted CI replay as live observation: %v", err)
+	}
+}
+
+func TestLiveEvidenceBindsCIReplayResultToFixtureHash(t *testing.T) {
+	evidence := passingLiveGateEvidence()
+	evidence.NegativeCases.DeniedAccess.EvidenceHash = "sha256:" + strings.Repeat("f", 64)
+	if err := evidence.validate(); err == nil || !strings.Contains(err.Error(), "denied-access") {
+		t.Fatalf("accepted replay evidence not bound to a fixture: %v", err)
 	}
 }
 
@@ -232,7 +279,10 @@ func TestLiveEvidenceRejectsRawIdentityAndCaptureMaterial(t *testing.T) {
 
 func passingG19Observation() g19Observation {
 	return g19Observation{
-		Direction: accessDirectionInboundFromVR940,
+		Direction:            accessDirectionInboundFromVR940,
+		CurrentConnection:    true,
+		ConnectionGeneration: 7,
+		FirstSPINEGeneration: 7,
 		Stages: []transportStage{
 			transportStageTCPAccepted,
 			transportStageTLSCompleted,
@@ -243,58 +293,94 @@ func passingG19Observation() g19Observation {
 		FirstSPINEData: spineEvidence{
 			EntityTypes:  []string{"DeviceInformation", "CEM"},
 			FeatureTypes: []string{"NodeManagement", "DeviceConfiguration"},
-			UseCaseRefs:  []string{"usecase-sha256:bbbb", "usecase-sha256:aaaa"},
+			UseCaseRefs: []string{
+				"usecase-sha256:" + strings.Repeat("b", 64),
+				"usecase-sha256:" + strings.Repeat("a", 64),
+			},
 		},
-		DeniedAccessObserved:     true,
-		ReconnectFailureObserved: true,
+		DeniedAccess: negativeObservation{
+			Satisfied:    true,
+			Authority:    negativeAuthorityCIReplay,
+			EvidenceHash: "sha256:" + strings.Repeat("c", 64),
+		},
+		ReconnectFailure: negativeObservation{
+			Satisfied:    true,
+			Authority:    negativeAuthorityCIReplay,
+			EvidenceHash: "sha256:" + strings.Repeat("d", 64),
+		},
 	}
 }
 
 func passingLiveGateEvidence() liveGateEvidence {
+	g19 := evaluateG19(passingG19Observation())
+	startedAt := time.Date(2026, 7, 13, 21, 0, 0, 0, time.UTC)
+	observedAt := time.Date(2026, 7, 13, 21, 4, 0, 0, time.UTC)
+	acceptedAt := time.Date(2026, 7, 13, 21, 5, 0, 0, time.UTC)
 	return liveGateEvidence{
 		SchemaVersion: 1,
 		Gate:          caseDirectAccess,
-		Repo: evidenceRepo{
-			Name:   "helianthus-eebusreg",
-			Branch: "issue/12-reconcile-g17-g19",
-			Commit: strings.Repeat("a", 40),
+		CaseBinding: liveCaseBinding{
+			ID:         g19.ID,
+			Status:     g19.Status,
+			ResultHash: g19.dataHash(),
 		},
+		Repo:     currentRepoEvidence(),
 		Commands: []string{"go test ./internal/eebusinteropsmoke", "./scripts/ci_local.sh"},
 		Environment: evidenceEnvironment{
-			TimestampUTC: time.Date(2026, 7, 13, 21, 0, 0, 0, time.UTC),
+			TimestampUTC: acceptedAt,
 			GoVersion:    "go1.24.5",
-			TopologyRef:  "topology-sha256:1111",
+			TopologyRef:  "hmac-sha256:" + strings.Repeat("1", 64),
 		},
 		TrustPreconditions: trustPreconditions{
-			LocalIdentityState: "disposable-in-memory",
-			PreseededAllowlist: true,
-			OperatorWindow:     "opened",
+			LocalIdentityState:     "disposable-in-memory",
+			ExpectedRemoteApproved: true,
+			AutoAcceptEnabled:      false,
+			DiscoveryIsolation:     "loopback",
+			OperatorWindow:         "opened",
 		},
 		OperatorLiveProof: operatorLiveProof{
-			Result:           resultPass,
-			TrustVisible:     true,
-			EvidenceRef:      "sha256:" + strings.Repeat("e", 64),
-			TranscriptHashes: []string{"sha256:" + strings.Repeat("b", 64)},
-			FirstSPINEData:   passingG19Observation().FirstSPINEData,
+			Result:                  resultPass,
+			TrustVisible:            true,
+			RunNonceRef:             "sha256:" + strings.Repeat("0", 64),
+			RunRef:                  "sha256:" + strings.Repeat("1", 64),
+			ChallengeRef:            "hmac-sha256:" + strings.Repeat("2", 64),
+			ExpectedRemoteDigest:    "hmac-sha256:" + strings.Repeat("3", 64),
+			InterfaceRef:            "hmac-sha256:" + strings.Repeat("4", 64),
+			PortRef:                 "hmac-sha256:" + strings.Repeat("5", 64),
+			ConnectionGenerationRef: "hmac-sha256:" + strings.Repeat("6", 64),
+			ChallengeIssuedAt:       time.Date(2026, 7, 13, 21, 4, 30, 0, time.UTC),
+			FirstSPINECapturedAt:    time.Date(2026, 7, 13, 21, 3, 0, 0, time.UTC),
+			RunStartedAt:            startedAt,
+			RunExpiresAt:            startedAt.Add(10 * time.Minute),
+			ObservedAt:              observedAt,
+			AcceptedAt:              acceptedAt,
+			EvidenceRef:             "sha256:" + strings.Repeat("e", 64),
+			TransportHash:           "sha256:" + strings.Repeat("f", 64),
+			TranscriptHashes:        []string{"sha256:" + strings.Repeat("b", 64)},
+			FirstSPINEData:          passingG19Observation().FirstSPINEData,
+			FirstSPINEDataHash:      passingG19Observation().FirstSPINEData.dataHash(),
 		},
 		CIReplayAuthority: ciReplayAuthority{
-			Result:        resultPass,
-			Fixtures:      []string{"testdata/replay-b.json", "testdata/replay-a.json"},
+			Result: resultPass,
+			Fixtures: []replayArtifact{
+				{Path: "testdata/replay-b.json", SHA256: "sha256:" + strings.Repeat("8", 64)},
+				{Path: "testdata/replay-a.json", SHA256: "sha256:" + strings.Repeat("9", 64)},
+			},
 			ReplayCommand: "go test ./internal/eebusinteropsmoke -run Replay",
 		},
 		NegativeCases: negativeCaseEvidence{
-			DeniedAccess:     evidenceResult{Result: resultPass, EvidenceHash: "sha256:" + strings.Repeat("c", 64)},
-			ReconnectFailure: evidenceResult{Result: resultPass, EvidenceHash: "sha256:" + strings.Repeat("d", 64)},
+			DeniedAccess:     evidenceResult{Result: resultPass, Authority: negativeAuthorityCIReplay, EvidenceHash: "sha256:" + strings.Repeat("8", 64)},
+			ReconnectFailure: evidenceResult{Result: resultPass, Authority: negativeAuthorityCIReplay, EvidenceHash: "sha256:" + strings.Repeat("8", 64)},
 		},
 		PublicRedaction: publicRedactionEvidence{
-			NoPacketCaptures:       true,
-			NoRawTranscripts:       true,
-			NoSecretsOrTrustStores: true,
-			NoRawIdentity:          true,
+			NoPacketCaptures:    true,
+			NoRawTranscripts:    true,
+			NoSensitiveMaterial: true,
+			NoRawIdentity:       true,
 		},
 		OwnerAcceptance: ownerAcceptance{
 			Accepted:   true,
-			AcceptedAt: time.Date(2026, 7, 13, 21, 5, 0, 0, time.UTC),
+			AcceptedAt: acceptedAt,
 			Notes:      "accepted from redacted operator observation",
 		},
 	}

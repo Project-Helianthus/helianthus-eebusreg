@@ -7,6 +7,9 @@
     "ship_completed",
     "first_spine_data"
   ],
+  "current_connection": true,
+  "connection_generation": 1,
+  "first_spine_generation": 1,
   "first_spine_data": {
     "entity_types": [
       "DeviceInformation",
@@ -17,9 +20,17 @@
       "DeviceConfiguration/client"
     ],
     "usecase_refs": [
-      "usecase-sha256:aaaa"
+      "usecase-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     ]
   },
-  "denied_access_observed": true,
-  "reconnect_failure_observed": true
+  "denied_access": {
+    "satisfied": true,
+    "authority": "ci-replay",
+    "evidence_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "reconnect_failure": {
+    "satisfied": true,
+    "authority": "ci-replay",
+    "evidence_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  }
 }

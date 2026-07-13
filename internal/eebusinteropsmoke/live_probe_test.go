@@ -2,9 +2,87 @@ package main
 
 import (
 	"context"
+	"net"
+	"reflect"
 	"testing"
 	"time"
 )
+
+type recordedLANSHIPMDNSProvider struct {
+	serviceName string
+	port        int
+	txt         []string
+	shutdown    bool
+}
+
+func (p *recordedLANSHIPMDNSProvider) Announce(serviceName string, port int, txt []string) error {
+	p.serviceName = serviceName
+	p.port = port
+	p.txt = append([]string(nil), txt...)
+	return nil
+}
+
+func (p *recordedLANSHIPMDNSProvider) Shutdown() {
+	p.shutdown = true
+}
+
+func TestStartLANSHIPPublisherAnnouncesCustomLANSHIPService(t *testing.T) {
+	originalInterfaceByName := lanSHIPInterfaceByName
+	originalProviderFactory := newLANSHIPMDNSProvider
+	t.Cleanup(func() {
+		lanSHIPInterfaceByName = originalInterfaceByName
+		newLANSHIPMDNSProvider = originalProviderFactory
+	})
+
+	wantInterface := net.Interface{Index: 7, Name: "custom-lan0"}
+	lanSHIPInterfaceByName = func(name string) (*net.Interface, error) {
+		if name != wantInterface.Name {
+			t.Fatalf("interface name = %q, want %q", name, wantInterface.Name)
+		}
+		return &wantInterface, nil
+	}
+	provider := &recordedLANSHIPMDNSProvider{}
+	var gotInterfaces []net.Interface
+	newLANSHIPMDNSProvider = func(ifaces []net.Interface) lanSHIPMDNSProvider {
+		gotInterfaces = append([]net.Interface(nil), ifaces...)
+		return provider
+	}
+
+	publisher, err := startLANSHIPPublisher(wantInterface.Name, 4712, "0123456789ABCDEF0123456789ABCDEF01234567", "raw-probe-7", true)
+	if err != nil {
+		t.Fatalf("startLANSHIPPublisher() error = %v", err)
+	}
+	if publisher.serviceFQDN != "Helianthus EnergyManagementSystem RawProbe._ship._tcp.local." {
+		t.Fatalf("service FQDN = %q", publisher.serviceFQDN)
+	}
+	if provider.serviceName != liveServiceName {
+		t.Fatalf("service name = %q, want %q", provider.serviceName, liveServiceName)
+	}
+	if provider.port != 4712 {
+		t.Fatalf("port = %d, want 4712", provider.port)
+	}
+	if !reflect.DeepEqual(gotInterfaces, []net.Interface{wantInterface}) {
+		t.Fatalf("interfaces = %+v, want %+v", gotInterfaces, []net.Interface{wantInterface})
+	}
+	wantTXT := []string{
+		"txtvers=1",
+		"path=/ship/",
+		"id=raw-probe-7",
+		"ski=0123456789abcdef0123456789abcdef01234567",
+		"brand=Helianthus",
+		"model=RawProbe",
+		"type=EnergyManagementSystem",
+		"register=true",
+	}
+	if !reflect.DeepEqual(provider.txt, wantTXT) {
+		t.Fatalf("TXT = %#v, want %#v", provider.txt, wantTXT)
+	}
+
+	publisher.shutdown()
+	if !provider.shutdown {
+		t.Fatal("publisher did not shut down provider")
+	}
+}
 
 func TestLiveSmokeFailsClosedWhenLocalAdvertisementProbeIsUnavailable(t *testing.T) {
 	result := runLiveVR940fSmoke(context.Background(), liveOptions{
