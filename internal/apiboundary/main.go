@@ -85,6 +85,31 @@ var allowedPublicPackages = map[string]string{
 	"eebusraw":      "eebusraw",
 }
 
+var documentationExtensions = map[string]struct{}{
+	".adoc":     {},
+	".asciidoc": {},
+	".markdown": {},
+	".md":       {},
+	".mdown":    {},
+	".mkd":      {},
+	".rst":      {},
+	".txt":      {},
+}
+
+var documentationNames = map[string]struct{}{
+	"api":          {},
+	"architecture": {},
+	"changelog":    {},
+	"contributing": {},
+	"design":       {},
+	"governance":   {},
+	"protocol":     {},
+	"readme":       {},
+	"roadmap":      {},
+	"security":     {},
+	"support":      {},
+}
+
 type apiManifest struct {
 	Module   string            `json:"module"`
 	Packages []manifestPackage `json:"packages"`
@@ -255,8 +280,8 @@ func validateRepositoryPaths(root string) ([]string, error) {
 			if hasFoldedPathSegment(path, "docs") {
 				violations[fmt.Sprintf("%s docs path is forbidden: %s", origin, path)] = struct{}{}
 			}
-			if isMarkdown(path) && path != "README.md" && path != "AGENTS.md" {
-				violations[fmt.Sprintf("%s markdown path is outside the allowlist: %s", origin, path)] = struct{}{}
+			if isDocumentationPath(path) && path != "README.md" && path != "AGENTS.md" {
+				violations[fmt.Sprintf("%s markdown/documentation path is outside the allowlist: %s", origin, path)] = struct{}{}
 			}
 		}
 	}
@@ -668,9 +693,18 @@ func hasFoldedPathSegment(path, segment string) bool {
 	return false
 }
 
-func isMarkdown(path string) bool {
-	extension := strings.ToLower(filepath.Ext(path))
-	return extension == ".md" || extension == ".markdown"
+func isDocumentationPath(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	extension := strings.ToLower(filepath.Ext(base))
+	if _, ok := documentationExtensions[extension]; ok {
+		return true
+	}
+	if extension != "" {
+		return false
+	}
+	name := base
+	_, ok := documentationNames[name]
+	return ok
 }
 
 func pathWithin(root, candidate string) (bool, error) {

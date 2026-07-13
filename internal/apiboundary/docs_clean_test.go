@@ -85,6 +85,29 @@ const StateReady = "ready"
 			want: []string{"ROADMAP.md"},
 		},
 		{
+			name: "alternate documentation extensions",
+			mutate: func(t *testing.T, root string) {
+				for _, path := range []string{
+					"AUTHORITY.txt",
+					"notes/PROTOCOL.rst",
+					"reference/API.adoc",
+					"reference/API.asciidoc",
+					"notes/overview.mdown",
+					"notes/overview.mkd",
+				} {
+					writeFile(t, root, path, "synthetic documentation\n")
+				}
+			},
+			want: []string{"AUTHORITY.txt", "notes/PROTOCOL.rst", "reference/API.adoc", "reference/API.asciidoc", "notes/overview.mdown", "notes/overview.mkd"},
+		},
+		{
+			name: "documentation name without extension",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "notes/ARCHITECTURE", "synthetic architecture documentation\n")
+			},
+			want: []string{"notes/ARCHITECTURE"},
+		},
+		{
 			name: "symlink",
 			mutate: func(t *testing.T, root string) {
 				replaceWithSymlink(t, root, "README.md", "AGENTS.md")
