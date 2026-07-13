@@ -30,43 +30,49 @@ type g17Observation struct {
 }
 
 func evaluateG17(observation g17Observation) caseResult {
+	evidence := []string{"g17-evaluation-completed"}
+	details := map[string]string{}
 	failure := func(code string) caseResult {
-		return caseResult{ID: caseLive, Status: resultFail, Evidence: []string{"g17-evaluation-completed"}, Error: code}
+		return caseResult{ID: caseLive, Status: resultFail, Evidence: append([]string(nil), evidence...), Details: details, Error: code}
 	}
-	switch {
-	case observation.Direction != accessDirectionInboundFromVR940:
+	if observation.Direction != accessDirectionInboundFromVR940 {
 		return failure("vr940_server_role_claim_forbidden")
-	case observation.SelectedInterface == "":
+	}
+	details["direction"] = accessDirectionInboundFromVR940
+	if observation.SelectedInterface == "" {
 		return failure("selected_interface_required")
-	case observation.SelectedPort < 1 || observation.SelectedPort > 65535:
+	}
+	details["interface_ref"] = refLabel("iface", observation.SelectedInterface)
+	if observation.SelectedPort < 1 || observation.SelectedPort > 65535 {
 		return failure("selected_port_required")
-	case !observation.LocalAdvertisementSeen:
+	}
+	details["port_ref"] = refLabel("port", fmt.Sprintf("%d", observation.SelectedPort))
+	if !observation.LocalAdvertisementSeen {
 		return failure("local_advertisement_not_observed")
-	case !observation.LANObserverConfirmed:
+	}
+	evidence = append(evidence, "g17-local-ship-advertisement-observed")
+	if !observation.LANObserverConfirmed {
 		return failure("lan_observer_confirmation_required")
-	case !observation.OperatorTrustVisible:
+	}
+	evidence = append(evidence, "g17-lan-observer-confirmed")
+	if !observation.OperatorTrustVisible {
 		return failure("operator_trust_visibility_required")
-	case !observation.TTLWithdrawalObserved:
+	}
+	evidence = append(evidence, "g17-myvaillant-trust-visible")
+	if !observation.TTLWithdrawalObserved {
 		return failure("ttl_withdrawal_not_observed")
-	case !observation.NoConnectionAfterWithdraw:
+	}
+	evidence = append(evidence, "g17-ttl-withdrawal-observed")
+	if !observation.NoConnectionAfterWithdraw {
 		return failure("post_withdrawal_negative_not_observed")
 	}
+	evidence = append(evidence, "g17-post-withdrawal-negative-observed")
 
 	return caseResult{
-		ID:     caseLive,
-		Status: resultPass,
-		Evidence: []string{
-			"g17-lan-observer-confirmed",
-			"g17-local-ship-advertisement-observed",
-			"g17-myvaillant-trust-visible",
-			"g17-post-withdrawal-negative-observed",
-			"g17-ttl-withdrawal-observed",
-		},
-		Details: map[string]string{
-			"direction":     accessDirectionInboundFromVR940,
-			"interface_ref": refLabel("iface", observation.SelectedInterface),
-			"port_ref":      refLabel("port", fmt.Sprintf("%d", observation.SelectedPort)),
-		},
+		ID:       caseLive,
+		Status:   resultPass,
+		Evidence: evidence,
+		Details:  details,
 	}
 }
 
@@ -120,43 +126,47 @@ func (e spineEvidence) dataHash() string {
 }
 
 func evaluateG19(observation g19Observation) caseResult {
+	evidence := []string{"g19-evaluation-completed"}
+	details := map[string]string{}
 	failure := func(code string) caseResult {
-		return caseResult{ID: caseDirectAccess, Status: resultFail, Evidence: []string{"g19-evaluation-completed"}, Error: code}
+		return caseResult{ID: caseDirectAccess, Status: resultFail, Evidence: append([]string(nil), evidence...), Details: details, Error: code}
 	}
 	if observation.Direction != accessDirectionInboundFromVR940 {
 		return failure("vr940_server_role_claim_forbidden")
 	}
-	if len(observation.Stages) != len(requiredTransportStages) {
-		return failure("transport_stage_sequence_incomplete")
-	}
-	for i, required := range requiredTransportStages {
-		if observation.Stages[i] != required {
+	details["direction"] = accessDirectionInboundFromVR940
+	details["observed_stage_count_ref"] = countRef("stages", len(observation.Stages))
+	for i, observed := range observation.Stages {
+		if i >= len(requiredTransportStages) || observed != requiredTransportStages[i] {
+			if len(observation.Stages) != len(requiredTransportStages) {
+				return failure("transport_stage_sequence_incomplete")
+			}
 			return failure("transport_stage_sequence_invalid")
 		}
+		evidence = append(evidence, "g19-stage-"+string(observed))
+	}
+	if len(observation.Stages) != len(requiredTransportStages) {
+		return failure("transport_stage_sequence_incomplete")
 	}
 	if observation.FirstSPINEData.empty() {
 		return failure("first_spine_data_required")
 	}
+	details["spine_data_hash"] = observation.FirstSPINEData.dataHash()
+	evidence = append(evidence, "g19-first-post-access-spine-data-captured")
 	if !observation.DeniedAccessObserved {
 		return failure("denied_access_negative_required")
 	}
+	evidence = append(evidence, "g19-denied-access-negative-observed")
 	if !observation.ReconnectFailureObserved {
 		return failure("reconnect_failure_negative_required")
 	}
+	evidence = append(evidence, "g19-reconnect-failure-negative-observed")
 
 	return caseResult{
-		ID:     caseDirectAccess,
-		Status: resultPass,
-		Evidence: []string{
-			"g19-denied-access-negative-observed",
-			"g19-first-post-access-spine-data-captured",
-			"g19-inbound-transport-sequence-completed",
-			"g19-reconnect-failure-negative-observed",
-		},
-		Details: map[string]string{
-			"direction":       accessDirectionInboundFromVR940,
-			"spine_data_hash": observation.FirstSPINEData.dataHash(),
-		},
+		ID:       caseDirectAccess,
+		Status:   resultPass,
+		Evidence: append(evidence, "g19-inbound-transport-sequence-completed"),
+		Details:  details,
 	}
 }
 

@@ -80,6 +80,21 @@ func TestG17FailsClosedForMissingProofOrWrongDirection(t *testing.T) {
 	}
 }
 
+func TestG17FailurePreservesCompletedPrerequisiteEvidence(t *testing.T) {
+	result := evaluateG17(g17Observation{
+		Direction:              accessDirectionInboundFromVR940,
+		SelectedInterface:      "lab-lan",
+		SelectedPort:           4712,
+		LocalAdvertisementSeen: true,
+	})
+	if result.Error != "lan_observer_confirmation_required" {
+		t.Fatalf("G17 result = %+v", result)
+	}
+	if !containsString(result.Evidence, "g17-local-ship-advertisement-observed") {
+		t.Fatalf("G17 dropped completed evidence: %+v", result)
+	}
+}
+
 func TestG19RequiresOrderedInboundTransportAndFirstSPINEData(t *testing.T) {
 	observation := passingG19Observation()
 	result := evaluateG19(observation)
@@ -122,6 +137,20 @@ func TestG19FailsClosedForMissingOrOutOfOrderStage(t *testing.T) {
 	result := evaluateG19(observation)
 	if result.Status != resultFail || result.Error != "transport_stage_sequence_invalid" {
 		t.Fatalf("G19 out of order = %+v", result)
+	}
+}
+
+func TestG19FailurePreservesCompletedTransportStages(t *testing.T) {
+	observation := passingG19Observation()
+	observation.Stages = observation.Stages[:4]
+	result := evaluateG19(observation)
+	if result.Error != "transport_stage_sequence_incomplete" {
+		t.Fatalf("G19 result = %+v", result)
+	}
+	for _, stage := range observation.Stages {
+		if !containsString(result.Evidence, "g19-stage-"+string(stage)) {
+			t.Fatalf("G19 dropped completed stage %s: %+v", stage, result)
+		}
 	}
 }
 
