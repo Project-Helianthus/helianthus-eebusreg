@@ -52,7 +52,7 @@ if git_grep_checked -n 'github.com/enbility' -- '*.go' ':!internal/**'; then
 fi
 
 echo "==> public API AST boundary"
-go run ./internal/apiboundary
+go run ./internal/apiboundary "$@"
 
 echo "==> no premature runtime surfaces"
 if git_grep_checked -nE 'net\\.Listen|tls\\.Listen|ListenAndServe|/data/eebus|TrustStore|trust_store|truststore' -- '*.go' ':!internal/apiboundary/**' ':!internal/eebusinteropsmoke/**' ':!*_test.go'; then

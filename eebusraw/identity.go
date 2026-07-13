@@ -11,27 +11,18 @@ import (
 	"time"
 )
 
-// ContractVersion identifies a reviewable raw contract shape.
 type ContractVersion string
 
-// IdentityContractV1Alpha1 is the first raw runtime identity contract.
 const IdentityContractV1Alpha1 ContractVersion = "helianthus.eebus.raw.identity.v1alpha1"
 
-// MaskTier describes the exposure level of stable identifiers in a document.
 type MaskTier string
 
 const (
-	// MaskTierRedacted permits only masked identifiers plus optional redacted hashes.
 	MaskTierRedacted MaskTier = "redacted"
 )
 
 const redactedValue = "[redacted]"
 
-// IdentityDocument is the top-level raw runtime identity contract.
-//
-// It is intentionally read-only. It does not model trust-store mutation,
-// pairing-window mutation, listeners, command routing, snapshots, or promoted
-// facts.
 type IdentityDocument struct {
 	Contract   ContractVersion    `json:"contract"`
 	MaskTier   MaskTier           `json:"mask_tier"`
@@ -42,7 +33,6 @@ type IdentityDocument struct {
 	Unknown    []UnknownField     `json:"unknown,omitempty"`
 }
 
-// NewIdentityDocument returns an identity document with the MSP-02A contract.
 func NewIdentityDocument(capturedAt time.Time, local EndpointIdentity) IdentityDocument {
 	return IdentityDocument{
 		Contract:   IdentityContractV1Alpha1,
@@ -52,7 +42,6 @@ func NewIdentityDocument(capturedAt time.Time, local EndpointIdentity) IdentityD
 	}
 }
 
-// Validate rejects malformed or unredacted public identity documents.
 func (d IdentityDocument) Validate() error {
 	if d.Contract != IdentityContractV1Alpha1 {
 		return fmt.Errorf("identity contract must be %q", IdentityContractV1Alpha1)
@@ -90,7 +79,6 @@ func (d IdentityDocument) Validate() error {
 	return nil
 }
 
-// MarshalJSON validates the document before exposing it as JSON.
 func (d IdentityDocument) MarshalJSON() ([]byte, error) {
 	type alias IdentityDocument
 	if err := d.Validate(); err != nil {
@@ -99,22 +87,18 @@ func (d IdentityDocument) MarshalJSON() ([]byte, error) {
 	return json.Marshal(alias(d))
 }
 
-// String returns a safe display value.
 func (d IdentityDocument) String() string {
 	return "identity_document:" + redactedValue
 }
 
-// GoString returns a safe display value for %#v.
 func (d IdentityDocument) GoString() string {
 	return d.String()
 }
 
-// Format writes a safe display value for logging-style formatting.
 func (d IdentityDocument) Format(s fmt.State, verb rune) {
 	io.WriteString(s, d.String())
 }
 
-// EndpointRole identifies whether an endpoint is local or remote.
 type EndpointRole string
 
 const (
@@ -122,7 +106,6 @@ const (
 	EndpointRoleRemote EndpointRole = "remote"
 )
 
-// EndpointIdentity describes one local or remote runtime identity endpoint.
 type EndpointIdentity struct {
 	Role    EndpointRole       `json:"role"`
 	ID      RedactedID         `json:"id"`
@@ -130,7 +113,6 @@ type EndpointIdentity struct {
 	Unknown []UnknownField     `json:"unknown,omitempty"`
 }
 
-// Validate rejects malformed or unredacted endpoint identity data.
 func (e EndpointIdentity) Validate() error {
 	if e.Role != EndpointRoleLocal && e.Role != EndpointRoleRemote {
 		return errors.New("endpoint role must be local or remote")
@@ -149,7 +131,6 @@ func (e EndpointIdentity) Validate() error {
 	return nil
 }
 
-// PairingState is an observed pairing state, not a mutation command.
 type PairingState string
 
 const (
@@ -159,12 +140,10 @@ const (
 	PairingStateDenied   PairingState = "denied"
 )
 
-// PairingObservation is a read-only view of pairing state.
 type PairingObservation struct {
 	State PairingState `json:"state,omitempty"`
 }
 
-// Validate rejects unknown pairing observation values.
 func (p PairingObservation) Validate() error {
 	switch p.State {
 	case "", PairingStateUnknown, PairingStateUnpaired, PairingStatePaired, PairingStateDenied:
@@ -174,7 +153,6 @@ func (p PairingObservation) Validate() error {
 	}
 }
 
-// SessionState is an observed runtime session state.
 type SessionState string
 
 const (
@@ -184,8 +162,6 @@ const (
 	SessionStateDegraded     SessionState = "degraded"
 )
 
-// SessionIdentity describes an observed runtime session without exposing raw
-// stable identifiers.
 type SessionIdentity struct {
 	ID       RedactedID     `json:"id"`
 	RemoteID RedactedID     `json:"remote_id"`
@@ -193,7 +169,6 @@ type SessionIdentity struct {
 	Unknown  []UnknownField `json:"unknown,omitempty"`
 }
 
-// Validate rejects malformed or unredacted session identity data.
 func (s SessionIdentity) Validate() error {
 	if err := s.ID.Validate(); err != nil {
 		return fmt.Errorf("session id: %w", err)
@@ -214,7 +189,6 @@ func (s SessionIdentity) Validate() error {
 	return nil
 }
 
-// IDKind identifies a non-sensitive category of stable identifier.
 type IDKind string
 
 const (
@@ -225,7 +199,6 @@ const (
 	IDKindSession                IDKind = "session"
 )
 
-// Validate rejects caller-controlled identifier labels.
 func (k IDKind) Validate() error {
 	switch k {
 	case IDKindLocalSKI, IDKindRemoteSKI, IDKindCertificateFingerprint, IDKindPeer, IDKindSession:
@@ -235,7 +208,6 @@ func (k IDKind) Validate() error {
 	}
 }
 
-// String returns a safe display value even for invalid kind values.
 func (k IDKind) String() string {
 	if err := k.Validate(); err != nil {
 		return "invalid-kind"
@@ -243,7 +215,6 @@ func (k IDKind) String() string {
 	return string(k)
 }
 
-// MarshalJSON validates the identifier kind before exposing it as JSON.
 func (k IDKind) MarshalJSON() ([]byte, error) {
 	if err := k.Validate(); err != nil {
 		return nil, err
@@ -251,25 +222,20 @@ func (k IDKind) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(k))
 }
 
-// GoString returns a safe display value for %#v.
 func (k IDKind) GoString() string {
 	return k.String()
 }
 
-// Format writes a safe display value for logging-style formatting.
 func (k IDKind) Format(s fmt.State, verb rune) {
 	io.WriteString(s, k.String())
 }
 
-// RedactedID represents a stable identity after masking.
 type RedactedID struct {
 	Kind   IDKind `json:"kind"`
 	Masked string `json:"masked"`
 	Digest string `json:"digest,omitempty"`
 }
 
-// RedactID converts a raw stable identifier to a redaction-safe public value.
-// Callers must not log or persist raw before conversion.
 func RedactID(kind IDKind, raw string) (RedactedID, error) {
 	if err := kind.Validate(); err != nil {
 		return RedactedID{}, err
@@ -285,7 +251,6 @@ func RedactID(kind IDKind, raw string) (RedactedID, error) {
 	}, nil
 }
 
-// Validate rejects identifiers that expose unmasked stable values.
 func (r RedactedID) Validate() error {
 	if err := r.Kind.Validate(); err != nil {
 		return err
@@ -299,7 +264,6 @@ func (r RedactedID) Validate() error {
 	return nil
 }
 
-// MarshalJSON validates the redacted identifier before exposing it as JSON.
 func (r RedactedID) MarshalJSON() ([]byte, error) {
 	type alias RedactedID
 	if err := r.Validate(); err != nil {
@@ -308,22 +272,18 @@ func (r RedactedID) MarshalJSON() ([]byte, error) {
 	return json.Marshal(alias(r))
 }
 
-// String returns a safe display value.
 func (r RedactedID) String() string {
 	return r.Kind.String() + ":" + redactedValue
 }
 
-// GoString returns a safe display value for %#v.
 func (r RedactedID) GoString() string {
 	return r.String()
 }
 
-// Format writes a safe display value for logging-style formatting.
 func (r RedactedID) Format(s fmt.State, verb rune) {
 	io.WriteString(s, r.String())
 }
 
-// UnknownPath identifies a static, non-identity-bearing raw field path.
 type UnknownPath string
 
 const (
@@ -334,7 +294,6 @@ const (
 	UnknownPathSession  UnknownPath = "/session/unknown"
 )
 
-// Validate rejects caller-controlled unknown field paths.
 func (p UnknownPath) Validate() error {
 	switch p {
 	case UnknownPathDocument, UnknownPathDevice, UnknownPathLocal, UnknownPathRemote, UnknownPathSession:
@@ -344,7 +303,6 @@ func (p UnknownPath) Validate() error {
 	}
 }
 
-// String returns a safe display value even for invalid path values.
 func (p UnknownPath) String() string {
 	if err := p.Validate(); err != nil {
 		return "/invalid/unknown"
@@ -352,7 +310,6 @@ func (p UnknownPath) String() string {
 	return string(p)
 }
 
-// MarshalJSON validates the unknown path before exposing it as JSON.
 func (p UnknownPath) MarshalJSON() ([]byte, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -360,24 +317,19 @@ func (p UnknownPath) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(p))
 }
 
-// GoString returns a safe display value for %#v.
 func (p UnknownPath) GoString() string {
 	return p.String()
 }
 
-// Format writes a safe display value for logging-style formatting.
 func (p UnknownPath) Format(s fmt.State, verb rune) {
 	io.WriteString(s, p.String())
 }
 
-// UnknownField carries an unrecognized protocol value as opaque redacted
-// evidence instead of normalizing it into a higher-level meaning.
 type UnknownField struct {
 	Path  UnknownPath `json:"path"`
 	Value OpaqueValue `json:"value"`
 }
 
-// Validate rejects malformed unknown field evidence.
 func (u UnknownField) Validate() error {
 	if err := u.Path.Validate(); err != nil {
 		return err
@@ -388,7 +340,6 @@ func (u UnknownField) Validate() error {
 	return nil
 }
 
-// MarshalJSON validates the unknown field before exposing it as JSON.
 func (u UnknownField) MarshalJSON() ([]byte, error) {
 	type alias UnknownField
 	if err := u.Validate(); err != nil {
@@ -397,30 +348,24 @@ func (u UnknownField) MarshalJSON() ([]byte, error) {
 	return json.Marshal(alias(u))
 }
 
-// String returns a safe display value.
 func (u UnknownField) String() string {
 	return "unknown_field:" + redactedValue
 }
 
-// GoString returns a safe display value for %#v.
 func (u UnknownField) GoString() string {
 	return u.String()
 }
 
-// Format writes a safe display value for logging-style formatting.
 func (u UnknownField) Format(s fmt.State, verb rune) {
 	io.WriteString(s, u.String())
 }
 
-// OpaqueValue is a redacted representation of raw bytes.
 type OpaqueValue struct {
 	Masked string `json:"masked"`
 	Digest string `json:"digest,omitempty"`
 	Size   int    `json:"size,omitempty"`
 }
 
-// OpaqueBytes converts raw bytes to an opaque public value. Callers must not
-// log or persist raw before conversion.
 func OpaqueBytes(raw []byte) OpaqueValue {
 	sum := sha256.Sum256(raw)
 	return OpaqueValue{
@@ -430,7 +375,6 @@ func OpaqueBytes(raw []byte) OpaqueValue {
 	}
 }
 
-// Validate rejects opaque values that expose raw bytes.
 func (o OpaqueValue) Validate() error {
 	if o.Masked != redactedValue {
 		return errors.New("opaque value must be redacted")
@@ -444,7 +388,6 @@ func (o OpaqueValue) Validate() error {
 	return nil
 }
 
-// MarshalJSON validates the opaque value before exposing it as JSON.
 func (o OpaqueValue) MarshalJSON() ([]byte, error) {
 	type alias OpaqueValue
 	if err := o.Validate(); err != nil {
@@ -453,17 +396,14 @@ func (o OpaqueValue) MarshalJSON() ([]byte, error) {
 	return json.Marshal(alias(o))
 }
 
-// String returns a safe display value.
 func (o OpaqueValue) String() string {
 	return "opaque:" + redactedValue
 }
 
-// GoString returns a safe display value for %#v.
 func (o OpaqueValue) GoString() string {
 	return o.String()
 }
 
-// Format writes a safe display value for logging-style formatting.
 func (o OpaqueValue) Format(s fmt.State, verb rune) {
 	io.WriteString(s, o.String())
 }

@@ -16,6 +16,14 @@ jobs:
         with:
           go-version: '1.22'
       - run: HELIANTHUS_EEBUSREG_MAX_GO_VERSION=1.22 GOTOOLCHAIN=local ./scripts/ci_local.sh
+      - name: Generate API boundary manifest
+        run: GOWORK=off GOTOOLCHAIN=local go run ./internal/apiboundary -manifest "$RUNNER_TEMP/helianthus-eebusreg-api-boundary.json"
+      - name: Upload API boundary manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: helianthus-eebusreg-api-boundary
+          path: ${{ runner.temp }}/helianthus-eebusreg-api-boundary.json
+          if-no-files-found: error
 
   build-container-proof:
     runs-on: ubuntu-latest
