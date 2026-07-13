@@ -1,10 +1,4 @@
-// Package eebusfacade contains the internal compile-time boundary to
-// enbility/eebus-go.
-//
-// The package is deliberately internal: public Helianthus packages expose raw
-// runtime and evidence contracts only, while this package proves the pinned
-// eeBUS dependency can be isolated before any listener, trust store, or gateway
-// sidecar exists.
+// Package eebusfacade isolates the internal eebus-go compile-time boundary.
 package eebusfacade
 
 import (
@@ -17,14 +11,11 @@ import (
 )
 
 const (
-	// EEBusGoModulePath is the only accepted upstream eeBUS runtime module.
 	EEBusGoModulePath = "github.com/enbility/eebus-go"
-	// EEBusGoVersion is the M3 spike pin.
-	EEBusGoVersion = "v0.7.0"
-	apiImportPath  = EEBusGoModulePath + "/api"
+	EEBusGoVersion    = "v0.7.0"
+	apiImportPath     = EEBusGoModulePath + "/api"
 )
 
-// ModulePin is plain internal evidence about the selected upstream module.
 type ModulePin struct {
 	Path           string
 	Version        string
@@ -32,7 +23,6 @@ type ModulePin struct {
 	ReplaceVersion string
 }
 
-// BoundaryEvidence records the isolation guarantees expected from this spike.
 type BoundaryEvidence struct {
 	InternalOnly         bool
 	PublicTypesHidden    bool
@@ -41,7 +31,6 @@ type BoundaryEvidence struct {
 	PersistentTrustState bool
 }
 
-// APIShapeEvidence records the small eebus-go/api surface used by the spike.
 type APIShapeEvidence struct {
 	ImportPath                    string
 	RequiredServiceReaders        []string
@@ -52,14 +41,12 @@ type APIShapeEvidence struct {
 	ConfigurationConstructorBound bool
 }
 
-// Evidence is the complete internal facade evidence document for MSP-03A.
 type Evidence struct {
 	Module   ModulePin
 	Boundary BoundaryEvidence
 	API      APIShapeEvidence
 }
 
-// StaticEvidence returns deterministic evidence for review and tests.
 func StaticEvidence() Evidence {
 	return Evidence{
 		Module: ModulePin{
@@ -77,7 +64,6 @@ func StaticEvidence() Evidence {
 	}
 }
 
-// ExpectedControlSurface returns the eebus-go/api calls this spike binds to.
 func ExpectedControlSurface() APIShapeEvidence {
 	return APIShapeEvidence{
 		ImportPath: apiImportPath,

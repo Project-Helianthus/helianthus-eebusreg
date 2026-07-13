@@ -32,6 +32,21 @@ echo "==> toolchain boundary proof"
 
 ./scripts/api_boundary_gate.sh
 
+echo "==> API boundary manifest artifact"
+manifest_dir="$(mktemp -d)"
+cleanup_manifest() {
+  rm -rf "$manifest_dir"
+}
+trap cleanup_manifest EXIT
+manifest_path="$manifest_dir/api-boundary.json"
+./scripts/api_boundary_gate.sh -manifest "$manifest_path"
+if [ ! -s "$manifest_path" ]; then
+  echo "API boundary manifest artifact was not generated."
+  exit 1
+fi
+cleanup_manifest
+trap - EXIT
+
 echo "==> internal package allowance smoke"
 mkdir -p internal
 tmp_internal="$(mktemp -d internal/boundary-smoke-XXXXXX)"
