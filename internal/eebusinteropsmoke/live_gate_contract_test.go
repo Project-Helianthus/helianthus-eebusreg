@@ -244,6 +244,7 @@ func passingLiveGateEvidence() liveGateEvidence {
 		OperatorLiveProof: operatorLiveProof{
 			Result:           resultPass,
 			TrustVisible:     true,
+			EvidenceRef:      "sha256:" + strings.Repeat("e", 64),
 			TranscriptHashes: []string{"sha256:" + strings.Repeat("b", 64)},
 			FirstSPINEData:   passingG19Observation().FirstSPINEData,
 		},

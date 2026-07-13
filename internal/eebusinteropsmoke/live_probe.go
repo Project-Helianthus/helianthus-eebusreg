@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,78 +20,40 @@ const (
 )
 
 type liveOptions struct {
-	Interface string
-	Timeout   time.Duration
-	RemoteSKI string
+	Interface        string
+	Timeout          time.Duration
+	Port             int
+	RemoteSKI        string
+	PairingWindow    bool
+	OperatorProofRef string
+	RepoBranch       string
+	RepoCommit       string
 }
 
 type liveDiscovery struct {
-	Records      int
-	SHIP         int
-	ServiceRef   string
-	InterfaceRef string
+	Records         int
+	SHIP            int
+	ExpectedActive  int
+	ExpectedGoodbye int
+	ServiceRef      string
+	InterfaceRef    string
 }
 
 func runLiveVR940fSmoke(ctx context.Context, opts liveOptions) caseResult {
-	if opts.Timeout <= 0 {
-		opts.Timeout = 10 * time.Second
-	}
-	discovery, err := probeSHIP(ctx, opts.Interface, opts.Timeout)
-	if err != nil {
-		return caseResult{
-			ID:       caseLive,
-			Status:   resultBlocked,
-			Evidence: []string{"live-vr940f-mdns-probe-attempted"},
-			Error:    "mdns_probe_unavailable",
+	result := runLiveVR940fProof(ctx, opts)
+	for _, item := range result.Cases {
+		if item.ID == caseLive {
+			return item
 		}
 	}
-	if discovery.SHIP == 0 {
-		return caseResult{
-			ID:     caseLive,
-			Status: resultBlocked,
-			Evidence: []string{
-				"live-vr940f-mdns-probe-attempted",
-				"live-vr940f-no-ship-service-visible",
-			},
-			Details: map[string]string{
-				"records_ref":   countRef("records", discovery.Records),
-				"interface_ref": discovery.InterfaceRef,
-			},
-			Error: "no_visible_ship_service",
-		}
-	}
-	if opts.RemoteSKI == "" {
-		return caseResult{
-			ID:     caseLive,
-			Status: resultBlocked,
-			Evidence: []string{
-				"live-vr940f-ship-service-visible",
-				"live-vr940f-pairing-not-attempted-without-remote-ski",
-			},
-			Details: map[string]string{
-				"service_ref":   discovery.ServiceRef,
-				"interface_ref": discovery.InterfaceRef,
-			},
-			Error: "remote_ski_required_for_pairing_smoke",
-		}
-	}
-	return caseResult{
-		ID:     caseLive,
-		Status: resultBlocked,
-		Evidence: []string{
-			"live-vr940f-ship-service-visible",
-			"live-vr940f-pairing-runner-not-yet-promoted-to-pass",
-		},
-		Details: map[string]string{
-			"service_ref":    discovery.ServiceRef,
-			"remote_ski_ref": digestRef(opts.RemoteSKI),
-			"interface_ref":  discovery.InterfaceRef,
-		},
-		Error: "pairing_session_feature_graph_reconnect_not_collected",
-	}
+	return caseResult{ID: caseLive, Status: resultFail, Evidence: []string{"g17-runner-returned-no-result"}, Error: "g17_result_missing"}
 }
 
 func probeSHIP(ctx context.Context, iface string, timeout time.Duration) (liveDiscovery, error) {
+	return probeSHIPService(ctx, iface, timeout, "")
+}
+
+func probeSHIPService(ctx context.Context, iface string, timeout time.Duration, expectedService string) (liveDiscovery, error) {
 	if iface == "" {
 		iface = defaultLANInterface()
 	}
@@ -140,6 +103,13 @@ func probeSHIP(ctx context.Context, iface string, timeout time.Duration) (liveDi
 					out.SHIP++
 					if out.ServiceRef == "" {
 						out.ServiceRef = refLabel("ship-service", record.Name+"|"+record.Value)
+					}
+				}
+				if expectedService != "" && (strings.EqualFold(record.Name, expectedService) || strings.EqualFold(record.Value, expectedService)) {
+					if record.TTL == 0 {
+						out.ExpectedGoodbye++
+					} else {
+						out.ExpectedActive++
 					}
 				}
 			}
@@ -206,6 +176,7 @@ func joinMDNSGroup(conn *net.UDPConn, localIP net.IP) error {
 type mdnsRecord struct {
 	Name  string
 	Type  uint16
+	TTL   uint32
 	Value string
 }
 
@@ -267,6 +238,7 @@ func parseMDNSRecords(packet []byte) []mdnsRecord {
 			return records
 		}
 		typ := binary.BigEndian.Uint16(packet[next : next+2])
+		ttl := binary.BigEndian.Uint32(packet[next+4 : next+8])
 		rdlen := int(binary.BigEndian.Uint16(packet[next+8 : next+10]))
 		rstart := next + 10
 		rend := rstart + rdlen
@@ -286,7 +258,7 @@ func parseMDNSRecords(packet []byte) []mdnsRecord {
 				}
 			}
 		}
-		records = append(records, mdnsRecord{Name: name, Type: typ, Value: value})
+		records = append(records, mdnsRecord{Name: name, Type: typ, TTL: ttl, Value: value})
 		offset = rend
 	}
 	return records

@@ -1,0 +1,25 @@
+{
+  "direction": "inbound-from-vr940-client",
+  "stages": [
+    "tcp_accepted",
+    "tls_completed",
+    "websocket_upgraded",
+    "ship_completed",
+    "first_spine_data"
+  ],
+  "first_spine_data": {
+    "entity_types": [
+      "DeviceInformation",
+      "CEM"
+    ],
+    "feature_types": [
+      "NodeManagement/special",
+      "DeviceConfiguration/client"
+    ],
+    "usecase_refs": [
+      "usecase-sha256:aaaa"
+    ]
+  },
+  "denied_access_observed": true,
+  "reconnect_failure_observed": true
+}

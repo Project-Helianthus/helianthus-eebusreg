@@ -68,3 +68,20 @@ func TestReportJSONSortsCasesAndEvidence(t *testing.T) {
 		t.Fatalf("report was not sorted deterministically: %s", payload)
 	}
 }
+
+func TestPassingG19ReportRequiresCanonicalLiveEvidence(t *testing.T) {
+	rep := newReport("live-vr940f", []string{caseLive, caseDirectAccess}, []caseResult{
+		{ID: caseLive, Status: resultPass, Evidence: []string{"g17-pass"}},
+		{ID: caseDirectAccess, Status: resultPass, Evidence: []string{"g19-pass"}},
+	}, nil)
+	rep.GeneratedAt = time.Date(2026, 7, 13, 21, 0, 0, 0, time.UTC)
+	if err := rep.validate(); err == nil || !strings.Contains(err.Error(), "canonical live evidence") {
+		t.Fatalf("passing G19 report without canonical evidence: %v", err)
+	}
+
+	evidence := passingLiveGateEvidence()
+	rep.LiveEvidence = &evidence
+	if err := rep.validate(); err != nil {
+		t.Fatalf("passing G19 report rejected: %v", err)
+	}
+}

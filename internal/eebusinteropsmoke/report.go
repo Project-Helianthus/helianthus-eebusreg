@@ -16,7 +16,7 @@ import (
 
 const (
 	reportContract = "helianthus.eebus.transport-gate.v0"
-	reportIssue    = "MSP-03D"
+	reportIssue    = "MSP-03D-R"
 	reportRepo     = "Project-Helianthus/helianthus-eebusreg"
 
 	caseFakePeer = "EEBUS-G01"
@@ -49,6 +49,7 @@ type report struct {
 	Security      securityEvidence  `json:"security"`
 	Disposable    disposableMode    `json:"disposable"`
 	Cases         []caseResult      `json:"cases"`
+	LiveEvidence  *liveGateEvidence `json:"live_evidence,omitempty"`
 	Notes         []string          `json:"notes,omitempty"`
 }
 
@@ -154,6 +155,7 @@ func (r report) validate() error {
 		return errors.New("required cases and cases are required")
 	}
 	seen := map[string]bool{}
+	passed := map[string]bool{}
 	for _, c := range r.Cases {
 		if c.ID == "" {
 			return errors.New("case id is required")
@@ -162,6 +164,7 @@ func (r report) validate() error {
 			return fmt.Errorf("duplicate case %s", c.ID)
 		}
 		seen[c.ID] = true
+		passed[c.ID] = c.Status == resultPass
 		switch c.Status {
 		case resultPass, resultFail, resultBlocked:
 		default:
@@ -174,6 +177,14 @@ func (r report) validate() error {
 	for _, id := range r.RequiredCases {
 		if !seen[id] {
 			return fmt.Errorf("required case %s missing", id)
+		}
+	}
+	if passed[caseDirectAccess] {
+		if r.LiveEvidence == nil {
+			return errors.New("G19 requires canonical live evidence")
+		}
+		if err := r.LiveEvidence.validate(); err != nil {
+			return fmt.Errorf("G19 live evidence: %w", err)
 		}
 	}
 	payload, err := r.jsonBytes()
@@ -193,6 +204,10 @@ func (r report) jsonBytes() ([]byte, error) {
 		if len(normalized.Cases[i].Details) == 0 {
 			normalized.Cases[i].Details = nil
 		}
+	}
+	if normalized.LiveEvidence != nil {
+		live := normalized.LiveEvidence.normalized()
+		normalized.LiveEvidence = &live
 	}
 	buf := &bytes.Buffer{}
 	enc := json.NewEncoder(buf)
