@@ -158,10 +158,10 @@ func probeSHIPService(ctx context.Context, iface string, timeout time.Duration, 
 	return out, nil
 }
 
-func observeSHIPWithdrawal(ctx context.Context, iface string, timeout time.Duration, expectedService string, shutdown func()) (out liveDiscovery, resultErr error) {
+func observeSHIPWithdrawal(ctx context.Context, iface string, timeout time.Duration, expectedService string, withdrawAdvertisement func() error) (out liveDiscovery, resultErr error) {
 	iface = strings.TrimSpace(iface)
 	expectedService = strings.TrimSpace(expectedService)
-	if iface == "" || timeout <= 0 || expectedService == "" || shutdown == nil {
+	if iface == "" || timeout <= 0 || expectedService == "" || withdrawAdvertisement == nil {
 		return liveDiscovery{}, errors.New("mDNS withdrawal observer configuration invalid")
 	}
 	udp, err := openMDNSObserver(ctx, iface)
@@ -177,7 +177,9 @@ func observeSHIPWithdrawal(ctx context.Context, iface string, timeout time.Durat
 		return liveDiscovery{}, err
 	}
 
-	shutdown()
+	if err := withdrawAdvertisement(); err != nil {
+		return liveDiscovery{}, fmt.Errorf("mDNS withdrawal action failed: %w", err)
+	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		select {

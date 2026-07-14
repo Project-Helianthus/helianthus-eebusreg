@@ -107,6 +107,9 @@ func TestG19RequiresOrderedInboundTransportAndFirstSPINEData(t *testing.T) {
 	if result.Details["spine_data_hash"] == "" {
 		t.Fatal("G19 did not bind first post-access SPINE data")
 	}
+	if result.Details["spine_payload_hash"] != observation.FirstSPINEPayloadHash {
+		t.Fatal("G19 did not bind the inbound SPINE payload hash")
+	}
 	if _, ok := result.Details["feature_graph_complete"]; ok {
 		t.Fatalf("G19 incorrectly requires deferred feature graph completeness: %+v", result.Details)
 	}
@@ -208,6 +211,14 @@ func TestLiveEvidenceBindsFirstSPINEDataHash(t *testing.T) {
 	}
 }
 
+func TestLiveEvidenceBindsFirstSPINEPayloadHash(t *testing.T) {
+	evidence := passingLiveGateEvidence()
+	evidence.OperatorLiveProof.FirstSPINEPayloadHash = ""
+	if err := evidence.validate(); err == nil || !strings.Contains(err.Error(), "operator live proof evidence") {
+		t.Fatalf("accepted missing SPINE payload hash: %v", err)
+	}
+}
+
 func TestLiveEvidenceJSONAndHashAreDeterministic(t *testing.T) {
 	left := passingLiveGateEvidence()
 	right := passingLiveGateEvidence()
@@ -279,10 +290,11 @@ func TestLiveEvidenceRejectsRawIdentityAndCaptureMaterial(t *testing.T) {
 
 func passingG19Observation() g19Observation {
 	return g19Observation{
-		Direction:            accessDirectionInboundFromVR940,
-		CurrentConnection:    true,
-		ConnectionGeneration: 7,
-		FirstSPINEGeneration: 7,
+		Direction:             accessDirectionInboundFromVR940,
+		CurrentConnection:     true,
+		ConnectionGeneration:  7,
+		FirstSPINEGeneration:  7,
+		FirstSPINEPayloadHash: "sha256:" + strings.Repeat("e", 64),
 		Stages: []transportStage{
 			transportStageTCPAccepted,
 			transportStageTLSCompleted,
@@ -357,20 +369,21 @@ func passingLiveGateEvidence() liveGateEvidence {
 			EvidenceRef:             "sha256:" + strings.Repeat("e", 64),
 			TransportHash:           "sha256:" + strings.Repeat("f", 64),
 			TranscriptHashes:        []string{"sha256:" + strings.Repeat("b", 64)},
+			FirstSPINEPayloadHash:   passingG19Observation().FirstSPINEPayloadHash,
 			FirstSPINEData:          passingG19Observation().FirstSPINEData,
 			FirstSPINEDataHash:      passingG19Observation().FirstSPINEData.dataHash(),
 		},
 		CIReplayAuthority: ciReplayAuthority{
 			Result: resultPass,
 			Fixtures: []replayArtifact{
-				{Path: "testdata/replay-b.json", SHA256: "sha256:" + strings.Repeat("8", 64)},
-				{Path: "testdata/replay-a.json", SHA256: "sha256:" + strings.Repeat("9", 64)},
+				{Path: "testdata/replay-b.json", SHA256: "sha256:" + strings.Repeat("8", 64), DeniedAccessTraceSHA256: "sha256:" + strings.Repeat("6", 64), ReconnectFailureTraceSHA256: "sha256:" + strings.Repeat("5", 64)},
+				{Path: "testdata/replay-a.json", SHA256: "sha256:" + strings.Repeat("9", 64), DeniedAccessTraceSHA256: "sha256:" + strings.Repeat("7", 64), ReconnectFailureTraceSHA256: "sha256:" + strings.Repeat("4", 64)},
 			},
 			ReplayCommand: "go test ./internal/eebusinteropsmoke -run Replay",
 		},
 		NegativeCases: negativeCaseEvidence{
-			DeniedAccess:     evidenceResult{Result: resultPass, Authority: negativeAuthorityCIReplay, EvidenceHash: "sha256:" + strings.Repeat("8", 64)},
-			ReconnectFailure: evidenceResult{Result: resultPass, Authority: negativeAuthorityCIReplay, EvidenceHash: "sha256:" + strings.Repeat("8", 64)},
+			DeniedAccess:     evidenceResult{Result: resultPass, Authority: negativeAuthorityCIReplay, EvidenceHash: "sha256:" + strings.Repeat("6", 64)},
+			ReconnectFailure: evidenceResult{Result: resultPass, Authority: negativeAuthorityCIReplay, EvidenceHash: "sha256:" + strings.Repeat("5", 64)},
 		},
 		PublicRedaction: publicRedactionEvidence{
 			NoPacketCaptures:    true,

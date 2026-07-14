@@ -181,6 +181,29 @@ func TestPassingG19ReportRequiresCanonicalLiveEvidence(t *testing.T) {
 	}
 }
 
+func TestReportRepresentsPassingG17WithIncompleteG19(t *testing.T) {
+	rep := newReport("live-vr940f", []string{caseLive, caseDirectAccess}, []caseResult{
+		{ID: caseLive, Status: resultPass, Evidence: []string{"g17-pass"}},
+		{ID: caseDirectAccess, Status: resultFail, Evidence: []string{"g19-incomplete"}, Error: "first_spine_payload_hash_required"},
+	}, nil)
+	if err := rep.validate(); err != nil {
+		t.Fatalf("valid G17-only report rejected: %v", err)
+	}
+}
+
+func TestReportAttachesPassingG19EvidenceWhenG17Fails(t *testing.T) {
+	g19 := evaluateG19(passingG19Observation())
+	evidence := passingLiveGateEvidence()
+	rep := newReport("live-vr940f", []string{caseLive, caseDirectAccess}, []caseResult{
+		{ID: caseLive, Status: resultFail, Evidence: []string{"g17-withdrawal-failed"}, Error: "ttl_withdrawal_not_observed"},
+		g19,
+	}, nil)
+	rep.LiveEvidence = &evidence
+	if err := rep.validate(); err != nil {
+		t.Fatalf("G19 evidence depended on G17 PASS: %v", err)
+	}
+}
+
 func TestReportAlwaysRedactsLiveEvidenceBeforeStatusContract(t *testing.T) {
 	rep := newReport("live-vr940f", []string{caseDirectAccess}, []caseResult{{
 		ID:       caseDirectAccess,

@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,41 +22,30 @@ const (
 	negativeAuthorityLiveNetwork    = "live-network"
 )
 
+const g19ReplayFixturePath = "internal/eebusinteropsmoke/testdata/g19-replay-v1.json"
+
 var g19ReplayFixture = []byte(`{
-  "direction": "inbound-from-vr940-client",
-  "stages": [
-    "tcp_accepted",
-    "tls_completed",
-    "websocket_upgraded",
-    "ship_completed",
-    "first_spine_data"
-  ],
-  "current_connection": true,
-  "connection_generation": 1,
-  "first_spine_generation": 1,
-  "first_spine_data": {
-    "entity_types": [
-      "DeviceInformation",
-      "CEM"
-    ],
-    "feature_types": [
-      "NodeManagement/special",
-      "DeviceConfiguration/client"
-    ],
-    "usecase_refs": [
-      "usecase-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    ]
-  },
-  "denied_access": {
-    "satisfied": true,
-    "authority": "ci-replay",
-    "evidence_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-  },
-  "reconnect_failure": {
-    "satisfied": true,
-    "authority": "ci-replay",
-    "evidence_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-  }
+  "schema_version": 1,
+  "negative_window_ms": 3000,
+  "events": [
+    {
+      "at_ms": 0,
+      "type": "inbound_attempt",
+      "peer": "unexpected"
+    },
+    {
+      "at_ms": 10,
+      "type": "observer_ready"
+    },
+    {
+      "at_ms": 20,
+      "type": "advertisement_withdrawn"
+    },
+    {
+      "at_ms": 3020,
+      "type": "negative_window_elapsed"
+    }
+  ]
 }
 `)
 
@@ -135,14 +126,15 @@ var requiredTransportStages = []transportStage{
 }
 
 type g19Observation struct {
-	Direction            string              `json:"direction"`
-	Stages               []transportStage    `json:"stages"`
-	CurrentConnection    bool                `json:"current_connection"`
-	ConnectionGeneration uint64              `json:"connection_generation"`
-	FirstSPINEGeneration uint64              `json:"first_spine_generation"`
-	FirstSPINEData       spineEvidence       `json:"first_spine_data"`
-	DeniedAccess         negativeObservation `json:"denied_access"`
-	ReconnectFailure     negativeObservation `json:"reconnect_failure"`
+	Direction             string              `json:"direction"`
+	Stages                []transportStage    `json:"stages"`
+	CurrentConnection     bool                `json:"current_connection"`
+	ConnectionGeneration  uint64              `json:"connection_generation"`
+	FirstSPINEGeneration  uint64              `json:"first_spine_generation"`
+	FirstSPINEPayloadHash string              `json:"first_spine_payload_hash"`
+	FirstSPINEData        spineEvidence       `json:"first_spine_data"`
+	DeniedAccess          negativeObservation `json:"denied_access"`
+	ReconnectFailure      negativeObservation `json:"reconnect_failure"`
 }
 
 type negativeObservation struct {
@@ -198,6 +190,10 @@ func evaluateG19(observation g19Observation) caseResult {
 	if observation.FirstSPINEGeneration != observation.ConnectionGeneration {
 		return failure("first_spine_generation_mismatch")
 	}
+	if !validSHA256Ref(observation.FirstSPINEPayloadHash) {
+		return failure("first_spine_payload_hash_required")
+	}
+	details["spine_payload_hash"] = strings.TrimSpace(observation.FirstSPINEPayloadHash)
 	for i, observed := range observation.Stages {
 		observed = transportStage(strings.TrimSpace(string(observed)))
 		if i >= len(requiredTransportStages) || observed != requiredTransportStages[i] {
@@ -263,24 +259,245 @@ func (n negativeObservation) normalized() negativeObservation {
 	return n
 }
 
-func replayNegativeObservations() (negativeObservation, negativeObservation, string, error) {
-	var observation g19Observation
-	if err := json.Unmarshal(g19ReplayFixture, &observation); err != nil {
-		return negativeObservation{}, negativeObservation{}, "", err
+const (
+	replayEventInboundAttempt         = "inbound_attempt"
+	replayEventObserverReady          = "observer_ready"
+	replayEventAdvertisementWithdrawn = "advertisement_withdrawn"
+	replayEventNegativeWindowElapsed  = "negative_window_elapsed"
+	replayPeerExpected                = "expected"
+	replayPeerUnexpected              = "unexpected"
+	replayTransitionAccessDenied      = "access_denied"
+	replayTransitionAccessAllowed     = "access_allowed"
+	replayTransitionObserverReady     = "observer_ready"
+	replayTransitionAdvertisementGone = "advertisement_withdrawn"
+	replayTransitionInboundAttempt    = "inbound_attempt_observed"
+	replayTransitionNoInboundAttempt  = "no_inbound_attempt_observed"
+	replayTraceDeniedAccess           = "denied_access"
+	replayTraceReconnectFailure       = "reconnect_failure"
+)
+
+type replayInput struct {
+	SchemaVersion    int           `json:"schema_version"`
+	NegativeWindowMS int64         `json:"negative_window_ms"`
+	Events           []replayEvent `json:"events"`
+}
+
+type replayEvent struct {
+	AtMS int64  `json:"at_ms"`
+	Type string `json:"type"`
+	Peer string `json:"peer,omitempty"`
+}
+
+type replayTransition struct {
+	AtMS       int64  `json:"at_ms"`
+	Transition string `json:"transition"`
+}
+
+type postWithdrawalTracker struct {
+	mu          sync.Mutex
+	ready       bool
+	withdrawn   bool
+	finished    bool
+	readyAt     time.Time
+	withdrawnAt time.Time
+	attempts    int
+	trace       []replayTransition
+}
+
+func (t *postWithdrawalTracker) observerReady(at time.Time) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.ready || t.withdrawn || t.finished || at.IsZero() {
+		return errors.New("post-withdrawal observer-ready transition invalid")
 	}
-	if observation.DeniedAccess.Authority != negativeAuthorityCIReplay || observation.ReconnectFailure.Authority != negativeAuthorityCIReplay {
-		return negativeObservation{}, negativeObservation{}, "", errors.New("G19 replay fixture must classify negative checks as CI replay")
+	t.ready = true
+	t.readyAt = at
+	t.trace = append(t.trace, replayTransition{Transition: replayTransitionObserverReady})
+	return nil
+}
+
+func (t *postWithdrawalTracker) advertisementWithdrawn(at time.Time) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.ready || t.withdrawn || t.finished || at.Before(t.readyAt) {
+		return errors.New("post-withdrawal advertisement transition invalid")
 	}
-	if result := evaluateG19(observation); result.Status != resultPass {
-		return negativeObservation{}, negativeObservation{}, "", fmt.Errorf("G19 replay fixture is not authoritative: %s", result.Error)
+	t.withdrawn = true
+	t.withdrawnAt = at
+	t.trace = append(t.trace, replayTransition{
+		AtMS:       at.Sub(t.readyAt).Milliseconds(),
+		Transition: replayTransitionAdvertisementGone,
+	})
+	return nil
+}
+
+func (t *postWithdrawalTracker) recordInboundAttempt(at time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.withdrawn || t.finished || at.Before(t.withdrawnAt) {
+		return
 	}
-	if err := observation.DeniedAccess.validate(); err != nil {
-		return negativeObservation{}, negativeObservation{}, "", err
+	t.attempts++
+	t.trace = append(t.trace, replayTransition{
+		AtMS:       at.Sub(t.readyAt).Milliseconds(),
+		Transition: replayTransitionInboundAttempt,
+	})
+}
+
+func (t *postWithdrawalTracker) finish(at time.Time, minimumWindow time.Duration) (bool, []replayTransition, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if minimumWindow <= 0 || !t.withdrawn || t.finished || at.Before(t.withdrawnAt) || at.Sub(t.withdrawnAt) < minimumWindow {
+		return false, nil, errors.New("post-withdrawal negative window transition invalid")
 	}
-	if err := observation.ReconnectFailure.validate(); err != nil {
-		return negativeObservation{}, negativeObservation{}, "", err
+	t.finished = true
+	transition := replayTransitionNoInboundAttempt
+	if t.attempts != 0 {
+		transition = replayTransitionInboundAttempt
 	}
-	return observation.DeniedAccess, observation.ReconnectFailure, fullDigestRef(g19ReplayFixture), nil
+	t.trace = append(t.trace, replayTransition{
+		AtMS:       at.Sub(t.readyAt).Milliseconds(),
+		Transition: transition,
+	})
+	trace := append([]replayTransition(nil), t.trace...)
+	return t.attempts == 0, trace, nil
+}
+
+func replayNegativeObservations() (negativeObservation, negativeObservation, replayArtifact, error) {
+	return replayNegativeObservationsFrom(g19ReplayFixture)
+}
+
+func replayNegativeObservationsFrom(payload []byte) (negativeObservation, negativeObservation, replayArtifact, error) {
+	input, err := decodeReplayInput(payload)
+	if err != nil {
+		return negativeObservation{}, negativeObservation{}, replayArtifact{}, err
+	}
+
+	const (
+		replayExpectedSKI   = "1111111111111111111111111111111111111111"
+		replayUnexpectedSKI = "2222222222222222222222222222222222222222"
+	)
+	handler := liveServiceHandler{
+		expectedSKI: replayExpectedSKI,
+		denied:      make(map[string]struct{}),
+	}
+	base := time.Unix(0, 0).UTC()
+	tracker := &postWithdrawalTracker{}
+	denied := false
+	windowFinished := false
+	var denialTrace []replayTransition
+	var reconnectTrace []replayTransition
+
+	for _, event := range input.Events {
+		if windowFinished {
+			return negativeObservation{}, negativeObservation{}, replayArtifact{}, errors.New("G19 replay contains events after the terminal negative window")
+		}
+		at := base.Add(time.Duration(event.AtMS) * time.Millisecond)
+		switch event.Type {
+		case replayEventInboundAttempt:
+			peerSKI := replayExpectedSKI
+			if event.Peer == replayPeerUnexpected {
+				peerSKI = replayUnexpectedSKI
+			}
+			allowed := handler.allowRemote(peerSKI)
+			transition := replayTransitionAccessAllowed
+			if !allowed {
+				transition = replayTransitionAccessDenied
+				denied = true
+			}
+			denialTrace = append(denialTrace, replayTransition{AtMS: event.AtMS, Transition: transition})
+			tracker.recordInboundAttempt(at)
+		case replayEventObserverReady:
+			if err := tracker.observerReady(at); err != nil {
+				return negativeObservation{}, negativeObservation{}, replayArtifact{}, err
+			}
+		case replayEventAdvertisementWithdrawn:
+			if err := tracker.advertisementWithdrawn(at); err != nil {
+				return negativeObservation{}, negativeObservation{}, replayArtifact{}, err
+			}
+		case replayEventNegativeWindowElapsed:
+			if windowFinished {
+				return negativeObservation{}, negativeObservation{}, replayArtifact{}, errors.New("G19 replay negative window completed more than once")
+			}
+			var satisfied bool
+			satisfied, reconnectTrace, err = tracker.finish(at, time.Duration(input.NegativeWindowMS)*time.Millisecond)
+			if err != nil {
+				return negativeObservation{}, negativeObservation{}, replayArtifact{}, err
+			}
+			if !satisfied {
+				return negativeObservation{}, negativeObservation{}, replayArtifact{}, errors.New("G19 replay observed a reconnect attempt after withdrawal")
+			}
+			windowFinished = true
+		}
+	}
+	if !denied {
+		return negativeObservation{}, negativeObservation{}, replayArtifact{}, errors.New("G19 replay did not derive a denied-access terminal state")
+	}
+	if !windowFinished {
+		return negativeObservation{}, negativeObservation{}, replayArtifact{}, errors.New("G19 replay did not derive a reconnect-failure terminal state")
+	}
+
+	deniedHash := derivedReplayTraceHash(denialTrace)
+	reconnectHash := derivedReplayTraceHash(reconnectTrace)
+	artifact := replayArtifact{
+		Path:                        g19ReplayFixturePath,
+		SHA256:                      fullDigestRef(payload),
+		DeniedAccessTraceSHA256:     deniedHash,
+		ReconnectFailureTraceSHA256: reconnectHash,
+	}
+	return negativeObservation{Satisfied: true, Authority: negativeAuthorityCIReplay, EvidenceHash: deniedHash},
+		negativeObservation{Satisfied: true, Authority: negativeAuthorityCIReplay, EvidenceHash: reconnectHash},
+		artifact,
+		nil
+}
+
+func decodeReplayInput(payload []byte) (replayInput, error) {
+	var input replayInput
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return replayInput{}, fmt.Errorf("decode G19 replay input: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return replayInput{}, errors.New("G19 replay input contains trailing data")
+	}
+	if input.SchemaVersion != 1 || input.NegativeWindowMS <= 0 || input.NegativeWindowMS > 60_000 || len(input.Events) == 0 {
+		return replayInput{}, errors.New("G19 replay input header invalid")
+	}
+	previousAt := int64(-1)
+	for index := range input.Events {
+		event := &input.Events[index]
+		event.Type = strings.TrimSpace(event.Type)
+		event.Peer = strings.TrimSpace(event.Peer)
+		if event.AtMS < 0 || event.AtMS < previousAt {
+			return replayInput{}, errors.New("G19 replay events are not time ordered")
+		}
+		previousAt = event.AtMS
+		switch event.Type {
+		case replayEventInboundAttempt:
+			if event.Peer != replayPeerExpected && event.Peer != replayPeerUnexpected {
+				return replayInput{}, errors.New("G19 replay inbound attempt peer invalid")
+			}
+		case replayEventObserverReady, replayEventAdvertisementWithdrawn, replayEventNegativeWindowElapsed:
+			if event.Peer != "" {
+				return replayInput{}, errors.New("G19 replay non-peer event includes a peer")
+			}
+		default:
+			return replayInput{}, fmt.Errorf("G19 replay event type %q unsupported", event.Type)
+		}
+	}
+	return input, nil
+}
+
+func derivedReplayTraceHash(trace []replayTransition) string {
+	payload, err := json.Marshal(struct {
+		SchemaVersion int                `json:"schema_version"`
+		Transitions   []replayTransition `json:"transitions"`
+	}{SchemaVersion: 1, Transitions: trace})
+	if err != nil || len(trace) == 0 {
+		return "sha256:invalid"
+	}
+	return fullDigestRef(payload)
 }
 
 type liveGateEvidence struct {
@@ -344,6 +561,7 @@ type operatorLiveProof struct {
 	EvidenceRef             string        `json:"redacted_json_ref,omitempty"`
 	TransportHash           string        `json:"transport_hash"`
 	TranscriptHashes        []string      `json:"transcript_hashes"`
+	FirstSPINEPayloadHash   string        `json:"first_post_access_spine_payload_hash"`
 	FirstSPINEData          spineEvidence `json:"first_post_access_spine_data"`
 	FirstSPINEDataHash      string        `json:"first_post_access_spine_data_hash"`
 }
@@ -355,8 +573,10 @@ type ciReplayAuthority struct {
 }
 
 type replayArtifact struct {
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256"`
+	Path                        string `json:"path"`
+	SHA256                      string `json:"sha256"`
+	DeniedAccessTraceSHA256     string `json:"denied_access_trace_sha256"`
+	ReconnectFailureTraceSHA256 string `json:"reconnect_failure_trace_sha256"`
 }
 
 type negativeCaseEvidence struct {
@@ -423,13 +643,13 @@ func (e liveGateEvidence) validate() error {
 		return errors.New("operator live proof timestamps invalid")
 	case !e.Environment.TimestampUTC.Equal(e.OperatorLiveProof.AcceptedAt) || e.Environment.TimestampUTC.Before(e.OperatorLiveProof.RunStartedAt) || e.Environment.TimestampUTC.After(e.OperatorLiveProof.RunExpiresAt):
 		return errors.New("environment timestamp is outside the bound run")
-	case !validSHA256Ref(e.OperatorLiveProof.EvidenceRef) || !validSHA256Ref(e.OperatorLiveProof.TransportHash) || !validSHA256Refs(e.OperatorLiveProof.TranscriptHashes) || e.OperatorLiveProof.FirstSPINEData.empty() || e.OperatorLiveProof.FirstSPINEData.validate() != nil || e.OperatorLiveProof.FirstSPINEDataHash != e.OperatorLiveProof.FirstSPINEData.dataHash():
+	case !validSHA256Ref(e.OperatorLiveProof.EvidenceRef) || !validSHA256Ref(e.OperatorLiveProof.TransportHash) || !validSHA256Refs(e.OperatorLiveProof.TranscriptHashes) || !validSHA256Ref(e.OperatorLiveProof.FirstSPINEPayloadHash) || e.OperatorLiveProof.FirstSPINEData.empty() || e.OperatorLiveProof.FirstSPINEData.validate() != nil || e.OperatorLiveProof.FirstSPINEDataHash != e.OperatorLiveProof.FirstSPINEData.dataHash():
 		return errors.New("operator live proof evidence incomplete")
 	case e.CIReplayAuthority.Result != resultPass || !validReplayArtifacts(e.CIReplayAuthority.Fixtures) || e.CIReplayAuthority.ReplayCommand == "":
 		return errors.New("CI replay authority incomplete")
-	case e.NegativeCases.DeniedAccess.validate() != nil || !negativeEvidenceBoundToAuthority(e.NegativeCases.DeniedAccess, e.CIReplayAuthority.Fixtures):
+	case e.NegativeCases.DeniedAccess.validate() != nil || !negativeEvidenceBoundToAuthority(e.NegativeCases.DeniedAccess, e.CIReplayAuthority.Fixtures, replayTraceDeniedAccess):
 		return errors.New("denied-access evidence incomplete")
-	case e.NegativeCases.ReconnectFailure.validate() != nil || !negativeEvidenceBoundToAuthority(e.NegativeCases.ReconnectFailure, e.CIReplayAuthority.Fixtures):
+	case e.NegativeCases.ReconnectFailure.validate() != nil || !negativeEvidenceBoundToAuthority(e.NegativeCases.ReconnectFailure, e.CIReplayAuthority.Fixtures, replayTraceReconnectFailure):
 		return errors.New("reconnect-failure evidence incomplete")
 	case !e.PublicRedaction.NoPacketCaptures || !e.PublicRedaction.NoRawTranscripts || !e.PublicRedaction.NoSensitiveMaterial || !e.PublicRedaction.NoRawIdentity:
 		return errors.New("public redaction declaration incomplete")
@@ -488,6 +708,7 @@ func (e liveGateEvidence) normalized() liveGateEvidence {
 	normalized.CIReplayAuthority.ReplayCommand = strings.TrimSpace(e.CIReplayAuthority.ReplayCommand)
 	normalized.CIReplayAuthority.Fixtures = normalizedReplayArtifacts(e.CIReplayAuthority.Fixtures)
 	normalized.OperatorLiveProof.TranscriptHashes = sortedUnique(e.OperatorLiveProof.TranscriptHashes)
+	normalized.OperatorLiveProof.FirstSPINEPayloadHash = strings.TrimSpace(e.OperatorLiveProof.FirstSPINEPayloadHash)
 	normalized.OperatorLiveProof.FirstSPINEData = e.OperatorLiveProof.FirstSPINEData.normalized()
 	normalized.OperatorLiveProof.FirstSPINEDataHash = strings.TrimSpace(e.OperatorLiveProof.FirstSPINEDataHash)
 	normalized.NegativeCases.DeniedAccess = e.NegativeCases.DeniedAccess.normalized()
@@ -635,10 +856,12 @@ func normalizedReplayArtifacts(values []replayArtifact) []replayArtifact {
 	for _, value := range values {
 		value.Path = strings.TrimSpace(value.Path)
 		value.SHA256 = strings.TrimSpace(value.SHA256)
-		if value.Path == "" || value.SHA256 == "" {
+		value.DeniedAccessTraceSHA256 = strings.TrimSpace(value.DeniedAccessTraceSHA256)
+		value.ReconnectFailureTraceSHA256 = strings.TrimSpace(value.ReconnectFailureTraceSHA256)
+		if value.Path == "" || value.SHA256 == "" || value.DeniedAccessTraceSHA256 == "" || value.ReconnectFailureTraceSHA256 == "" {
 			continue
 		}
-		key := value.Path + "\x00" + value.SHA256
+		key := strings.Join([]string{value.Path, value.SHA256, value.DeniedAccessTraceSHA256, value.ReconnectFailureTraceSHA256}, "\x00")
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -647,6 +870,11 @@ func normalizedReplayArtifacts(values []replayArtifact) []replayArtifact {
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Path == result[j].Path {
+			if result[i].SHA256 == result[j].SHA256 {
+				left := result[i].DeniedAccessTraceSHA256 + "\x00" + result[i].ReconnectFailureTraceSHA256
+				right := result[j].DeniedAccessTraceSHA256 + "\x00" + result[j].ReconnectFailureTraceSHA256
+				return left < right
+			}
 			return result[i].SHA256 < result[j].SHA256
 		}
 		return result[i].Path < result[j].Path
@@ -660,14 +888,14 @@ func validReplayArtifacts(values []replayArtifact) bool {
 		return false
 	}
 	for _, value := range values {
-		if !validSHA256Ref(value.SHA256) {
+		if !validSHA256Ref(value.SHA256) || !validSHA256Ref(value.DeniedAccessTraceSHA256) || !validSHA256Ref(value.ReconnectFailureTraceSHA256) {
 			return false
 		}
 	}
 	return true
 }
 
-func negativeEvidenceBoundToAuthority(result evidenceResult, fixtures []replayArtifact) bool {
+func negativeEvidenceBoundToAuthority(result evidenceResult, fixtures []replayArtifact, traceKind string) bool {
 	result = result.normalized()
 	if result.Authority == negativeAuthorityLiveNetwork {
 		return result.LiveObserved
@@ -676,7 +904,16 @@ func negativeEvidenceBoundToAuthority(result evidenceResult, fixtures []replayAr
 		return false
 	}
 	for _, fixture := range normalizedReplayArtifacts(fixtures) {
-		if fixture.SHA256 == result.EvidenceHash {
+		var traceHash string
+		switch traceKind {
+		case replayTraceDeniedAccess:
+			traceHash = fixture.DeniedAccessTraceSHA256
+		case replayTraceReconnectFailure:
+			traceHash = fixture.ReconnectFailureTraceSHA256
+		default:
+			return false
+		}
+		if traceHash == result.EvidenceHash {
 			return true
 		}
 	}

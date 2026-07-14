@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -20,20 +22,42 @@ func TestG19ReplayFixtureIsDeterministicAndPublicSafe(t *testing.T) {
 	if !bytes.Equal(payload, g19ReplayFixture) {
 		t.Fatal("runtime replay payload differs from the checked-in fixture")
 	}
-	var observation g19Observation
-	if err := json.Unmarshal(payload, &observation); err != nil {
+	denied, reconnect, artifact, err := replayNegativeObservationsFrom(payload)
+	if err != nil {
 		t.Fatal(err)
 	}
-	result := evaluateG19(observation)
-	if result.Status != resultPass {
-		t.Fatalf("replay result = %+v", result)
+	deniedAgain, reconnectAgain, artifactAgain, err := replayNegativeObservationsFrom(payload)
+	if err != nil {
+		t.Fatal(err)
 	}
-	const expected = "sha256:5966b10a61c3fb617000ab33a3122823fa253d6e1d41a468ed346e109dc55450"
-	if got := observation.FirstSPINEData.dataHash(); got != expected {
-		t.Fatalf("SPINE replay hash = %s, want %s", got, expected)
+	if denied != deniedAgain || reconnect != reconnectAgain || !reflect.DeepEqual(artifact, artifactAgain) {
+		t.Fatalf("replay derivation is not deterministic: first=%+v/%+v/%+v second=%+v/%+v/%+v", denied, reconnect, artifact, deniedAgain, reconnectAgain, artifactAgain)
+	}
+	if denied.validate() != nil || reconnect.validate() != nil || artifact.SHA256 != fullDigestRef(payload) || artifact.DeniedAccessTraceSHA256 != denied.EvidenceHash || artifact.ReconnectFailureTraceSHA256 != reconnect.EvidenceHash {
+		t.Fatalf("replay did not derive canonical terminal evidence: denied=%+v reconnect=%+v artifact=%+v", denied, reconnect, artifact)
 	}
 	if err := validateLiveRedaction(payload); err != nil {
 		t.Fatalf("fixture is not public-safe: %v", err)
+	}
+}
+
+func TestG19ReplayRejectsPreassertedOutcomesAndInvalidSequences(t *testing.T) {
+	preasserted := bytes.Replace(g19ReplayFixture, []byte(`"schema_version": 1,`), []byte(`"schema_version": 1, "satisfied": true,`), 1)
+	if _, _, _, err := replayNegativeObservationsFrom(preasserted); err == nil {
+		t.Fatal("accepted a replay fixture with a preasserted outcome")
+	}
+
+	invalidSequence := []byte(`{
+  "schema_version": 1,
+  "negative_window_ms": 3000,
+  "events": [
+    {"at_ms": 0, "type": "advertisement_withdrawn"},
+    {"at_ms": 3000, "type": "negative_window_elapsed"},
+    {"at_ms": 3001, "type": "inbound_attempt", "peer": "unexpected"}
+  ]
+}`)
+	if _, _, _, err := replayNegativeObservationsFrom(invalidSequence); err == nil {
+		t.Fatal("accepted an invalid replay transition sequence")
 	}
 }
 
@@ -115,6 +139,7 @@ func TestOperatorProofRequiresPrivateKnownFields(t *testing.T) {
 		EvidenceRef:              "sha256:" + strings.Repeat("1", 64),
 		TransportHash:            "sha256:" + strings.Repeat("2", 64),
 		FirstSPINEHash:           "sha256:" + strings.Repeat("3", 64),
+		FirstSPINEPayloadHash:    "sha256:" + strings.Repeat("4", 64),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -150,18 +175,18 @@ func TestLiveServicePreapprovesOnlyExpectedSKIAndIsolatesDiscovery(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer handler.service.Shutdown()
+	defer handler.shutdown()
 	if err := handler.approveExpectedRemote(); err != nil {
 		t.Fatal(err)
 	}
 	if handler.service.IsAutoAcceptEnabled() {
 		t.Fatal("live service enabled arbitrary-peer autoaccept")
 	}
-	if !handler.service.RemoteServiceForSKI(expected).Trusted() {
+	if !handler.hub.ServiceForSKI(expected).Trusted() {
 		t.Fatal("expected SKI was not approved before start")
 	}
 	competing := "fedcba9876543210fedcba9876543210fedcba98"
-	if handler.service.RemoteServiceForSKI(competing).Trusted() {
+	if handler.hub.ServiceForSKI(competing).Trusted() {
 		t.Fatal("competing SKI was preapproved")
 	}
 	interfaces := handler.service.Configuration().Interfaces()
@@ -188,13 +213,70 @@ func TestLiveHandlerAllowlistDeniesCompetingRemoteDeterministically(t *testing.T
 	}
 }
 
+type recordingPayloadReader struct {
+	called bool
+}
+
+func (r *recordingPayloadReader) HandleShipPayloadMessage([]byte) {
+	r.called = true
+}
+
+func TestG19RequiresActualInboundPayloadCallbackNotInitializedModel(t *testing.T) {
+	expected := "0123456789abcdef0123456789abcdef01234567"
+	connectedAt := time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC)
+	handler := &liveServiceHandler{
+		expectedSKI: expected,
+		connected:   true,
+		generation:  4,
+		connectedAt: connectedAt,
+		denied:      make(map[string]struct{}),
+	}
+	initializedProjection := passingG19Observation().FirstSPINEData
+
+	withoutPayload := passingG19Observation()
+	withoutPayload.FirstSPINEPayloadHash = ""
+	withoutPayload.FirstSPINEData = initializedProjection
+	if result := evaluateG19(withoutPayload); result.Status != resultFail || result.Error != "first_spine_payload_hash_required" {
+		t.Fatalf("initialized model satisfied G19 without a payload callback: %+v", result)
+	}
+	if capture := handler.firstSPINESnapshot(); !capture.Evidence.empty() || capture.PayloadHash != "" {
+		t.Fatalf("initialized projection was captured without a payload event: %+v", capture)
+	}
+
+	delegate := &recordingPayloadReader{}
+	reader := &payloadCaptureReader{
+		delegate: delegate,
+		capture: func(message []byte) {
+			handler.captureInboundSPINEPayload(expected, 4, message, deriveInboundSPINEProjection(message), connectedAt.Add(time.Second))
+		},
+	}
+	payload := []byte(`{"datagram":{"header":{"msgCounter":1},"payload":{"cmd":[{"nodeManagementDetailedDiscoveryData":{}}]}}}`)
+	reader.HandleShipPayloadMessage(payload)
+	capture := handler.firstSPINESnapshot()
+	if !delegate.called || capture.PayloadHash != fullDigestRef(payload) || capture.Generation != 4 || capture.Evidence.empty() {
+		t.Fatalf("actual payload callback did not create generation-bound evidence: delegate=%t capture=%+v", delegate.called, capture)
+	}
+	if !reflect.DeepEqual(capture.Evidence.FeatureTypes, []string{"spine-cmd/nodeManagementDetailedDiscoveryData"}) {
+		t.Fatalf("SPINE projection was not derived from the inbound command: %+v", capture.Evidence)
+	}
+
+	withPayload := passingG19Observation()
+	withPayload.ConnectionGeneration = 4
+	withPayload.FirstSPINEGeneration = capture.Generation
+	withPayload.FirstSPINEPayloadHash = capture.PayloadHash
+	withPayload.FirstSPINEData = capture.Evidence
+	if result := evaluateG19(withPayload); result.Status != resultPass {
+		t.Fatalf("actual inbound payload event did not satisfy G19: %+v", result)
+	}
+}
+
 func TestInboundStagesRequireCurrentGenerationAndRunBoundProof(t *testing.T) {
 	binding, err := newLiveRunBinding(liveOptions{Interface: "lab-lan", Port: 4712, Timeout: 10 * time.Minute}, "0123456789abcdef0123456789abcdef01234567", time.Now().Add(-time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 	connectedAt := time.Now().Add(-2 * time.Second)
-	spine := spineCapture{Evidence: passingG19Observation().FirstSPINEData, Generation: 3, CapturedAt: connectedAt.Add(time.Second)}
+	spine := spineCapture{Evidence: passingG19Observation().FirstSPINEData, PayloadHash: passingG19Observation().FirstSPINEPayloadHash, Generation: 3, CapturedAt: connectedAt.Add(time.Second)}
 	connection := connectionSnapshot{Connected: true, Generation: 3, ConnectedAt: connectedAt}
 	binding.challengeIssuedAt = time.Now().Add(-500 * time.Millisecond)
 	proof := passingOperatorProof(binding, spine)
@@ -208,13 +290,42 @@ func TestInboundStagesRequireCurrentGenerationAndRunBoundProof(t *testing.T) {
 	}
 }
 
+func TestG17OperatorProofIsValidWithoutG19TransportEvidence(t *testing.T) {
+	startedAt := time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC)
+	binding, err := newLiveRunBinding(liveOptions{Interface: "lab-lan", Port: 4712, Timeout: 10 * time.Minute}, "0123456789abcdef0123456789abcdef01234567", startedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := operatorProofInput{
+		LANObserverConfirmed: true,
+		TrustVisible:         true,
+		OwnerAccepted:        true,
+		RunNonce:             binding.nonce,
+		RunRef:               binding.runRef,
+		ExpectedRemoteDigest: binding.expectedRemoteDigest,
+		InterfaceRef:         binding.interfaceRef,
+		PortRef:              binding.portRef,
+		RunStartedAt:         binding.startedAt,
+		RunExpiresAt:         binding.expiresAt,
+		ObservedAt:           startedAt.Add(time.Minute),
+		AcceptedAt:           startedAt.Add(2 * time.Minute),
+		EvidenceRef:          "sha256:" + strings.Repeat("a", 64),
+	}
+	if err := validateG17OperatorProof(proof, binding, startedAt.Add(3*time.Minute)); err != nil {
+		t.Fatalf("valid G17-only proof rejected: %v", err)
+	}
+	if err := validateG19OperatorProof(proof, binding, spineCapture{}, connectionSnapshot{}, startedAt.Add(3*time.Minute)); err == nil {
+		t.Fatal("G17-only proof incorrectly satisfied G19")
+	}
+}
+
 func TestOperatorProofIsBoundToRunTransportAndFirstSPINE(t *testing.T) {
 	binding, err := newLiveRunBinding(liveOptions{Interface: "lab-lan", Port: 4712, Timeout: 10 * time.Minute}, "0123456789abcdef0123456789abcdef01234567", time.Now().Add(-time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 	connectedAt := time.Now().Add(-2 * time.Second)
-	spine := spineCapture{Evidence: passingG19Observation().FirstSPINEData, Generation: 9, CapturedAt: connectedAt.Add(time.Second)}
+	spine := spineCapture{Evidence: passingG19Observation().FirstSPINEData, PayloadHash: passingG19Observation().FirstSPINEPayloadHash, Generation: 9, CapturedAt: connectedAt.Add(time.Second)}
 	connection := connectionSnapshot{Connected: true, Generation: 9, ConnectedAt: connectedAt}
 	binding.challengeIssuedAt = time.Now().Add(-500 * time.Millisecond)
 	proof := passingOperatorProof(binding, spine)
@@ -231,6 +342,7 @@ func TestOperatorProofIsBoundToRunTransportAndFirstSPINE(t *testing.T) {
 			value.ConnectionGenerationRef = "hmac-sha256:" + strings.Repeat("0", 64)
 		},
 		"transport":   func(value *operatorProofInput) { value.TransportHash = "sha256:" + strings.Repeat("0", 64) },
+		"payload":     func(value *operatorProofInput) { value.FirstSPINEPayloadHash = "sha256:" + strings.Repeat("0", 64) },
 		"first spine": func(value *operatorProofInput) { value.FirstSPINEHash = "sha256:" + strings.Repeat("0", 64) },
 		"challenge":   func(value *operatorProofInput) { value.ChallengeRef = "hmac-sha256:" + strings.Repeat("0", 64) },
 	}
@@ -253,7 +365,7 @@ func TestOperatorChallengeUsesOpaqueGenerationBindingAndNoRawIdentity(t *testing
 	}
 	transportHash := "sha256:" + strings.Repeat("f", 64)
 	binding.challengeIssuedAt = time.Now().UTC()
-	spine := spineCapture{Evidence: passingG19Observation().FirstSPINEData, Generation: 1, CapturedAt: binding.challengeIssuedAt.Add(-time.Second)}
+	spine := spineCapture{Evidence: passingG19Observation().FirstSPINEData, PayloadHash: passingG19Observation().FirstSPINEPayloadHash, Generation: 1, CapturedAt: binding.challengeIssuedAt.Add(-time.Second)}
 	first := binding.operatorChallenge(transportHash, spine)
 	spine.Generation = 2
 	second := binding.operatorChallenge(transportHash, spine)
@@ -269,6 +381,99 @@ func TestOperatorChallengeUsesOpaqueGenerationBindingAndNoRawIdentity(t *testing
 	}
 	if strings.Contains(string(payload), expectedSKI) {
 		t.Fatalf("challenge leaked raw expected identity: %s", payload)
+	}
+}
+
+type fakeNegativeWindowClock struct {
+	now       time.Time
+	afterCall chan time.Duration
+	timer     chan time.Time
+}
+
+func (c *fakeNegativeWindowClock) Now() time.Time {
+	return c.now
+}
+
+func (c *fakeNegativeWindowClock) After(duration time.Duration) <-chan time.Time {
+	c.afterCall <- duration
+	return c.timer
+}
+
+func TestPostWithdrawalNegativeWindowUsesInjectedDurationAndAttempts(t *testing.T) {
+	start := time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC)
+	tracker := &postWithdrawalTracker{}
+	if err := tracker.observerReady(start); err != nil {
+		t.Fatal(err)
+	}
+	if err := tracker.advertisementWithdrawn(start.Add(time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	clock := &fakeNegativeWindowClock{
+		now:       start,
+		afterCall: make(chan time.Duration, 1),
+		timer:     make(chan time.Time, 1),
+	}
+	resultCh := make(chan postWithdrawalWindowResult, 1)
+	go func() {
+		satisfied, err := waitPostWithdrawalWindow(context.Background(), tracker, 25*time.Millisecond, clock)
+		resultCh <- postWithdrawalWindowResult{Satisfied: satisfied, Err: err}
+	}()
+	if duration := <-clock.afterCall; duration != 25*time.Millisecond {
+		t.Fatalf("negative window duration = %s, want 25ms", duration)
+	}
+	clock.timer <- start.Add(time.Millisecond + 25*time.Millisecond)
+	result := <-resultCh
+	if result.Err != nil || !result.Satisfied {
+		t.Fatalf("bounded no-attempt window failed: %+v", result)
+	}
+
+	tracker = &postWithdrawalTracker{}
+	if err := tracker.observerReady(start); err != nil {
+		t.Fatal(err)
+	}
+	if err := tracker.advertisementWithdrawn(start); err != nil {
+		t.Fatal(err)
+	}
+	tracker.recordInboundAttempt(start.Add(time.Millisecond))
+	satisfied, _, err := tracker.finish(start.Add(25*time.Millisecond), 25*time.Millisecond)
+	if err != nil || satisfied {
+		t.Fatalf("inbound listener attempt was not retained as negative evidence: satisfied=%t err=%v", satisfied, err)
+	}
+}
+
+func TestLiveEvidencePreservesSubsecondAcceptanceTimestamp(t *testing.T) {
+	startedAt := time.Date(2026, 7, 14, 8, 0, 0, 123456789, time.UTC)
+	binding, err := newLiveRunBinding(liveOptions{Interface: "lab-lan", Port: 4712, Timeout: 10 * time.Minute}, "0123456789abcdef0123456789abcdef01234567", startedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.challengeIssuedAt = startedAt.Add(2 * time.Minute)
+	spine := spineCapture{
+		Evidence:    passingG19Observation().FirstSPINEData,
+		PayloadHash: passingG19Observation().FirstSPINEPayloadHash,
+		Generation:  5,
+		CapturedAt:  binding.challengeIssuedAt.Add(-time.Second),
+	}
+	proof := passingOperatorProof(binding, spine)
+	proof.AcceptedAt = binding.challengeIssuedAt.Add(987654321 * time.Nanosecond)
+	denied, reconnect, artifact, err := replayNegativeObservations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := passingG19Observation()
+	observation.ConnectionGeneration = spine.Generation
+	observation.FirstSPINEGeneration = spine.Generation
+	observation.FirstSPINEPayloadHash = spine.PayloadHash
+	observation.FirstSPINEData = spine.Evidence
+	observation.DeniedAccess = denied
+	observation.ReconnectFailure = reconnect
+	g19 := evaluateG19(observation)
+	evidence := buildLiveGateEvidence(liveOptions{PairingWindow: true}, binding, proof, spine, []byte(`["completed"]`), g19, denied, reconnect, artifact)
+	if !evidence.OwnerAcceptance.AcceptedAt.Equal(proof.AcceptedAt) || !evidence.Environment.TimestampUTC.Equal(proof.AcceptedAt) {
+		t.Fatalf("acceptance timestamp lost precision: proof=%s owner=%s environment=%s", proof.AcceptedAt.Format(time.RFC3339Nano), evidence.OwnerAcceptance.AcceptedAt.Format(time.RFC3339Nano), evidence.Environment.TimestampUTC.Format(time.RFC3339Nano))
+	}
+	if err := evidence.validateForCase(g19, currentRepoEvidence()); err != nil {
+		t.Fatalf("subsecond live evidence rejected: %v", err)
 	}
 }
 
@@ -296,5 +501,6 @@ func passingOperatorProof(binding liveRunBinding, spine spineCapture) operatorPr
 		EvidenceRef:              "sha256:" + strings.Repeat("e", 64),
 		TransportHash:            transportHash,
 		FirstSPINEHash:           spine.Evidence.dataHash(),
+		FirstSPINEPayloadHash:    spine.PayloadHash,
 	}
 }

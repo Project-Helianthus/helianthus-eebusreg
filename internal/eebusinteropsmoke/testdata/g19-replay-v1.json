@@ -1,36 +1,23 @@
 {
-  "direction": "inbound-from-vr940-client",
-  "stages": [
-    "tcp_accepted",
-    "tls_completed",
-    "websocket_upgraded",
-    "ship_completed",
-    "first_spine_data"
-  ],
-  "current_connection": true,
-  "connection_generation": 1,
-  "first_spine_generation": 1,
-  "first_spine_data": {
-    "entity_types": [
-      "DeviceInformation",
-      "CEM"
-    ],
-    "feature_types": [
-      "NodeManagement/special",
-      "DeviceConfiguration/client"
-    ],
-    "usecase_refs": [
-      "usecase-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    ]
-  },
-  "denied_access": {
-    "satisfied": true,
-    "authority": "ci-replay",
-    "evidence_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-  },
-  "reconnect_failure": {
-    "satisfied": true,
-    "authority": "ci-replay",
-    "evidence_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-  }
+  "schema_version": 1,
+  "negative_window_ms": 3000,
+  "events": [
+    {
+      "at_ms": 0,
+      "type": "inbound_attempt",
+      "peer": "unexpected"
+    },
+    {
+      "at_ms": 10,
+      "type": "observer_ready"
+    },
+    {
+      "at_ms": 20,
+      "type": "advertisement_withdrawn"
+    },
+    {
+      "at_ms": 3020,
+      "type": "negative_window_elapsed"
+    }
+  ]
 }

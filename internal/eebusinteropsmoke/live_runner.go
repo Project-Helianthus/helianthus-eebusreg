@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -22,6 +24,7 @@ import (
 	"github.com/enbility/eebus-go/service"
 	shipapi "github.com/enbility/ship-go/api"
 	"github.com/enbility/ship-go/cert"
+	shiphub "github.com/enbility/ship-go/hub"
 	shipmdns "github.com/enbility/ship-go/mdns"
 	"github.com/enbility/spine-go/model"
 	"golang.org/x/sys/unix"
@@ -55,6 +58,7 @@ type operatorProofInput struct {
 	EvidenceRef              string    `json:"evidence_ref"`
 	TransportHash            string    `json:"transport_hash"`
 	FirstSPINEHash           string    `json:"first_spine_hash"`
+	FirstSPINEPayloadHash    string    `json:"first_spine_payload_hash"`
 }
 
 type liveRunBinding struct {
@@ -85,6 +89,7 @@ type operatorChallenge struct {
 	RunExpiresAt            time.Time `json:"run_expires_at"`
 	TransportHash           string    `json:"transport_hash,omitempty"`
 	FirstPostAccessSPINE    string    `json:"first_post_access_spine_hash,omitempty"`
+	FirstSPINEPayloadHash   string    `json:"first_spine_payload_hash,omitempty"`
 }
 
 type connectionSnapshot struct {
@@ -94,23 +99,28 @@ type connectionSnapshot struct {
 }
 
 type spineCapture struct {
-	Evidence   spineEvidence
-	Generation uint64
-	CapturedAt time.Time
+	Evidence    spineEvidence
+	PayloadHash string
+	Generation  uint64
+	CapturedAt  time.Time
 }
 
 type liveServiceHandler struct {
 	expectedSKI string
 	service     *service.Service
+	hub         shipapi.HubInterface
+	server      *instrumentedSHIPServer
 
 	mu               sync.Mutex
 	expectedApproved bool
 	connected        bool
 	generation       uint64
 	connectedAt      time.Time
+	firstSPINE       spineCapture
 	states           []string
 	shipIDRefs       []string
 	denied           map[string]struct{}
+	withdrawal       *postWithdrawalTracker
 }
 
 func runLiveVR940fProof(ctx context.Context, opts liveOptions) liveProofResult {
@@ -153,7 +163,9 @@ func runLiveVR940fProof(ctx context.Context, opts liveOptions) liveProofResult {
 	if err := handler.approveExpectedRemote(); err != nil {
 		return liveProofFailures("expected_remote_approval_failed")
 	}
-	handler.service.Start()
+	if err := handler.start(); err != nil {
+		return liveProofFailures("live_service_start_failed")
+	}
 	publisher, err := startLANSHIPPublisher(
 		opts.Interface,
 		opts.Port,
@@ -162,7 +174,7 @@ func runLiveVR940fProof(ctx context.Context, opts liveOptions) liveProofResult {
 		opts.PairingWindow,
 	)
 	if err != nil {
-		handler.service.Shutdown()
+		handler.shutdown()
 		return liveProofFailures("mdns_probe_unavailable")
 	}
 	shutdown := false
@@ -171,7 +183,7 @@ func runLiveVR940fProof(ctx context.Context, opts liveOptions) liveProofResult {
 			return
 		}
 		publisher.shutdown()
-		handler.service.Shutdown()
+		handler.shutdown()
 		shutdown = true
 	}
 	defer shutdownAll()
@@ -198,18 +210,12 @@ func runLiveVR940fProof(ctx context.Context, opts liveOptions) liveProofResult {
 			break
 		}
 		snapshot := handler.connectionSnapshot()
-		if snapshot.Connected && (firstSPINE.Generation != snapshot.Generation || firstSPINE.Evidence.empty()) {
-			candidate := captureFirstSPINEEvidence(handler.service, opts.RemoteSKI)
-			current := handler.connectionSnapshot()
-			if !candidate.empty() && current.Connected && current.Generation == snapshot.Generation {
-				firstSPINE = spineCapture{Evidence: candidate, Generation: current.Generation, CapturedAt: time.Now().UTC()}
-			}
-		}
+		firstSPINE = handler.firstSPINESnapshot()
 		if proof, proofErr := readOperatorProof(opts.OperatorProofRef); proofErr == nil {
 			operatorProof = proof
 		}
-		if !firstSPINE.Evidence.empty() && validSHA256Ref(operatorProof.TransportHash) {
-			challengeInputs := strings.Join([]string{operatorProof.TransportHash, firstSPINE.Evidence.dataHash(), strconv.FormatUint(firstSPINE.Generation, 10)}, "\x00")
+		if !firstSPINE.Evidence.empty() && validSHA256Ref(firstSPINE.PayloadHash) && validSHA256Ref(operatorProof.TransportHash) {
+			challengeInputs := strings.Join([]string{operatorProof.TransportHash, firstSPINE.PayloadHash, firstSPINE.Evidence.dataHash(), strconv.FormatUint(firstSPINE.Generation, 10)}, "\x00")
 			if challengeInputs != emittedChallengeInputs {
 				binding.challengeIssuedAt = time.Now().UTC()
 				if err := emitOperatorChallenge(opts.ChallengeWriter, binding.operatorChallenge(operatorProof.TransportHash, firstSPINE)); err != nil {
@@ -218,7 +224,7 @@ func runLiveVR940fProof(ctx context.Context, opts liveOptions) liveProofResult {
 				emittedChallengeInputs = challengeInputs
 			}
 		}
-		if validateOperatorProof(operatorProof, binding, firstSPINE, snapshot, time.Now()) == nil {
+		if validateG19OperatorProof(operatorProof, binding, firstSPINE, snapshot, time.Now()) == nil {
 			break
 		}
 		select {
@@ -231,24 +237,53 @@ func runLiveVR940fProof(ctx context.Context, opts liveOptions) liveProofResult {
 	discovery := <-discoveryCh
 	probeErr := <-probeErrCh
 	connectionBeforeShutdown := handler.connectionSnapshot()
+	firstSPINE = handler.firstSPINESnapshot()
 	states := handler.stateSnapshot()
-	proofErr := validateOperatorProof(operatorProof, binding, firstSPINE, connectionBeforeShutdown, time.Now())
-	withdrawal, withdrawalErr := observeSHIPWithdrawal(ctx, opts.Interface, 3*time.Second, serviceFQDN, shutdownAll)
+	g17ProofErr := validateG17OperatorProof(operatorProof, binding, time.Now())
+	g19ProofErr := validateG19OperatorProof(operatorProof, binding, firstSPINE, connectionBeforeShutdown, time.Now())
+
+	const negativeWindow = 3 * time.Second
+	windowClock := realNegativeWindowClock{}
+	windowTracker := &postWithdrawalTracker{}
+	handler.setWithdrawalTracker(windowTracker)
+	windowResultCh := make(chan postWithdrawalWindowResult, 1)
+	windowStarted := false
+	withdrawal, withdrawalErr := observeSHIPWithdrawal(ctx, opts.Interface, negativeWindow, serviceFQDN, func() error {
+		if err := windowTracker.observerReady(windowClock.Now()); err != nil {
+			return err
+		}
+		publisher.shutdown()
+		if err := windowTracker.advertisementWithdrawn(windowClock.Now()); err != nil {
+			return err
+		}
+		windowStarted = true
+		go func() {
+			satisfied, windowErr := waitPostWithdrawalWindow(ctx, windowTracker, negativeWindow, windowClock)
+			windowResultCh <- postWithdrawalWindowResult{Satisfied: satisfied, Err: windowErr}
+		}()
+		return nil
+	})
+	postWithdrawalNegative := false
+	if windowStarted {
+		windowResult := <-windowResultCh
+		postWithdrawalNegative = windowResult.Err == nil && windowResult.Satisfied
+	}
+	handler.setWithdrawalTracker(nil)
 	shutdownAll()
-	noReconnect := listenerRemainsClosed(opts.Interface, opts.Port, 3*time.Second)
 	localAdvertisementSeen := probeErr == nil && discovery.ExpectedActive > 0
 	ttlWithdrawn := withdrawalErr == nil && withdrawal.ExpectedGoodbye > 0
-	proofValid := proofErr == nil
+	g17ProofValid := g17ProofErr == nil
+	g19ProofValid := g19ProofErr == nil
 
 	g17 := evaluateG17(g17Observation{
 		Direction:                 accessDirectionInboundFromVR940,
 		SelectedInterface:         opts.Interface,
 		SelectedPort:              opts.Port,
 		LocalAdvertisementSeen:    localAdvertisementSeen,
-		LANObserverConfirmed:      proofValid && operatorProof.LANObserverConfirmed,
-		OperatorTrustVisible:      proofValid && operatorProof.TrustVisible,
+		LANObserverConfirmed:      g17ProofValid && operatorProof.LANObserverConfirmed,
+		OperatorTrustVisible:      g17ProofValid && operatorProof.TrustVisible,
 		TTLWithdrawalObserved:     ttlWithdrawn,
-		NoConnectionAfterWithdraw: noReconnect,
+		NoConnectionAfterWithdraw: postWithdrawalNegative,
 	})
 	if probeErr != nil {
 		g17.Error = "mdns_probe_unavailable"
@@ -256,32 +291,34 @@ func runLiveVR940fProof(ctx context.Context, opts liveOptions) liveProofResult {
 		g17.Error = "mdns_withdrawal_probe_unavailable"
 	}
 
-	deniedReplay, reconnectReplay, replayHash, replayErr := replayNegativeObservations()
+	deniedReplay, reconnectReplay, replayArtifact, replayErr := replayNegativeObservations()
 	if replayErr != nil {
 		deniedReplay = negativeObservation{}
 		reconnectReplay = negativeObservation{}
 	}
 	stages := completedInboundStages(connectionBeforeShutdown, operatorProof, firstSPINE, binding)
 	g19 := evaluateG19(g19Observation{
-		Direction:            accessDirectionInboundFromVR940,
-		Stages:               stages,
-		CurrentConnection:    proofValid && connectionBeforeShutdown.Connected,
-		ConnectionGeneration: connectionBeforeShutdown.Generation,
-		FirstSPINEGeneration: firstSPINE.Generation,
-		FirstSPINEData:       firstSPINE.Evidence,
-		DeniedAccess:         deniedReplay,
-		ReconnectFailure:     reconnectReplay,
+		Direction:             accessDirectionInboundFromVR940,
+		Stages:                stages,
+		CurrentConnection:     g19ProofValid && connectionBeforeShutdown.Connected,
+		ConnectionGeneration:  connectionBeforeShutdown.Generation,
+		FirstSPINEGeneration:  firstSPINE.Generation,
+		FirstSPINEPayloadHash: firstSPINE.PayloadHash,
+		FirstSPINEData:        firstSPINE.Evidence,
+		DeniedAccess:          deniedReplay,
+		ReconnectFailure:      reconnectReplay,
 	})
 
-	result := liveProofResult{Cases: []caseResult{g17, g19}}
-	if g17.Status == resultPass && g19.Status == resultPass && proofValid && replayErr == nil {
-		stagePayload, marshalErr := json.Marshal(states)
-		if marshalErr != nil {
-			return liveProofFailures("stage_evidence_encoding_failed")
+	result := liveProofResult{}
+	if g19.Status == resultPass && g19ProofValid && replayErr == nil {
+		evidence, evidenceErr := constructCanonicalG19Evidence(opts, binding, operatorProof, firstSPINE, states, g19, deniedReplay, reconnectReplay, replayArtifact)
+		if evidenceErr != nil {
+			g19 = failCanonicalG19(g19)
+		} else {
+			result.LiveEvidence = evidence
 		}
-		evidence := buildLiveGateEvidence(opts, binding, operatorProof, firstSPINE, stagePayload, g19, replayHash)
-		result.LiveEvidence = &evidence
 	}
+	result.Cases = []caseResult{g17, g19}
 	return result
 }
 
@@ -317,17 +354,42 @@ func newLiveService(opts liveOptions, certificate tls.Certificate) (*liveService
 	if err := handler.service.Setup(); err != nil {
 		return nil, err
 	}
+	localService := handler.service.LocalService()
+	discovery := shipmdns.NewMDNS(
+		localService.SKI(),
+		configuration.DeviceBrand(),
+		configuration.DeviceModel(),
+		string(configuration.DeviceType()),
+		configuration.Identifier(),
+		configuration.MdnsServiceName(),
+		configuration.Port(),
+		configuration.Interfaces(),
+		configuration.MdnsProviderSelection(),
+	)
+	hubReader := &liveHubReader{delegate: handler.service, handler: handler}
+	connectionHub := shiphub.NewHub(hubReader, discovery, configuration.Port(), certificate, localService)
+	handler.hub = connectionHub
+	handler.server = &instrumentedSHIPServer{
+		port:        configuration.Port(),
+		certificate: certificate,
+		handler:     connectionHub,
+		discovery:   discovery,
+		hub:         connectionHub,
+		onAccept:    handler.recordInboundAttempt,
+	}
 	return handler, nil
 }
 
 func (h *liveServiceHandler) approveExpectedRemote() error {
-	if h == nil || h.service == nil || !validSKI(h.expectedSKI) {
+	if h == nil || h.service == nil || h.hub == nil || !validSKI(h.expectedSKI) {
 		return errors.New("expected remote approval configuration invalid")
 	}
 	h.service.SetAutoAccept(false)
 	h.service.UserIsAbleToApproveOrCancelPairingRequests(false)
 	h.service.RegisterRemoteSKI(h.expectedSKI)
-	remote := h.service.RemoteServiceForSKI(h.expectedSKI)
+	h.hub.SetAutoAccept(false)
+	h.hub.RegisterRemoteSKI(h.expectedSKI)
+	remote := h.hub.ServiceForSKI(h.expectedSKI)
 	if remote == nil || !remote.Trusted() || h.service.IsAutoAcceptEnabled() {
 		return errors.New("expected remote approval was not installed before start")
 	}
@@ -337,24 +399,40 @@ func (h *liveServiceHandler) approveExpectedRemote() error {
 	return nil
 }
 
-func (h *liveServiceHandler) RemoteSKIConnected(service eebusapi.ServiceInterface, ski string) {
+func (h *liveServiceHandler) start() error {
+	if h == nil || h.server == nil {
+		return errors.New("instrumented SHIP server unavailable")
+	}
+	return h.server.start()
+}
+
+func (h *liveServiceHandler) shutdown() {
+	if h == nil || h.server == nil {
+		return
+	}
+	h.server.shutdown()
+}
+
+func (h *liveServiceHandler) RemoteSKIConnected(_ eebusapi.ServiceInterface, ski string) {
 	if !h.allowRemote(ski) {
-		go service.CancelPairingWithSKI(ski)
+		go h.hub.CancelPairingWithSKI(ski)
 		return
 	}
 	h.mu.Lock()
 	if !h.expectedApproved {
 		h.mu.Unlock()
-		go service.CancelPairingWithSKI(ski)
+		go h.hub.CancelPairingWithSKI(ski)
 		return
 	}
 	h.generation++
 	h.connected = true
 	h.connectedAt = time.Now().UTC()
+	h.firstSPINE = spineCapture{}
 	h.states = append(h.states, connectionStateName(shipapi.ConnectionStateCompleted))
 	h.mu.Unlock()
-	service.SetAutoAccept(false)
-	service.UserIsAbleToApproveOrCancelPairingRequests(false)
+	h.service.SetAutoAccept(false)
+	h.service.UserIsAbleToApproveOrCancelPairingRequests(false)
+	h.hub.SetAutoAccept(false)
 }
 
 func (h *liveServiceHandler) RemoteSKIDisconnected(_ eebusapi.ServiceInterface, ski string) {
@@ -411,31 +489,287 @@ func (h *liveServiceHandler) connectionSnapshot() connectionSnapshot {
 	return connectionSnapshot{Connected: h.connected, Generation: h.generation, ConnectedAt: h.connectedAt}
 }
 
+func (h *liveServiceHandler) firstSPINESnapshot() spineCapture {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	capture := h.firstSPINE
+	capture.Evidence = spineEvidence{
+		EntityTypes:  append([]string(nil), h.firstSPINE.Evidence.EntityTypes...),
+		FeatureTypes: append([]string(nil), h.firstSPINE.Evidence.FeatureTypes...),
+		UseCaseRefs:  append([]string(nil), h.firstSPINE.Evidence.UseCaseRefs...),
+	}
+	return capture
+}
+
+func (h *liveServiceHandler) captureInboundSPINEPayload(ski string, generation uint64, message []byte, evidence spineEvidence, capturedAt time.Time) {
+	if normalizeSKI(ski) != h.expectedSKI || generation == 0 || !validInboundSPINEPayload(message) || evidence.empty() || capturedAt.IsZero() {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.connected || h.generation != generation || (h.firstSPINE.Generation == generation && validSHA256Ref(h.firstSPINE.PayloadHash)) {
+		return
+	}
+	h.firstSPINE = spineCapture{
+		Evidence:    evidence.normalized(),
+		PayloadHash: fullDigestRef(message),
+		Generation:  generation,
+		CapturedAt:  capturedAt.UTC(),
+	}
+}
+
+func (h *liveServiceHandler) setWithdrawalTracker(tracker *postWithdrawalTracker) {
+	h.mu.Lock()
+	h.withdrawal = tracker
+	h.mu.Unlock()
+}
+
+func (h *liveServiceHandler) recordInboundAttempt(at time.Time) {
+	h.mu.Lock()
+	tracker := h.withdrawal
+	h.mu.Unlock()
+	if tracker != nil {
+		tracker.recordInboundAttempt(at)
+	}
+}
+
 func (h *liveServiceHandler) stateSnapshot() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return sortedUnique(h.states)
 }
 
-func captureFirstSPINEEvidence(svc *service.Service, remoteSKI string) spineEvidence {
-	remote := svc.LocalDevice().RemoteDeviceForSki(remoteSKI)
-	if remote == nil {
+type liveHubReader struct {
+	delegate *service.Service
+	handler  *liveServiceHandler
+}
+
+func (r *liveHubReader) RemoteSKIConnected(ski string) {
+	r.delegate.RemoteSKIConnected(ski)
+}
+
+func (r *liveHubReader) RemoteSKIDisconnected(ski string) {
+	r.delegate.RemoteSKIDisconnected(ski)
+}
+
+func (r *liveHubReader) SetupRemoteDevice(ski string, writer shipapi.ShipConnectionDataWriterInterface) shipapi.ShipConnectionDataReaderInterface {
+	reader := r.delegate.SetupRemoteDevice(ski, writer)
+	generation := r.handler.connectionSnapshot().Generation
+	return &payloadCaptureReader{
+		delegate: reader,
+		capture: func(message []byte) {
+			evidence := deriveInboundSPINEProjection(message)
+			r.handler.captureInboundSPINEPayload(ski, generation, message, evidence, time.Now().UTC())
+		},
+	}
+}
+
+func (r *liveHubReader) VisibleRemoteServicesUpdated(entries []shipapi.RemoteService) {
+	r.delegate.VisibleRemoteServicesUpdated(entries)
+}
+
+func (r *liveHubReader) ServiceShipIDUpdate(ski string, shipID string) {
+	r.delegate.ServiceShipIDUpdate(ski, shipID)
+}
+
+func (r *liveHubReader) ServicePairingDetailUpdate(ski string, detail *shipapi.ConnectionStateDetail) {
+	r.delegate.ServicePairingDetailUpdate(ski, detail)
+}
+
+func (r *liveHubReader) AllowWaitingForTrust(ski string) bool {
+	return r.delegate.AllowWaitingForTrust(ski)
+}
+
+type payloadCaptureReader struct {
+	delegate shipapi.ShipConnectionDataReaderInterface
+	capture  func([]byte)
+}
+
+func (r *payloadCaptureReader) HandleShipPayloadMessage(message []byte) {
+	if r == nil || r.delegate == nil {
+		return
+	}
+	r.delegate.HandleShipPayloadMessage(message)
+	if r.capture != nil {
+		r.capture(append([]byte(nil), message...))
+	}
+}
+
+func validInboundSPINEPayload(message []byte) bool {
+	return !deriveInboundSPINEProjection(message).empty()
+}
+
+func deriveInboundSPINEProjection(message []byte) spineEvidence {
+	var datagram model.Datagram
+	if len(message) == 0 || json.Unmarshal(message, &datagram) != nil {
 		return spineEvidence{}
 	}
-	evidence := spineEvidence{}
-	for _, entity := range remote.Entities() {
-		evidence.EntityTypes = append(evidence.EntityTypes, fmt.Sprint(entity.EntityType()))
-		for _, feature := range entity.Features() {
-			evidence.FeatureTypes = append(evidence.FeatureTypes, fmt.Sprintf("%s/%s", feature.Type(), feature.Role()))
+	if datagram.Datagram.Header.MsgCounter == nil && datagram.Datagram.Header.MsgCounterReference == nil {
+		return spineEvidence{}
+	}
+	projection := spineEvidence{}
+	for _, command := range datagram.Datagram.Payload.Cmd {
+		payload, err := json.Marshal(command)
+		if err != nil {
+			return spineEvidence{}
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &fields); err != nil {
+			return spineEvidence{}
+		}
+		for field, value := range fields {
+			if len(value) != 0 && string(value) != "null" {
+				projection.FeatureTypes = append(projection.FeatureTypes, "spine-cmd/"+field)
+			}
 		}
 	}
-	for _, useCase := range remote.UseCases() {
-		payload, err := json.Marshal(useCase)
-		if err == nil {
-			evidence.UseCaseRefs = append(evidence.UseCaseRefs, "usecase-"+fullDigestRef(payload))
+	return projection.normalized()
+}
+
+type instrumentedSHIPServer struct {
+	port        int
+	certificate tls.Certificate
+	handler     http.Handler
+	discovery   shipapi.MdnsInterface
+	hub         *shiphub.Hub
+	onAccept    func(time.Time)
+
+	mu         sync.Mutex
+	started    bool
+	listener   net.Listener
+	httpServer *http.Server
+}
+
+func (s *instrumentedSHIPServer) start() error {
+	if s == nil || s.port < 1 || s.port > 65535 || s.handler == nil || s.discovery == nil || s.hub == nil {
+		return errors.New("instrumented SHIP server configuration invalid")
+	}
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", s.port))
+	if err != nil {
+		return fmt.Errorf("SHIP listener start failed: %w", err)
+	}
+	if err := s.discovery.Start(s.hub); err != nil {
+		_ = listener.Close()
+		return fmt.Errorf("isolated SHIP discovery start failed: %w", err)
+	}
+	instrumented := &shipAttemptListener{Listener: listener, onAccept: s.onAccept, now: time.Now}
+	tlsListener := tls.NewListener(instrumented, &tls.Config{
+		Certificates:          []tls.Certificate{s.certificate},
+		ClientAuth:            tls.RequireAnyClientCert,
+		CipherSuites:          cert.CipherSuites,
+		VerifyPeerCertificate: verifySHIPPeerCertificate,
+		MinVersion:            tls.VersionTLS12,
+	})
+	server := &http.Server{
+		Handler:           s.handler,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	s.mu.Lock()
+	if s.started {
+		s.mu.Unlock()
+		s.discovery.Shutdown()
+		_ = tlsListener.Close()
+		return errors.New("instrumented SHIP server already started")
+	}
+	s.started = true
+	s.listener = tlsListener
+	s.httpServer = server
+	s.mu.Unlock()
+	go func() {
+		_ = server.Serve(tlsListener)
+	}()
+	return nil
+}
+
+func (s *instrumentedSHIPServer) shutdown() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if !s.started {
+		s.mu.Unlock()
+		return
+	}
+	s.started = false
+	server := s.httpServer
+	listener := s.listener
+	s.httpServer = nil
+	s.listener = nil
+	s.mu.Unlock()
+
+	s.hub.Shutdown()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if server != nil {
+		_ = server.Shutdown(ctx)
+	}
+	if listener != nil {
+		_ = listener.Close()
+	}
+}
+
+type shipAttemptListener struct {
+	net.Listener
+	onAccept func(time.Time)
+	now      func() time.Time
+}
+
+func (l *shipAttemptListener) Accept() (net.Conn, error) {
+	connection, err := l.Listener.Accept()
+	if err == nil && l.onAccept != nil {
+		now := time.Now
+		if l.now != nil {
+			now = l.now
+		}
+		l.onAccept(now().UTC())
+	}
+	return connection, err
+}
+
+func verifySHIPPeerCertificate(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+	for _, rawCert := range rawCerts {
+		certificate, err := x509.ParseCertificate(rawCert)
+		if err != nil {
+			return err
+		}
+		if _, err := cert.SkiFromCertificate(certificate); err == nil {
+			return nil
 		}
 	}
-	return evidence.normalized()
+	return errors.New("no valid SKI provided in certificate")
+}
+
+type negativeWindowClock interface {
+	Now() time.Time
+	After(time.Duration) <-chan time.Time
+}
+
+type realNegativeWindowClock struct{}
+
+func (realNegativeWindowClock) Now() time.Time {
+	return time.Now().UTC()
+}
+
+func (realNegativeWindowClock) After(duration time.Duration) <-chan time.Time {
+	return time.After(duration)
+}
+
+type postWithdrawalWindowResult struct {
+	Satisfied bool
+	Err       error
+}
+
+func waitPostWithdrawalWindow(ctx context.Context, tracker *postWithdrawalTracker, window time.Duration, clock negativeWindowClock) (bool, error) {
+	if tracker == nil || clock == nil || window <= 0 {
+		return false, errors.New("post-withdrawal negative window configuration invalid")
+	}
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case endedAt := <-clock.After(window):
+		satisfied, _, err := tracker.finish(endedAt.UTC(), window)
+		return satisfied, err
+	}
 }
 
 func newLiveRunBinding(opts liveOptions, expectedSKI string, now time.Time) (liveRunBinding, error) {
@@ -479,6 +813,7 @@ func (b liveRunBinding) challenge(transportHash string, firstSPINE spineCapture)
 		b.expiresAt.Format(time.RFC3339Nano),
 		b.challengeIssuedAt.Format(time.RFC3339Nano),
 		strings.TrimSpace(transportHash),
+		firstSPINE.PayloadHash,
 		firstSPINE.Evidence.dataHash(),
 		firstSPINE.CapturedAt.UTC().Format(time.RFC3339Nano),
 		b.generationRef(firstSPINE.Generation),
@@ -488,25 +823,27 @@ func (b liveRunBinding) challenge(transportHash string, firstSPINE spineCapture)
 
 func (b liveRunBinding) operatorChallenge(transportHash string, firstSPINE spineCapture) operatorChallenge {
 	challenge := operatorChallenge{
-		Kind:                 "helianthus-eebus-live-proof",
-		RunNonce:             b.nonce,
-		RunRef:               b.runRef,
-		ExpectedRemoteDigest: b.expectedRemoteDigest,
-		InterfaceRef:         b.interfaceRef,
-		PortRef:              b.portRef,
-		RunStartedAt:         b.startedAt,
-		RunExpiresAt:         b.expiresAt,
-		TransportHash:        strings.TrimSpace(transportHash),
-		FirstPostAccessSPINE: firstSPINE.Evidence.dataHash(),
+		Kind:                  "helianthus-eebus-live-proof",
+		RunNonce:              b.nonce,
+		RunRef:                b.runRef,
+		ExpectedRemoteDigest:  b.expectedRemoteDigest,
+		InterfaceRef:          b.interfaceRef,
+		PortRef:               b.portRef,
+		RunStartedAt:          b.startedAt,
+		RunExpiresAt:          b.expiresAt,
+		TransportHash:         strings.TrimSpace(transportHash),
+		FirstPostAccessSPINE:  firstSPINE.Evidence.dataHash(),
+		FirstSPINEPayloadHash: strings.TrimSpace(firstSPINE.PayloadHash),
 	}
-	if firstSPINE.Generation != 0 && !firstSPINE.Evidence.empty() && !firstSPINE.CapturedAt.IsZero() {
+	if firstSPINE.Generation != 0 && validSHA256Ref(firstSPINE.PayloadHash) && !firstSPINE.Evidence.empty() && !firstSPINE.CapturedAt.IsZero() {
 		challenge.ConnectionGenerationRef = b.generationRef(firstSPINE.Generation)
 		challenge.ChallengeIssuedAt = b.challengeIssuedAt
 		challenge.FirstSPINECapturedAt = firstSPINE.CapturedAt.UTC()
 	} else {
 		challenge.FirstPostAccessSPINE = ""
+		challenge.FirstSPINEPayloadHash = ""
 	}
-	if challenge.TransportHash != "" && challenge.FirstPostAccessSPINE != "" && challenge.ConnectionGenerationRef != "" {
+	if challenge.TransportHash != "" && challenge.FirstSPINEPayloadHash != "" && challenge.FirstPostAccessSPINE != "" && challenge.ConnectionGenerationRef != "" {
 		challenge.ChallengeRef = b.challenge(challenge.TransportHash, firstSPINE)
 	}
 	return challenge
@@ -524,10 +861,10 @@ func emitOperatorChallenge(writer io.Writer, challenge operatorChallenge) error 
 	return nil
 }
 
-func validateOperatorProof(proof operatorProofInput, binding liveRunBinding, firstSPINE spineCapture, connection connectionSnapshot, now time.Time) error {
+func validateG17OperatorProof(proof operatorProofInput, binding liveRunBinding, now time.Time) error {
 	proof = proof.normalized()
-	if !proof.LANObserverConfirmed || !proof.TrustVisible || !proof.InboundTransportObserved || !proof.OwnerAccepted {
-		return errors.New("operator confirmations incomplete")
+	if !proof.LANObserverConfirmed || !proof.TrustVisible || !proof.OwnerAccepted {
+		return errors.New("G17 operator confirmations incomplete")
 	}
 	if proof.RunNonce != binding.nonce || proof.RunRef != binding.runRef || proof.ExpectedRemoteDigest != binding.expectedRemoteDigest || proof.InterfaceRef != binding.interfaceRef || proof.PortRef != binding.portRef {
 		return errors.New("operator proof run binding mismatch")
@@ -535,23 +872,44 @@ func validateOperatorProof(proof operatorProofInput, binding liveRunBinding, fir
 	if !proof.RunStartedAt.Equal(binding.startedAt) || !proof.RunExpiresAt.Equal(binding.expiresAt) {
 		return errors.New("operator proof run window mismatch")
 	}
-	if binding.challengeIssuedAt.IsZero() || firstSPINE.CapturedAt.IsZero() || connection.ConnectedAt.IsZero() || proof.ObservedAt.IsZero() || proof.AcceptedAt.IsZero() || proof.ObservedAt.Before(binding.startedAt) || proof.ObservedAt.After(binding.challengeIssuedAt) || proof.AcceptedAt.Before(binding.challengeIssuedAt) || proof.AcceptedAt.Before(proof.ObservedAt) || proof.AcceptedAt.After(binding.expiresAt) || proof.AcceptedAt.After(now.UTC().Add(30*time.Second)) || firstSPINE.CapturedAt.Before(connection.ConnectedAt) || firstSPINE.CapturedAt.After(binding.challengeIssuedAt) {
+	if proof.ObservedAt.IsZero() || proof.AcceptedAt.IsZero() || proof.ObservedAt.Before(binding.startedAt) || proof.AcceptedAt.Before(proof.ObservedAt) || proof.AcceptedAt.After(binding.expiresAt) || proof.AcceptedAt.After(now.UTC().Add(30*time.Second)) {
+		return errors.New("operator proof timestamps invalid")
+	}
+	if !validSHA256Ref(proof.EvidenceRef) {
+		return errors.New("operator proof evidence hash invalid")
+	}
+	return nil
+}
+
+func validateG19OperatorProof(proof operatorProofInput, binding liveRunBinding, firstSPINE spineCapture, connection connectionSnapshot, now time.Time) error {
+	proof = proof.normalized()
+	if err := validateG17OperatorProof(proof, binding, now); err != nil {
+		return err
+	}
+	if !proof.InboundTransportObserved {
+		return errors.New("G19 inbound transport confirmation incomplete")
+	}
+	if binding.challengeIssuedAt.IsZero() || firstSPINE.CapturedAt.IsZero() || connection.ConnectedAt.IsZero() || proof.ObservedAt.After(binding.challengeIssuedAt) || proof.AcceptedAt.Before(binding.challengeIssuedAt) || firstSPINE.CapturedAt.Before(connection.ConnectedAt) || firstSPINE.CapturedAt.After(binding.challengeIssuedAt) {
 		return errors.New("operator proof timestamps invalid")
 	}
 	if !proof.ChallengeIssuedAt.Equal(binding.challengeIssuedAt) || !proof.FirstSPINECapturedAt.Equal(firstSPINE.CapturedAt.UTC()) {
 		return errors.New("operator proof timestamp binding mismatch")
 	}
-	if !validSHA256Ref(proof.EvidenceRef) || !validSHA256Ref(proof.TransportHash) {
+	if !validSHA256Ref(proof.TransportHash) || !validSHA256Ref(proof.FirstSPINEPayloadHash) {
 		return errors.New("operator proof integrity hashes invalid")
 	}
-	if !connection.Connected || connection.Generation == 0 || firstSPINE.Generation != connection.Generation || firstSPINE.Evidence.empty() {
+	if !connection.Connected || connection.Generation == 0 || firstSPINE.Generation != connection.Generation || !validSHA256Ref(firstSPINE.PayloadHash) || firstSPINE.Evidence.empty() {
 		return errors.New("operator proof is not bound to the current connection generation")
 	}
 	firstSPINEHash := firstSPINE.Evidence.dataHash()
-	if proof.ConnectionGenerationRef != binding.generationRef(connection.Generation) || proof.FirstSPINEHash != firstSPINEHash || proof.ChallengeRef != binding.challenge(proof.TransportHash, firstSPINE) {
+	if proof.ConnectionGenerationRef != binding.generationRef(connection.Generation) || proof.FirstSPINEPayloadHash != firstSPINE.PayloadHash || proof.FirstSPINEHash != firstSPINEHash || proof.ChallengeRef != binding.challenge(proof.TransportHash, firstSPINE) {
 		return errors.New("operator proof challenge mismatch")
 	}
 	return nil
+}
+
+func validateOperatorProof(proof operatorProofInput, binding liveRunBinding, firstSPINE spineCapture, connection connectionSnapshot, now time.Time) error {
+	return validateG19OperatorProof(proof, binding, firstSPINE, connection, now)
 }
 
 func (p operatorProofInput) normalized() operatorProofInput {
@@ -565,6 +923,7 @@ func (p operatorProofInput) normalized() operatorProofInput {
 	p.EvidenceRef = strings.TrimSpace(p.EvidenceRef)
 	p.TransportHash = strings.TrimSpace(p.TransportHash)
 	p.FirstSPINEHash = strings.TrimSpace(p.FirstSPINEHash)
+	p.FirstSPINEPayloadHash = strings.TrimSpace(p.FirstSPINEPayloadHash)
 	return p
 }
 
@@ -642,35 +1001,9 @@ func readProtectedFile(path, label string, maxSize int64) (payload []byte, resul
 	return payload, nil
 }
 
-func listenerRemainsClosed(iface string, port int, timeout time.Duration) bool {
-	ip, err := interfaceIPv4(iface)
-	if err != nil {
-		return false
-	}
-	deadline := time.Now().Add(timeout)
-	address := net.JoinHostPort(ip.String(), fmt.Sprintf("%d", port))
-	attempts := 0
-	for time.Now().Before(deadline) {
-		conn, dialErr := net.DialTimeout("tcp", address, 200*time.Millisecond)
-		if dialErr != nil {
-			if !errors.Is(dialErr, syscall.ECONNREFUSED) {
-				return false
-			}
-			attempts++
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-		if closeErr := conn.Close(); closeErr != nil {
-			return false
-		}
-		return false
-	}
-	return attempts > 0
-}
-
 func completedInboundStages(connection connectionSnapshot, proof operatorProofInput, firstSPINE spineCapture, binding liveRunBinding) []transportStage {
 	stages := make([]transportStage, 0, len(requiredTransportStages))
-	if validateOperatorProof(proof, binding, firstSPINE, connection, time.Now()) == nil {
+	if validateG19OperatorProof(proof, binding, firstSPINE, connection, time.Now()) == nil {
 		stages = append(stages,
 			transportStageTCPAccepted,
 			transportStageTLSCompleted,
@@ -682,7 +1015,27 @@ func completedInboundStages(connection connectionSnapshot, proof operatorProofIn
 	return stages
 }
 
-func buildLiveGateEvidence(opts liveOptions, binding liveRunBinding, proof operatorProofInput, firstSPINE spineCapture, stagePayload []byte, g19 caseResult, replayHash string) liveGateEvidence {
+func constructCanonicalG19Evidence(opts liveOptions, binding liveRunBinding, proof operatorProofInput, firstSPINE spineCapture, states []string, g19 caseResult, deniedReplay, reconnectReplay negativeObservation, artifact replayArtifact) (*liveGateEvidence, error) {
+	stagePayload, err := json.Marshal(sortedUnique(states))
+	if err != nil {
+		return nil, err
+	}
+	evidence := buildLiveGateEvidence(opts, binding, proof, firstSPINE, stagePayload, g19, deniedReplay, reconnectReplay, artifact)
+	if err := evidence.validateForCase(g19, currentRepoEvidence()); err != nil {
+		return nil, err
+	}
+	return &evidence, nil
+}
+
+func failCanonicalG19(result caseResult) caseResult {
+	result = result.normalized()
+	result.Status = resultFail
+	result.Error = "canonical_evidence_construction_failed"
+	result.Evidence = append(result.Evidence, "g19-canonical-evidence-failed-closed")
+	return result.normalized()
+}
+
+func buildLiveGateEvidence(opts liveOptions, binding liveRunBinding, proof operatorProofInput, firstSPINE spineCapture, stagePayload []byte, g19 caseResult, deniedReplay, reconnectReplay negativeObservation, artifact replayArtifact) liveGateEvidence {
 	window := "closed"
 	if opts.PairingWindow {
 		window = "opened"
@@ -733,13 +1086,14 @@ func buildLiveGateEvidence(opts liveOptions, binding liveRunBinding, proof opera
 			AcceptedAt:              proof.AcceptedAt.UTC(),
 			EvidenceRef:             proof.EvidenceRef,
 			TransportHash:           proof.TransportHash,
-			TranscriptHashes:        []string{proof.TransportHash, fullDigestRef(stagePayload)},
+			TranscriptHashes:        []string{proof.TransportHash, firstSPINE.PayloadHash, fullDigestRef(stagePayload)},
+			FirstSPINEPayloadHash:   firstSPINE.PayloadHash,
 			FirstSPINEData:          firstSPINE.Evidence,
 			FirstSPINEDataHash:      firstSPINE.Evidence.dataHash(),
 		},
 		CIReplayAuthority: ciReplayAuthority{
 			Result:        resultPass,
-			Fixtures:      []replayArtifact{{Path: "internal/eebusinteropsmoke/testdata/g19-replay-v1.json", SHA256: replayHash}},
+			Fixtures:      []replayArtifact{artifact},
 			ReplayCommand: "go test ./internal/eebusinteropsmoke -run 'TestG17|TestG19|TestLiveEvidence'",
 		},
 		NegativeCases: negativeCaseEvidence{
@@ -747,13 +1101,13 @@ func buildLiveGateEvidence(opts liveOptions, binding liveRunBinding, proof opera
 				Result:       resultPass,
 				Authority:    negativeAuthorityCIReplay,
 				LiveObserved: false,
-				EvidenceHash: replayHash,
+				EvidenceHash: deniedReplay.EvidenceHash,
 			},
 			ReconnectFailure: evidenceResult{
 				Result:       resultPass,
 				Authority:    negativeAuthorityCIReplay,
 				LiveObserved: false,
-				EvidenceHash: replayHash,
+				EvidenceHash: reconnectReplay.EvidenceHash,
 			},
 		},
 		PublicRedaction: publicRedactionEvidence{
@@ -764,7 +1118,7 @@ func buildLiveGateEvidence(opts liveOptions, binding liveRunBinding, proof opera
 		},
 		OwnerAcceptance: ownerAcceptance{
 			Accepted:   proof.OwnerAccepted,
-			AcceptedAt: proof.AcceptedAt.UTC().Truncate(time.Second),
+			AcceptedAt: proof.AcceptedAt.UTC(),
 			Notes:      "accepted from redacted operator observation",
 		},
 	}
