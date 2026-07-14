@@ -39,6 +39,31 @@ func TestRootPathMustBeAbsoluteCleanAndNative(t *testing.T) {
 	}
 }
 
+func TestConfiguredPathRejectsSymlinkedParentComponents(t *testing.T) {
+	parent := t.TempDir()
+	realParent := filepath.Join(parent, "real")
+	if err := os.Mkdir(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedParent := filepath.Join(parent, "linked")
+	if err := os.Symlink(realParent, linkedParent); err != nil {
+		t.Fatal(err)
+	}
+
+	root := filepath.Join(linkedParent, "store")
+	result := openForTest(t, root, nil, nil)
+	defer closeStore(t, result)
+	if result.outcome != outcomePathRejected {
+		t.Errorf("outcome = %q, want %q", result.outcome, outcomePathRejected)
+	}
+	if result.store != nil || result.state != nil {
+		t.Error("symlinked parent path returned active state")
+	}
+	if _, err := os.Lstat(filepath.Join(realParent, "store")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("symlinked parent path mutated target: %v", err)
+	}
+}
+
 func TestBootstrapCreatesOnlyFixedPrivateRegularLayout(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "store")
 	result := openForTest(t, root, nil, nil)
@@ -167,6 +192,47 @@ func TestRootSymlinkAndUnavailableACLProbeFailClosed(t *testing.T) {
 	}
 }
 
+func TestCapabilityProbeRejectsUnsupportedPrimitivesBeforeGenerationWrite(t *testing.T) {
+	tests := []struct {
+		name  string
+		point syscallPoint
+	}{
+		{name: "stable identity", point: syscallPoint("capability_stable_identity")},
+		{name: "atomic replacement", point: syscallPoint("capability_atomic_replacement")},
+		{name: "process locking", point: syscallPoint("capability_process_lock")},
+		{name: "no-follow creation", point: syscallPoint("capability_nofollow_create")},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "store")
+			var probed, generationWrite bool
+			hook := func(call syscallCall) error {
+				if call.point == pointGenerationWrite {
+					generationWrite = true
+				}
+				if call.point == test.point {
+					probed = true
+					return errors.New("synthetic unsupported filesystem capability")
+				}
+				return nil
+			}
+
+			result := openForTest(t, root, hook, nil)
+			defer closeStore(t, result)
+			if !probed {
+				t.Errorf("capability probe did not expose %q", test.point)
+			}
+			if result.outcome != outcomeFilesystemCapabilityUnavailable {
+				t.Errorf("outcome = %q, want %q", result.outcome, outcomeFilesystemCapabilityUnavailable)
+			}
+			if generationWrite {
+				t.Error("capability failure reached generation write")
+			}
+		})
+	}
+}
+
 func TestMissingLockInExistingStoreIsNeverRecreated(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "store")
 	created := openForTest(t, root, nil, nil)
@@ -262,6 +328,63 @@ func TestSubprocessContentionAndProcessExitLockRelease(t *testing.T) {
 	reopened := openForTest(t, root, nil, nil)
 	defer closeStore(t, reopened)
 	assertOutcome(t, reopened.outcome, outcomeOpenedCurrent)
+}
+
+func TestLockInodeReplacementPreservesSingleWriter(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("MSP-04A native lock contract is Linux/Darwin only")
+	}
+	root := filepath.Join(t.TempDir(), "store")
+	created := openForTest(t, root, nil, nil)
+	assertOutcome(t, created.outcome, outcomeOpenedEmpty)
+	closeStore(t, created)
+
+	holder, stdin, stdout := startLockHelper(t)
+	holderExited := false
+	t.Cleanup(func() {
+		if holderExited {
+			return
+		}
+		_ = stdin.Close()
+		_ = holder.Process.Kill()
+		_ = holder.Wait()
+	})
+	if _, err := io.WriteString(stdin, root+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read holder status: %v", err)
+	}
+	if strings.TrimSpace(status) != string(outcomeOpenedCurrent) {
+		t.Fatalf("holder status = %q, want %q", status, outcomeOpenedCurrent)
+	}
+
+	lockPath := filepath.Join(root, "LOCK")
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatal(err)
+	}
+	testWritePrivateFile(t, lockPath, nil)
+
+	contender := exec.Command(os.Args[0], "-test.run=^TestStoreLockHelperProcess$", "--")
+	contender.Env = append(os.Environ(), "HELIANTHUS_STORE_LOCK_HELPER=1")
+	contender.Stdin = strings.NewReader(root + "\n")
+	output, err := contender.CombinedOutput()
+	if err != nil {
+		t.Fatalf("contender process: %v: %s", err, output)
+	}
+	status, _, _ = strings.Cut(string(output), "\n")
+	if status != string(outcomeWriterBusy) {
+		t.Fatalf("contender first status = %q, want %q after LOCK replacement; full output = %q", status, outcomeWriterBusy, output)
+	}
+
+	if err := stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.Wait(); err != nil {
+		t.Fatalf("holder exit: %v", err)
+	}
+	holderExited = true
 }
 
 func TestStoreLockHelperProcess(t *testing.T) {

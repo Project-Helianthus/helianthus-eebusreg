@@ -105,6 +105,31 @@ func TestCorruptCurrentReturnsOnlyInactiveExactParentCandidate(t *testing.T) {
 	}
 }
 
+func TestRecoveryCandidateRequiresChronologicalDirectParent(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "store")
+	parentGeneration := bytes.Replace(
+		readFixture(t, "generation-v1-empty.json"),
+		[]byte(`"sequence":1`),
+		[]byte(`"sequence":3`),
+		1,
+	)
+	missingCurrentRef := testGenerationRef{sequence: 2, sha256: strings.Repeat("a", 64), schema: 1}
+	futureParentRef := testGenerationRef{sequence: 3, sha256: testDigestHex(parentGeneration), schema: 1}
+	installStoreLayout(
+		t,
+		root,
+		map[uint64][]byte{3: parentGeneration},
+		testManifestSlotBytes(1, 1, testManifestPayloadBytes(missingCurrentRef, &futureParentRef, 1)),
+		nil,
+	)
+
+	result := openForTest(t, root, nil, nil)
+	assertOutcome(t, result.outcome, outcomeNoValidCurrent)
+	if result.store != nil || result.state != nil || result.recovery != nil {
+		t.Fatal("non-chronological parent produced active state or recovery evidence")
+	}
+}
+
 func TestInvalidExactParentDoesNotFallBackToLowerSlotOrScanOrphans(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "store")
 	installTwoGenerationStore(t, root, readFixture(t, "generation-v1-child-empty.json"))
@@ -141,6 +166,50 @@ func TestFutureManifestVersionIsTerminalAfterEpochSelection(t *testing.T) {
 		t.Fatal("future manifest inspected or activated older content")
 	}
 	assertTreeEqual(t, testSnapshotTree(t, root), before)
+}
+
+func TestSelectedFutureManifestVersionPrecedesV1Validation(t *testing.T) {
+	first := readFixture(t, "generation-v1-empty.json")
+	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
+	malformedRef := testGenerationRef{sequence: 0, sha256: "not-a-sha256-digest", schema: 1}
+	tests := []struct {
+		name    string
+		payload []byte
+	}{
+		{
+			name:    "malformed v1 references",
+			payload: testManifestPayloadBytes(malformedRef, &malformedRef, 2),
+		},
+		{
+			name: "unknown canonical v2 field",
+			payload: []byte(fmt.Sprintf(
+				"{\"current\":%s,\"manifest_version\":2,\"parent\":null,\"v2_extension\":true}\n",
+				testGenerationRefJSON(firstRef),
+			)),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateCanonicalJSON(test.payload, maxManifestPayloadBytes, maxJSONDepth); err != nil {
+				t.Fatalf("future manifest test payload is not canonical: %v", err)
+			}
+			root := filepath.Join(t.TempDir(), "store")
+			installStoreLayout(
+				t,
+				root,
+				map[uint64][]byte{1: first},
+				testManifestSlotBytes(1, 1, testManifestPayloadBytes(firstRef, nil, 1)),
+				testManifestSlotBytes(2, 1, test.payload),
+			)
+
+			result := openForTest(t, root, nil, nil)
+			assertOutcome(t, result.outcome, outcomeUnsupportedFutureVersion)
+			if result.store != nil || result.state != nil || result.recovery != nil {
+				t.Fatal("future manifest v1 validation returned active state")
+			}
+		})
+	}
 }
 
 func TestFutureSlotEnvelopeIsTerminalAndCannotBeBypassed(t *testing.T) {
@@ -196,5 +265,104 @@ func TestSelectedGenerationVersionClassifiesLegacyAndFutureWithoutFallback(t *te
 				t.Fatal("unsupported selected generation fell back to older state")
 			}
 		})
+	}
+}
+
+func TestOpenAccepts128ArtifactsIndependentOfReferencedGenerations(t *testing.T) {
+	tests := []struct {
+		name       string
+		referenced int
+	}{
+		{name: "two referenced generations", referenced: 2},
+		{name: "three referenced generations", referenced: 3},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "store")
+			if test.referenced == 2 {
+				installTwoGenerationStore(t, root, readFixture(t, "generation-v1-child-empty.json"))
+			} else {
+				installThreeGenerationStore(t, root)
+			}
+			addUnreferencedGenerations(t, root, uint64(test.referenced+1), 64)
+			addTemporaryGenerationArtifacts(t, root, 64)
+
+			result := openForTest(t, root, nil, nil)
+			defer closeStore(t, result)
+			assertOutcome(t, result.outcome, outcomeOpenedCurrent)
+		})
+	}
+}
+
+func TestOpenRejects129UnreferencedGenerationsAtArtifactBound(t *testing.T) {
+	first := readFixture(t, "generation-v1-empty.json")
+	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
+	root := filepath.Join(t.TempDir(), "store")
+	installStoreLayout(
+		t,
+		root,
+		map[uint64][]byte{1: first},
+		testManifestSlotBytes(1, 1, testManifestPayloadBytes(firstRef, nil, 1)),
+		nil,
+	)
+	addUnreferencedGenerations(t, root, 2, 129)
+
+	result := openForTest(t, root, nil, nil)
+	defer closeStore(t, result)
+	assertOutcome(t, result.outcome, outcomeLayoutRejected)
+	if result.store != nil || result.state != nil || result.recovery != nil {
+		t.Fatal("129 unreferenced generations returned active state")
+	}
+}
+
+func installThreeGenerationStore(t *testing.T, root string) {
+	t.Helper()
+	first := readFixture(t, "generation-v1-empty.json")
+	second := readFixture(t, "generation-v1-child-empty.json")
+	parentSequence := uint64(2)
+	parentSHA256 := testDigestHex(second)
+	third, err := encodeGenerationV1(generationV1{
+		metadata: generationMetadata{
+			sequence:       3,
+			parentSequence: &parentSequence,
+			parentSHA256:   &parentSHA256,
+		},
+		state: emptyLogicalState(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
+	secondRef := testGenerationRef{sequence: 2, sha256: testDigestHex(second), schema: 1}
+	thirdRef := testGenerationRef{sequence: 3, sha256: testDigestHex(third), schema: 1}
+	installStoreLayout(
+		t,
+		root,
+		map[uint64][]byte{1: first, 2: second, 3: third},
+		testManifestSlotBytes(3, 1, testManifestPayloadBytes(thirdRef, &secondRef, 1)),
+		testManifestSlotBytes(2, 1, testManifestPayloadBytes(secondRef, &firstRef, 1)),
+	)
+}
+
+func addUnreferencedGenerations(t *testing.T, root string, firstSequence uint64, count int) {
+	t.Helper()
+	for offset := 0; offset < count; offset++ {
+		sequence := firstSequence + uint64(offset)
+		testWritePrivateFile(
+			t,
+			filepath.Join(root, "generations", testGenerationFilename(sequence)),
+			[]byte("{\"unreferenced\":true}\n"),
+		)
+	}
+}
+
+func addTemporaryGenerationArtifacts(t *testing.T, root string, count int) {
+	t.Helper()
+	for index := 0; index < count; index++ {
+		testWritePrivateFile(
+			t,
+			filepath.Join(root, "generations", fmt.Sprintf(".tmp-generation-%04d", index)),
+			[]byte("temporary\n"),
+		)
 	}
 }

@@ -72,6 +72,40 @@ func TestBootstrapDirectoryFsyncFailuresNeverPublishState(t *testing.T) {
 	}
 }
 
+func TestInterruptedBootstrapReplaysLockDurabilityBarriers(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "store")
+	failLockFsync := func(call syscallCall) error {
+		if call.point == pointBootstrapLockFsync {
+			return errors.New("synthetic interrupted lock fsync")
+		}
+		return nil
+	}
+	interrupted := openForTest(t, root, failLockFsync, nil)
+	assertOutcome(t, interrupted.outcome, outcomeBootstrapDurabilityUnknown)
+	if interrupted.store != nil || interrupted.state != nil {
+		t.Fatal("interrupted bootstrap returned active state")
+	}
+
+	var retryCalls []syscallCall
+	retryHook := func(call syscallCall) error {
+		retryCalls = append(retryCalls, call)
+		return nil
+	}
+	retried := openForTest(t, root, retryHook, nil)
+	defer closeStore(t, retried)
+	assertOutcome(t, retried.outcome, outcomeOpenedEmpty)
+	assertPointOrder(t, retryCalls,
+		pointBootstrapLockFsync,
+		pointBootstrapRootFsync,
+		pointGenerationFileFsync,
+		pointGenerationRename,
+		pointGenerationsFsync,
+		pointManifestFileFsync,
+		pointManifestRename,
+		pointPublicationRootFsync,
+	)
+}
+
 func TestCommitFailuresBeforePublicationPreserveSelectedSlot(t *testing.T) {
 	tests := map[string]struct {
 		point syscallPoint
@@ -221,6 +255,74 @@ func TestPrePublicationMaintenanceFailureLeavesSelectionUnchanged(t *testing.T) 
 	assertOutcome(t, committed.outcome, outcomeMaintenanceFailed)
 	assertManifestSlotsEqual(t, existingManifestSlots(t, root), before)
 	closeStore(t, opened)
+}
+
+func TestMaintenanceDirectoryFsyncFailuresReportPhaseOutcome(t *testing.T) {
+	const (
+		pointPreMaintenanceFsyncForTest  syscallPoint = "pre_maintenance_fsync"
+		pointPostMaintenanceFsyncForTest syscallPoint = "post_maintenance_fsync"
+	)
+
+	t.Run("pre-publication", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "store")
+		var armed, injected bool
+		hook := func(call syscallCall) error {
+			if armed && call.point == pointPreMaintenanceFsyncForTest {
+				injected = true
+				return errors.New("synthetic pre-maintenance directory fsync failure")
+			}
+			return nil
+		}
+		opened := openForTest(t, root, hook, nil)
+		t.Cleanup(func() { closeStore(t, opened) })
+		assertOutcome(t, opened.outcome, outcomeOpenedEmpty)
+		testWritePrivateFile(t, filepath.Join(root, "generations", ".tmp-generation-fsync"), nil)
+		before := existingManifestSlots(t, root)
+		armed = true
+
+		committed := opened.store.commit(emptyLogicalState(t))
+		if !injected {
+			t.Error("pre-maintenance directory fsync was not hook-injectable")
+		}
+		if committed.outcome != outcomeMaintenanceFailed {
+			t.Errorf("outcome = %q, want %q", committed.outcome, outcomeMaintenanceFailed)
+		}
+		assertManifestSlotsEqual(t, existingManifestSlots(t, root), before)
+	})
+
+	t.Run("post-publication", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "store")
+		var armed, injected bool
+		hook := func(call syscallCall) error {
+			if armed && call.point == pointPostMaintenanceFsyncForTest {
+				injected = true
+				return errors.New("synthetic post-maintenance directory fsync failure")
+			}
+			return nil
+		}
+		opened := openForTest(t, root, hook, nil)
+		t.Cleanup(func() { closeStore(t, opened) })
+		assertOutcome(t, opened.outcome, outcomeOpenedEmpty)
+		state := emptyLogicalState(t)
+		for i := 0; i < 2; i++ {
+			committed := opened.store.commit(state)
+			assertOutcome(t, committed.outcome, outcomeCommitDurable)
+		}
+		armed = true
+
+		committed := opened.store.commit(state)
+		if !injected {
+			t.Error("post-maintenance directory fsync was not hook-injectable")
+		}
+		if committed.outcome != outcomeCommitAppliedMaintenanceFailed {
+			t.Errorf("outcome = %q, want %q", committed.outcome, outcomeCommitAppliedMaintenanceFailed)
+		}
+		closeStore(t, opened)
+
+		reopened := openForTest(t, root, nil, nil)
+		defer closeStore(t, reopened)
+		assertOutcome(t, reopened.outcome, outcomeOpenedCurrent)
+	})
 }
 
 func emptyLogicalState(t *testing.T) stateV1 {

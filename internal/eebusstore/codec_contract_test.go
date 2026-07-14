@@ -193,6 +193,28 @@ func TestV1BoundsRejectBeforeUnboundedStateIsAccepted(t *testing.T) {
 	}
 }
 
+func TestExcessiveArraysRejectWithoutTailScaledAllocations(t *testing.T) {
+	t.Run("remote identities", func(t *testing.T) {
+		assertBoundedRejectionAllocations(
+			t,
+			generationWithRemoteCount(maxRemoteIdentityCount+1),
+			generationWithRemoteCount(8192),
+		)
+	})
+
+	t.Run("certificate chain", func(t *testing.T) {
+		populated := readFixture(t, "generation-v1-populated.json")
+		certificateArray := func(count int) string {
+			return strings.TrimSuffix(strings.Repeat(`"AA==",`, count), ",")
+		}
+		assertBoundedRejectionAllocations(
+			t,
+			replaceCertificateChain(t, populated, certificateArray(maxCertificateCount+1)),
+			replaceCertificateChain(t, populated, certificateArray(4096)),
+		)
+	})
+}
+
 func TestV1RejectsDuplicateAssociationsNonCanonicalOrderAndInvalidProviderReference(t *testing.T) {
 	populated := readFixture(t, "generation-v1-populated.json")
 	records := remoteRecordsFromFixture(t, populated)
@@ -327,6 +349,36 @@ func generationWithRemoteCount(count int) []byte {
 	payload.WriteString(`],"schema_version":1}`)
 	payload.WriteByte('\n')
 	return []byte(payload.String())
+}
+
+func assertBoundedRejectionAllocations(t *testing.T, boundary, attackerTail []byte) {
+	t.Helper()
+	if _, err := decodeGenerationV1(boundary); err == nil {
+		t.Fatal("boundary-plus-one payload was accepted")
+	} else {
+		assertErrorOutcome(t, err, outcomeMalformedState)
+	}
+	if _, err := decodeGenerationV1(attackerTail); err == nil {
+		t.Fatal("attacker-tail payload was accepted")
+	} else {
+		assertErrorOutcome(t, err, outcomeMalformedState)
+	}
+
+	boundaryAllocs := testing.AllocsPerRun(1, func() {
+		_, _ = decodeGenerationV1(boundary)
+	})
+	tailAllocs := testing.AllocsPerRun(1, func() {
+		_, _ = decodeGenerationV1(attackerTail)
+	})
+	const maximumTailAllocationGrowth = 128
+	if tailAllocs > boundaryAllocs+maximumTailAllocationGrowth {
+		t.Fatalf(
+			"rejection allocations grew from %.0f to %.0f with attacker-controlled tail; want growth <= %d",
+			boundaryAllocs,
+			tailAllocs,
+			maximumTailAllocationGrowth,
+		)
+	}
 }
 
 func certificateGoldenValue(t *testing.T, payload []byte) string {
