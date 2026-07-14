@@ -1,6 +1,7 @@
 package eebusraw
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -248,7 +249,7 @@ func TestIdentityDocumentV1ConstructorAndMarshalDoNotAliasOrReorder(t *testing.T
 		{Path: UnknownPathRemote, Value: OpaqueBytes([]byte("local-remote"))},
 		{Path: UnknownPathDocument, Value: OpaqueBytes([]byte("local-document"))},
 	}
-	local := EndpointIdentityV1{Role: EndpointRoleLocal, ID: localID, Unknown: localUnknown}
+	local := EndpointIdentityV1{Role: EndpointRoleV1Local, ID: localID, Unknown: localUnknown}
 	doc := NewIdentityDocumentV1(time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC), local)
 	local.Unknown[0] = UnknownField{Path: UnknownPathSession, Value: OpaqueBytes([]byte("mutated"))}
 	if doc.Local.Unknown[0].Path != UnknownPathRemote {
@@ -256,8 +257,8 @@ func TestIdentityDocumentV1ConstructorAndMarshalDoNotAliasOrReorder(t *testing.T
 	}
 
 	doc.Remotes = []EndpointIdentityV1{
-		{Role: EndpointRoleRemote, ID: remoteBID},
-		{Role: EndpointRoleRemote, ID: remoteAID},
+		{Role: EndpointRoleV1Remote, ID: remoteBID},
+		{Role: EndpointRoleV1Remote, ID: remoteAID},
 	}
 	doc.Sessions = []SessionIdentityV1{
 		{ID: mustRedactID(t, IDKindSession, "session-b-v1"), RemoteID: remoteBID},
@@ -280,11 +281,86 @@ func TestIdentityDocumentV1ConstructorAndMarshalDoNotAliasOrReorder(t *testing.T
 	}
 }
 
+func TestStableIdentityEntriesMarshalUnknownDeterministicallyWithoutMutation(t *testing.T) {
+	documentUnknown := UnknownField{Path: UnknownPathDocument, Value: OpaqueBytes([]byte("document"))}
+	remoteUnknown := UnknownField{Path: UnknownPathRemote, Value: OpaqueBytes([]byte("remote"))}
+	reversed := []UnknownField{remoteUnknown, documentUnknown}
+	sorted := []UnknownField{documentUnknown, remoteUnknown}
+
+	t.Run("endpoint", func(t *testing.T) {
+		entry := EndpointIdentityV1{
+			Role:    EndpointRoleV1Local,
+			ID:      mustRedactID(t, IDKindLocalSKI, "standalone-endpoint"),
+			Unknown: append([]UnknownField(nil), reversed...),
+		}
+		before := append([]UnknownField(nil), entry.Unknown...)
+		got, err := json.Marshal(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(entry.Unknown, before) {
+			t.Fatal("standalone endpoint marshal mutated unknown order")
+		}
+		entry.Unknown = sorted
+		want, err := json.Marshal(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("standalone endpoint JSON is not canonical\nwant: %s\ngot:  %s", want, got)
+		}
+	})
+
+	t.Run("session", func(t *testing.T) {
+		entry := SessionIdentityV1{
+			ID:       mustRedactID(t, IDKindSession, "standalone-session"),
+			RemoteID: mustRedactID(t, IDKindRemoteSKI, "standalone-remote"),
+			Unknown:  append([]UnknownField(nil), reversed...),
+		}
+		before := append([]UnknownField(nil), entry.Unknown...)
+		got, err := json.Marshal(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(entry.Unknown, before) {
+			t.Fatal("standalone session marshal mutated unknown order")
+		}
+		entry.Unknown = sorted
+		want, err := json.Marshal(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("standalone session JSON is not canonical\nwant: %s\ngot:  %s", want, got)
+		}
+	})
+}
+
+func TestStableRoleAndEntryFormattingDoesNotLeak(t *testing.T) {
+	raw := "caller-controlled-stable-role"
+	role := EndpointRoleV1(raw)
+	endpoint := EndpointIdentityV1{
+		Role: role,
+		ID:   RedactedID{Kind: IDKindLocalSKI, Masked: redactedValue, Digest: raw},
+	}
+	session := SessionIdentityV1{
+		ID:       RedactedID{Kind: IDKindSession, Masked: redactedValue, Digest: raw},
+		RemoteID: mustRedactID(t, IDKindRemoteSKI, "format-remote"),
+	}
+	formatted := fmt.Sprintf("%s %v %+v %#v %q %s %v %+v %#v %q %s %v %+v %#v %q", role, role, role, role, role, endpoint, endpoint, endpoint, endpoint, endpoint, session, session, session, session, session)
+	if strings.Contains(formatted, raw) {
+		t.Fatalf("stable role or entry formatting leaked caller input: %s", formatted)
+	}
+	if _, err := json.Marshal(role); err == nil {
+		t.Fatal("invalid stable role marshaled successfully")
+	}
+}
+
 func TestIdentityDocumentV1ValidationAndFormattingDoNotLeak(t *testing.T) {
 	raw := "raw-secret-v1-digest"
 	localID := mustRedactID(t, IDKindLocalSKI, "local-v1")
 	localID.Digest = raw
-	doc := NewIdentityDocumentV1(time.Now(), EndpointIdentityV1{Role: EndpointRoleLocal, ID: localID})
+	doc := NewIdentityDocumentV1(time.Now(), EndpointIdentityV1{Role: EndpointRoleV1Local, ID: localID})
 	err := doc.Validate()
 	if err == nil {
 		t.Fatal("Validate() succeeded for caller-controlled digest")
@@ -295,7 +371,7 @@ func TestIdentityDocumentV1ValidationAndFormattingDoNotLeak(t *testing.T) {
 	}
 
 	localID = mustRedactID(t, IDKindLocalSKI, "local-v1")
-	doc = NewIdentityDocumentV1(time.Now(), EndpointIdentityV1{Role: EndpointRoleLocal, ID: localID})
+	doc = NewIdentityDocumentV1(time.Now(), EndpointIdentityV1{Role: EndpointRoleV1Local, ID: localID})
 	doc.Sessions = []SessionIdentityV1{{
 		ID:       mustRedactID(t, IDKindSession, "session-v1"),
 		RemoteID: RedactedID{Kind: IDKindRemoteSKI, Masked: redactedValue, Digest: raw},
@@ -316,7 +392,7 @@ func TestIdentityContractVersionsRemainIsolated(t *testing.T) {
 	if err := alpha.Validate(); err == nil {
 		t.Fatal("v1alpha1 identity accepted stable v1 contract")
 	}
-	stable := NewIdentityDocumentV1(time.Now(), EndpointIdentityV1{Role: local.Role, ID: local.ID, Unknown: local.Unknown})
+	stable := NewIdentityDocumentV1(time.Now(), EndpointIdentityV1{Role: EndpointRoleV1(local.Role), ID: local.ID, Unknown: local.Unknown})
 	stable.Contract = IdentityContractV1Alpha1
 	if err := stable.Validate(); err == nil {
 		t.Fatal("stable v1 identity accepted v1alpha1 contract")
@@ -329,9 +405,9 @@ func TestIdentityDocumentV1ExactJSONOmitsPairingAndState(t *testing.T) {
 	sessionID := mustRedactID(t, IDKindSession, "stable-session")
 	doc := NewIdentityDocumentV1(
 		time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC),
-		EndpointIdentityV1{Role: EndpointRoleLocal, ID: localID},
+		EndpointIdentityV1{Role: EndpointRoleV1Local, ID: localID},
 	)
-	doc.Remotes = []EndpointIdentityV1{{Role: EndpointRoleRemote, ID: remoteID}}
+	doc.Remotes = []EndpointIdentityV1{{Role: EndpointRoleV1Remote, ID: remoteID}}
 	doc.Sessions = []SessionIdentityV1{{ID: sessionID, RemoteID: remoteID}}
 
 	payload, err := json.Marshal(doc)
@@ -368,7 +444,7 @@ func TestIdentityDocumentV1RejectsMalformedDigests(t *testing.T) {
 	}{
 		{name: "local uppercase", mutate: func(doc *IdentityDocumentV1) { doc.Local.ID.Digest = uppercase }},
 		{name: "remote non-hex", mutate: func(doc *IdentityDocumentV1) {
-			doc.Remotes = []EndpointIdentityV1{{Role: EndpointRoleRemote, ID: RedactedID{Kind: IDKindRemoteSKI, Masked: redactedValue, Digest: nonHex}}}
+			doc.Remotes = []EndpointIdentityV1{{Role: EndpointRoleV1Remote, ID: RedactedID{Kind: IDKindRemoteSKI, Masked: redactedValue, Digest: nonHex}}}
 		}},
 		{name: "session uppercase", mutate: func(doc *IdentityDocumentV1) {
 			doc.Sessions = []SessionIdentityV1{{ID: RedactedID{Kind: IDKindSession, Masked: redactedValue, Digest: uppercase}, RemoteID: validRemote}}
@@ -383,7 +459,7 @@ func TestIdentityDocumentV1RejectsMalformedDigests(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			doc := NewIdentityDocumentV1(time.Now(), EndpointIdentityV1{Role: EndpointRoleLocal, ID: validLocal})
+			doc := NewIdentityDocumentV1(time.Now(), EndpointIdentityV1{Role: EndpointRoleV1Local, ID: validLocal})
 			test.mutate(&doc)
 			if err := doc.Validate(); err == nil {
 				t.Fatal("Validate() accepted malformed stable digest")
@@ -396,15 +472,15 @@ func TestIdentityDocumentV1RejectsMalformedDigests(t *testing.T) {
 }
 
 func TestIdentityDocumentV1RejectsDuplicateIdentityKeys(t *testing.T) {
-	local := EndpointIdentityV1{Role: EndpointRoleLocal, ID: mustRedactID(t, IDKindLocalSKI, "stable-local")}
+	local := EndpointIdentityV1{Role: EndpointRoleV1Local, ID: mustRedactID(t, IDKindLocalSKI, "stable-local")}
 	remoteID := mustRedactID(t, IDKindRemoteSKI, "stable-remote")
 	sessionID := mustRedactID(t, IDKindSession, "stable-session")
 
 	t.Run("remote", func(t *testing.T) {
 		doc := NewIdentityDocumentV1(time.Now(), local)
 		doc.Remotes = []EndpointIdentityV1{
-			{Role: EndpointRoleRemote, ID: remoteID, Unknown: []UnknownField{{Path: UnknownPathRemote, Value: OpaqueBytes([]byte("first"))}}},
-			{Role: EndpointRoleRemote, ID: remoteID, Unknown: []UnknownField{{Path: UnknownPathRemote, Value: OpaqueBytes([]byte("contradictory"))}}},
+			{Role: EndpointRoleV1Remote, ID: remoteID, Unknown: []UnknownField{{Path: UnknownPathRemote, Value: OpaqueBytes([]byte("first"))}}},
+			{Role: EndpointRoleV1Remote, ID: remoteID, Unknown: []UnknownField{{Path: UnknownPathRemote, Value: OpaqueBytes([]byte("contradictory"))}}},
 		}
 		if err := doc.Validate(); err == nil || !strings.Contains(err.Error(), "duplicates identity key") {
 			t.Fatalf("duplicate remote identity result = %v", err)
@@ -426,7 +502,7 @@ func TestIdentityDocumentV1RejectsDuplicateIdentityKeys(t *testing.T) {
 func TestIdentityDocumentV1RejectsUnrepresentableTimestamp(t *testing.T) {
 	doc := NewIdentityDocumentV1(
 		time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC),
-		EndpointIdentityV1{Role: EndpointRoleLocal, ID: mustRedactID(t, IDKindLocalSKI, "stable-local")},
+		EndpointIdentityV1{Role: EndpointRoleV1Local, ID: mustRedactID(t, IDKindLocalSKI, "stable-local")},
 	)
 	if err := doc.Validate(); err == nil {
 		t.Fatal("Validate() accepted timestamp outside RFC3339 JSON range")

@@ -98,9 +98,9 @@ func TestFrozenEnvelopeV1DeterministicReplay(t *testing.T) {
 
 func TestFrozenIdentityDocumentV1CanonicalOrder(t *testing.T) {
 	capturedAt := time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC)
-	local := snapshotEndpoint(t, eebusraw.EndpointRoleLocal, eebusraw.IDKindLocalSKI, "a")
-	remoteA := snapshotEndpoint(t, eebusraw.EndpointRoleRemote, eebusraw.IDKindRemoteSKI, "b")
-	remoteB := snapshotEndpoint(t, eebusraw.EndpointRoleRemote, eebusraw.IDKindRemoteSKI, "c")
+	local := snapshotEndpoint(t, eebusraw.EndpointRoleV1Local, eebusraw.IDKindLocalSKI, "a")
+	remoteA := snapshotEndpoint(t, eebusraw.EndpointRoleV1Remote, eebusraw.IDKindRemoteSKI, "b")
+	remoteB := snapshotEndpoint(t, eebusraw.EndpointRoleV1Remote, eebusraw.IDKindRemoteSKI, "c")
 	sessionA := snapshotSession(t, "d", remoteA.ID)
 	sessionB := snapshotSession(t, "e", remoteB.ID)
 
@@ -135,7 +135,7 @@ func TestFrozenIdentityDocumentV1CanonicalOrder(t *testing.T) {
 	}
 }
 
-func snapshotEndpoint(t *testing.T, role eebusraw.EndpointRole, kind eebusraw.IDKind, fill string) eebusraw.EndpointIdentityV1 {
+func snapshotEndpoint(t *testing.T, role eebusraw.EndpointRoleV1, kind eebusraw.IDKind, fill string) eebusraw.EndpointIdentityV1 {
 	t.Helper()
 	id, err := eebusraw.RedactID(kind, fill)
 	if err != nil {

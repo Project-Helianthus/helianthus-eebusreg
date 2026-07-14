@@ -12,14 +12,52 @@ import (
 	"time"
 )
 
+type EndpointRoleV1 string
+
+const (
+	EndpointRoleV1Local  EndpointRoleV1 = "local"
+	EndpointRoleV1Remote EndpointRoleV1 = "remote"
+)
+
+func (r EndpointRoleV1) Validate() error {
+	switch r {
+	case EndpointRoleV1Local, EndpointRoleV1Remote:
+		return nil
+	default:
+		return errors.New("unsupported endpoint role")
+	}
+}
+
+func (r EndpointRoleV1) String() string {
+	if err := r.Validate(); err != nil {
+		return "invalid-role"
+	}
+	return string(r)
+}
+
+func (r EndpointRoleV1) MarshalJSON() ([]byte, error) {
+	if err := r.Validate(); err != nil {
+		return nil, err
+	}
+	return json.Marshal(string(r))
+}
+
+func (r EndpointRoleV1) GoString() string {
+	return r.String()
+}
+
+func (r EndpointRoleV1) Format(s fmt.State, verb rune) {
+	io.WriteString(s, r.String())
+}
+
 type EndpointIdentityV1 struct {
-	Role    EndpointRole   `json:"role"`
+	Role    EndpointRoleV1 `json:"role"`
 	ID      RedactedID     `json:"id"`
 	Unknown []UnknownField `json:"unknown,omitempty"`
 }
 
 func (e EndpointIdentityV1) Validate() error {
-	if e.Role != EndpointRoleLocal && e.Role != EndpointRoleRemote {
+	if err := e.Role.Validate(); err != nil {
 		return errors.New("endpoint role must be local or remote")
 	}
 	if err := validateRedactedIDV1(e.ID); err != nil {
@@ -34,11 +72,31 @@ func (e EndpointIdentityV1) Validate() error {
 }
 
 func (e EndpointIdentityV1) MarshalJSON() ([]byte, error) {
-	type alias EndpointIdentityV1
 	if err := e.Validate(); err != nil {
 		return nil, err
 	}
-	return json.Marshal(alias(e))
+	type endpointIdentityV1JSON struct {
+		Role    EndpointRoleV1 `json:"role"`
+		ID      RedactedID     `json:"id"`
+		Unknown []UnknownField `json:"unknown,omitempty"`
+	}
+	return json.Marshal(endpointIdentityV1JSON{
+		Role:    e.Role,
+		ID:      e.ID,
+		Unknown: sortedIdentityUnknownFieldsV1(e.Unknown),
+	})
+}
+
+func (e EndpointIdentityV1) String() string {
+	return "endpoint_identity_v1:" + redactedValue
+}
+
+func (e EndpointIdentityV1) GoString() string {
+	return e.String()
+}
+
+func (e EndpointIdentityV1) Format(s fmt.State, verb rune) {
+	io.WriteString(s, e.String())
 }
 
 type SessionIdentityV1 struct {
@@ -63,11 +121,31 @@ func (s SessionIdentityV1) Validate() error {
 }
 
 func (s SessionIdentityV1) MarshalJSON() ([]byte, error) {
-	type alias SessionIdentityV1
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
-	return json.Marshal(alias(s))
+	type sessionIdentityV1JSON struct {
+		ID       RedactedID     `json:"id"`
+		RemoteID RedactedID     `json:"remote_id"`
+		Unknown  []UnknownField `json:"unknown,omitempty"`
+	}
+	return json.Marshal(sessionIdentityV1JSON{
+		ID:       s.ID,
+		RemoteID: s.RemoteID,
+		Unknown:  sortedIdentityUnknownFieldsV1(s.Unknown),
+	})
+}
+
+func (s SessionIdentityV1) String() string {
+	return "session_identity_v1:" + redactedValue
+}
+
+func (s SessionIdentityV1) GoString() string {
+	return s.String()
+}
+
+func (s SessionIdentityV1) Format(state fmt.State, verb rune) {
+	io.WriteString(state, s.String())
 }
 
 type IdentityDocumentV1 struct {
@@ -102,7 +180,7 @@ func (d IdentityDocumentV1) Validate() error {
 	if err := d.Local.Validate(); err != nil {
 		return fmt.Errorf("local identity: %w", err)
 	}
-	if d.Local.Role != EndpointRoleLocal {
+	if d.Local.Role != EndpointRoleV1Local {
 		return errors.New("local identity role must be local")
 	}
 	remoteKeys := make(map[string]int, len(d.Remotes))
@@ -110,7 +188,7 @@ func (d IdentityDocumentV1) Validate() error {
 		if err := remote.Validate(); err != nil {
 			return fmt.Errorf("remote identity %d: %w", i, err)
 		}
-		if remote.Role != EndpointRoleRemote {
+		if remote.Role != EndpointRoleV1Remote {
 			return fmt.Errorf("remote identity %d role must be remote", i)
 		}
 		key := identityKeyV1(remote.ID)

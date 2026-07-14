@@ -6,8 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
+	"go/constant"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -20,6 +23,8 @@ import (
 
 	"golang.org/x/mod/modfile"
 )
+
+const canonicalModulePath = "github.com/Project-Helianthus/helianthus-eebusreg"
 
 const minimalREADME = "# eeBUS Registry\n\nCanonical docs: Project-Helianthus/helianthus-docs-eebus.\n\nBuild: `./scripts/ci_local.sh`.\n"
 
@@ -160,10 +165,10 @@ type manifestStableField struct {
 }
 
 type packageInventory struct {
-	constants map[string]constantDeclaration
-	exports   map[manifestExport]struct{}
-	name      string
-	types     map[string]typeDeclaration
+	exports map[manifestExport]struct{}
+	files   []*ast.File
+	name    string
+	types   map[string]typeDeclaration
 }
 
 type typeDeclaration struct {
@@ -177,6 +182,14 @@ type constantDeclaration struct {
 	rel      string
 	typeName string
 	value    string
+}
+
+type sourceImporter struct {
+	checked     map[string]*types.Package
+	checking    map[string]bool
+	fallback    types.Importer
+	fset        *token.FileSet
+	inventories map[string]*packageInventory
 }
 
 type stableContractSpec struct {
@@ -430,13 +443,13 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 				inventory := packages[importPath]
 				if inventory == nil {
 					inventory = &packageInventory{
-						constants: make(map[string]constantDeclaration),
-						exports:   make(map[manifestExport]struct{}),
-						name:      file.Name.Name,
-						types:     make(map[string]typeDeclaration),
+						exports: make(map[manifestExport]struct{}),
+						name:    file.Name.Name,
+						types:   make(map[string]typeDeclaration),
 					}
 					packages[importPath] = inventory
 				}
+				inventory.files = append(inventory.files, file)
 				collectExports(file, inventory.exports)
 				collectDeclarations(rel, file, inventory)
 			}
@@ -493,7 +506,7 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 		return apiManifest{}, nil, err
 	}
 
-	stableContracts, stableViolations := inspectStableContracts(modulePath, packages)
+	stableContracts, stableViolations := inspectStableContracts(root, modulePath, fset, packages)
 	violations = append(violations, stableViolations...)
 	manifest := apiManifest{
 		Module:          modulePath,
@@ -614,43 +627,20 @@ func collectDeclarations(rel string, file *ast.File, inventory *packageInventory
 				}
 				inventory.types[spec.Name.Name] = typeDeclaration{imports: imports, rel: rel, spec: spec}
 			}
-		case token.CONST:
-			for _, rawSpec := range gen.Specs {
-				spec, ok := rawSpec.(*ast.ValueSpec)
-				if !ok || spec.Type == nil {
-					continue
-				}
-				typeName, err := canonicalType(spec.Type, imports)
-				if err != nil {
-					continue
-				}
-				for i, name := range spec.Names {
-					if i >= len(spec.Values) {
-						continue
-					}
-					literal, ok := spec.Values[i].(*ast.BasicLit)
-					if !ok || literal.Kind != token.STRING {
-						continue
-					}
-					value, err := strconv.Unquote(literal.Value)
-					if err != nil {
-						continue
-					}
-					inventory.constants[name.Name] = constantDeclaration{name: name.Name, rel: rel, typeName: typeName, value: value}
-				}
-			}
 		}
 	}
 }
 
-func inspectStableContracts(modulePath string, packages map[string]*packageInventory) ([]manifestStableContract, []string) {
+func inspectStableContracts(root, modulePath string, fset *token.FileSet, packages map[string]*packageInventory) ([]manifestStableContract, []string) {
 	specs := stableContractSpecs(modulePath)
-	active := false
-	for _, spec := range specs {
-		if inventory := packages[spec.importPath]; inventory != nil {
-			if _, ok := inventory.types[spec.root]; ok {
-				active = true
-				break
+	active := modulePath == canonicalModulePath
+	if !active {
+		for _, spec := range specs {
+			if inventory := packages[spec.importPath]; inventory != nil {
+				if _, ok := inventory.types[spec.root]; ok {
+					active = true
+					break
+				}
 			}
 		}
 	}
@@ -658,8 +648,9 @@ func inspectStableContracts(modulePath string, packages map[string]*packageInven
 		return []manifestStableContract{}, nil
 	}
 
+	checkedPackages, typeViolations := typeCheckStablePackages(fset, packages, specs)
 	contracts := make([]manifestStableContract, 0, len(specs))
-	var violations []string
+	violations := append([]string(nil), typeViolations...)
 	for _, spec := range specs {
 		contract := manifestStableContract{
 			Enums:      make([]manifestStableEnum, 0, len(spec.enums)),
@@ -672,6 +663,7 @@ func inspectStableContracts(modulePath string, packages map[string]*packageInven
 			contracts = append(contracts, contract)
 			continue
 		}
+		constants := typedConstants(root, fset, checkedPackages[spec.importPath])
 
 		expectedTypes := make(map[string]manifestStableType, len(spec.types))
 		for _, expected := range spec.types {
@@ -704,7 +696,7 @@ func inspectStableContracts(modulePath string, packages map[string]*packageInven
 			expectedNames := make(map[string]manifestStableEnumValue, len(enumSpec.values))
 			for _, expected := range enumSpec.values {
 				expectedNames[expected.Name] = expected
-				actual, ok := inventory.constants[expected.Name]
+				actual, ok := constants[expected.Name]
 				if !ok {
 					violations = append(violations, fmt.Sprintf("%s: stable enum value %s.%s is missing", spec.importPath, enumSpec.typeName, expected.Name))
 					continue
@@ -714,8 +706,8 @@ func inspectStableContracts(modulePath string, packages map[string]*packageInven
 				}
 			}
 			if enumSpec.exact {
-				for name, actual := range inventory.constants {
-					if actual.typeName != enumSpec.typeName {
+				for name, actual := range constants {
+					if !ast.IsExported(name) || actual.typeName != enumSpec.typeName {
 						continue
 					}
 					if _, ok := expectedNames[name]; !ok {
@@ -735,6 +727,85 @@ func inspectStableContracts(modulePath string, packages map[string]*packageInven
 	}
 	sort.Slice(contracts, func(i, j int) bool { return contracts[i].ImportPath < contracts[j].ImportPath })
 	return contracts, violations
+}
+
+func typeCheckStablePackages(fset *token.FileSet, inventories map[string]*packageInventory, specs []stableContractSpec) (map[string]*types.Package, []string) {
+	loader := &sourceImporter{
+		checked:     make(map[string]*types.Package),
+		checking:    make(map[string]bool),
+		fallback:    importer.Default(),
+		fset:        fset,
+		inventories: inventories,
+	}
+	var violations []string
+	for _, spec := range specs {
+		if inventories[spec.importPath] == nil {
+			continue
+		}
+		if _, err := loader.Import(spec.importPath); err != nil {
+			violations = append(violations, fmt.Sprintf("%s: stable contract package does not type-check: %v", spec.importPath, err))
+		}
+	}
+	return loader.checked, violations
+}
+
+func (i *sourceImporter) Import(path string) (*types.Package, error) {
+	if checked := i.checked[path]; checked != nil {
+		return checked, nil
+	}
+	inventory := i.inventories[path]
+	if inventory == nil {
+		return i.fallback.Import(path)
+	}
+	if i.checking[path] {
+		return nil, fmt.Errorf("import cycle involving %s", path)
+	}
+	i.checking[path] = true
+	defer delete(i.checking, path)
+	config := types.Config{Importer: i}
+	checked, err := config.Check(path, i.fset, inventory.files, nil)
+	if err != nil {
+		return nil, err
+	}
+	i.checked[path] = checked
+	return checked, nil
+}
+
+func typedConstants(root string, fset *token.FileSet, pkg *types.Package) map[string]constantDeclaration {
+	constants := make(map[string]constantDeclaration)
+	if pkg == nil {
+		return constants
+	}
+	for _, name := range pkg.Scope().Names() {
+		object, ok := pkg.Scope().Lookup(name).(*types.Const)
+		if !ok {
+			continue
+		}
+		typeName := ""
+		if named, ok := object.Type().(*types.Named); ok && named.Obj().Pkg() == pkg {
+			typeName = named.Obj().Name()
+		}
+		value := object.Val().ExactString()
+		if object.Val().Kind() == constant.String {
+			value = constant.StringVal(object.Val())
+		}
+		constants[name] = constantDeclaration{
+			name:     name,
+			rel:      relativePosition(root, fset, object.Pos()),
+			typeName: typeName,
+			value:    value,
+		}
+	}
+	return constants
+}
+
+func relativePosition(root string, fset *token.FileSet, pos token.Pos) string {
+	filename := fset.Position(pos).Filename
+	rel, err := filepath.Rel(root, filename)
+	if err != nil {
+		return filepath.ToSlash(filename)
+	}
+	return filepath.ToSlash(rel)
 }
 
 func inspectStableType(declaration typeDeclaration) (manifestStableType, error) {
@@ -833,7 +904,7 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 			types: []manifestStableType{
 				stableType("ContractVersion", "string"),
 				stableType("MaskTier", "string"),
-				stableType("EndpointRole", "string"),
+				stableType("EndpointRoleV1", "string"),
 				stableType("IDKind", "string"),
 				stableType("RedactedID", "struct",
 					field("Kind", "IDKind", `json:"kind"`),
@@ -851,7 +922,7 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 					field("Size", "int", `json:"size,omitempty"`),
 				),
 				stableType("EndpointIdentityV1", "struct",
-					field("Role", "EndpointRole", `json:"role"`),
+					field("Role", "EndpointRoleV1", `json:"role"`),
 					field("ID", "RedactedID", `json:"id"`),
 					field("Unknown", "[]UnknownField", `json:"unknown,omitempty"`),
 				),
@@ -873,9 +944,9 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 			enums: []stableEnumSpec{
 				{typeName: "ContractVersion", values: []manifestStableEnumValue{enumValue("IdentityContractV1", "helianthus.eebus.raw.identity.v1")}},
 				{exact: true, typeName: "MaskTier", values: []manifestStableEnumValue{enumValue("MaskTierRedacted", "redacted")}},
-				{exact: true, typeName: "EndpointRole", values: []manifestStableEnumValue{
-					enumValue("EndpointRoleLocal", "local"),
-					enumValue("EndpointRoleRemote", "remote"),
+				{exact: true, typeName: "EndpointRoleV1", values: []manifestStableEnumValue{
+					enumValue("EndpointRoleV1Local", "local"),
+					enumValue("EndpointRoleV1Remote", "remote"),
 				}},
 				{exact: true, typeName: "IDKind", values: []manifestStableEnumValue{
 					enumValue("IDKindLocalSKI", "local-ski"),

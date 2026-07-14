@@ -297,6 +297,13 @@ type FacadeValue = facade.Value
 func TestStableContractASTManifest(t *testing.T) {
 	tool := buildAPIBoundary(t)
 
+	t.Run("canonical module rejects both stable roots removed", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeFile(t, root, "go.mod", "module github.com/Project-Helianthus/helianthus-eebusreg\n\ngo 1.22.0\n")
+		writeFile(t, root, "eebusevidence/doc.go", "// Package eebusevidence defines raw eeBUS evidence contracts.\npackage eebusevidence\n")
+		expectRejected(t, tool, root, "IdentityDocumentV1", "EnvelopeV1", "missing")
+	})
+
 	t.Run("stable closure accepts alpha declarations without adopting them", func(t *testing.T) {
 		root := newSyntheticRepository(t)
 		writeStableContractFixture(t, root, stableRawFixture(), stableEvidenceFixture())
@@ -321,10 +328,24 @@ func TestStableContractASTManifest(t *testing.T) {
 				t.Fatalf("stable type closure adopted alpha/final authority %q: %s", forbidden, stablePayload)
 			}
 		}
-		for _, required := range []string{"EndpointIdentityV1", "SessionIdentityV1", "CaptureProvenanceV1", "RawSnapshotScopeV1", "capture_provenance"} {
+		for _, required := range []string{"EndpointRoleV1", "EndpointIdentityV1", "SessionIdentityV1", "CaptureProvenanceV1", "RawSnapshotScopeV1", "capture_provenance"} {
 			if !bytes.Contains(stablePayload, []byte(required)) {
 				t.Fatalf("stable type closure omitted %q: %s", required, stablePayload)
 			}
+		}
+	})
+
+	t.Run("unexported typed stable enum helper is ignored", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		rawSource := strings.Replace(
+			stableRawFixture(),
+			"\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"\n)",
+			"\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"\n\tendpointRoleV1Private EndpointRoleV1 = \"private\"\n)",
+			1,
+		)
+		writeStableContractFixture(t, root, rawSource, stableEvidenceFixture())
+		if output, err := runTool(t, tool, root); err != nil {
+			t.Fatalf("private stable enum helper was rejected: %v\n%s", err, output)
 		}
 	})
 
@@ -369,6 +390,27 @@ func TestStableContractASTManifest(t *testing.T) {
 				return strings.Replace(source, "\tRawSnapshotScopeUnknown RawSnapshotScopeV1 = \"raw-unknown\"", "\tRawSnapshotScopeUnknown RawSnapshotScopeV1 = \"raw-unknown\"\n\tRawSnapshotScopePairing RawSnapshotScopeV1 = \"pairing-status\"", 1)
 			},
 			want: []string{"stable enum", "unexpected value", "RawSnapshotScopePairing"},
+		},
+		{
+			name: "stable enum conversion bypass",
+			mutateRaw: func(source string) string {
+				return strings.Replace(source, "\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"", "\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"\n\tEndpointRoleV1Converted EndpointRoleV1 = EndpointRoleV1(\"converted\")", 1)
+			},
+			want: []string{"stable enum", "unexpected value", "EndpointRoleV1Converted"},
+		},
+		{
+			name: "stable enum concatenation bypass",
+			mutateRaw: func(source string) string {
+				return strings.Replace(source, "\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"", "\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"\n\tEndpointRoleV1Concatenated EndpointRoleV1 = \"con\" + \"catenated\"", 1)
+			},
+			want: []string{"stable enum", "unexpected value", "EndpointRoleV1Concatenated"},
+		},
+		{
+			name: "stable enum inherited declaration bypass",
+			mutateRaw: func(source string) string {
+				return strings.Replace(source, "\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"", "\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"\n\tEndpointRoleV1Inherited", 1)
+			},
+			want: []string{"stable enum", "unexpected value", "EndpointRoleV1Inherited"},
 		},
 		{
 			name: "transitive trust authority field",
@@ -622,6 +664,13 @@ const (
 	EndpointRoleRemote EndpointRole = "remote"
 )
 
+type EndpointRoleV1 string
+
+const (
+	EndpointRoleV1Local EndpointRoleV1 = "local"
+	EndpointRoleV1Remote EndpointRoleV1 = "remote"
+)
+
 type IDKind string
 
 const (
@@ -679,7 +728,7 @@ type SessionIdentity struct {
 }
 
 type EndpointIdentityV1 struct {
-	Role EndpointRole ` + "`json:\"role\"`" + `
+	Role EndpointRoleV1 ` + "`json:\"role\"`" + `
 	ID RedactedID ` + "`json:\"id\"`" + `
 	Unknown []UnknownField ` + "`json:\"unknown,omitempty\"`" + `
 }
