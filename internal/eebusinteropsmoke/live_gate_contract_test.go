@@ -203,6 +203,18 @@ func TestLiveEvidenceSeparatesOperatorProofFromCIReplay(t *testing.T) {
 	}
 }
 
+func TestLiveEvidenceRequiresInternalMDNSDisabled(t *testing.T) {
+	evidence := passingLiveGateEvidence()
+	if err := evidence.validate(); err != nil {
+		t.Fatalf("validate passing evidence: %v", err)
+	}
+
+	evidence.TrustPreconditions.DiscoveryIsolation = "loopback"
+	if err := evidence.validate(); err == nil || !strings.Contains(err.Error(), "trust preconditions") {
+		t.Fatalf("accepted obsolete loopback discovery isolation: %v", err)
+	}
+}
+
 func TestLiveEvidenceBindsFirstSPINEDataHash(t *testing.T) {
 	evidence := passingLiveGateEvidence()
 	evidence.OperatorLiveProof.FirstSPINEDataHash = "sha256:" + strings.Repeat("0", 64)
@@ -347,7 +359,7 @@ func passingLiveGateEvidence() liveGateEvidence {
 			LocalIdentityState:     "disposable-in-memory",
 			ExpectedRemoteApproved: true,
 			AutoAcceptEnabled:      false,
-			DiscoveryIsolation:     "loopback",
+			DiscoveryIsolation:     "internal-mdns-disabled",
 			OperatorWindow:         "opened",
 		},
 		OperatorLiveProof: operatorLiveProof{

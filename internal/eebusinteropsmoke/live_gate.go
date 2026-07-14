@@ -633,7 +633,7 @@ func (e liveGateEvidence) validate() error {
 		return errors.New("command evidence required")
 	case e.Environment.TimestampUTC.IsZero() || e.Environment.GoVersion == "" || !validHMACSHA256Ref(e.Environment.TopologyRef):
 		return errors.New("environment evidence incomplete")
-	case e.TrustPreconditions.LocalIdentityState != "disposable-in-memory" || !e.TrustPreconditions.ExpectedRemoteApproved || e.TrustPreconditions.AutoAcceptEnabled || e.TrustPreconditions.DiscoveryIsolation != "loopback" || e.TrustPreconditions.OperatorWindow == "":
+	case e.TrustPreconditions.LocalIdentityState != "disposable-in-memory" || !e.TrustPreconditions.ExpectedRemoteApproved || e.TrustPreconditions.AutoAcceptEnabled || e.TrustPreconditions.DiscoveryIsolation != "internal-mdns-disabled" || e.TrustPreconditions.OperatorWindow == "":
 		return errors.New("trust preconditions incomplete")
 	case e.OperatorLiveProof.Result != resultPass || !e.OperatorLiveProof.TrustVisible:
 		return errors.New("operator live proof must pass independently")

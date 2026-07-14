@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -165,7 +166,7 @@ func TestOperatorProofRequiresPrivateKnownFields(t *testing.T) {
 	}
 }
 
-func TestLiveServicePreapprovesOnlyExpectedSKIAndIsolatesDiscovery(t *testing.T) {
+func TestLiveServicePreapprovesOnlyExpectedSKIAndDisablesInternalMDNS(t *testing.T) {
 	expected := "0123456789abcdef0123456789abcdef01234567"
 	certificate, err := cert.CreateCertificate("Helianthus", "Project", "RO", "pairing-test")
 	if err != nil {
@@ -190,8 +191,39 @@ func TestLiveServicePreapprovesOnlyExpectedSKIAndIsolatesDiscovery(t *testing.T)
 		t.Fatal("competing SKI was preapproved")
 	}
 	interfaces := handler.service.Configuration().Interfaces()
-	if len(interfaces) != 1 || interfaces[0] != defaultLoopbackInterface() {
-		t.Fatalf("eebus discovery interfaces = %v, want loopback isolation", interfaces)
+	if len(interfaces) != 0 {
+		t.Fatalf("eebus discovery interfaces = %v, want no internal discovery configuration", interfaces)
+	}
+	if _, ok := handler.server.discovery.(*disabledInternalMDNS); !ok {
+		t.Fatalf("internal discovery = %T, want disabledInternalMDNS", handler.server.discovery)
+	}
+}
+
+func TestLiveServiceStartsWithInternalMDNSDisabled(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	expected := "0123456789abcdef0123456789abcdef01234567"
+	certificate, err := cert.CreateCertificate("Helianthus", "Project", "RO", "startup-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newLiveService(liveOptions{Port: port, RemoteSKI: expected}, certificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handler.shutdown()
+	if err := handler.approveExpectedRemote(); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.start(); err != nil {
+		t.Fatalf("live service startup with internal mDNS disabled: %v", err)
 	}
 }
 

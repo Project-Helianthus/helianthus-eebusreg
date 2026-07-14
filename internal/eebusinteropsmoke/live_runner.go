@@ -25,7 +25,6 @@ import (
 	shipapi "github.com/enbility/ship-go/api"
 	"github.com/enbility/ship-go/cert"
 	shiphub "github.com/enbility/ship-go/hub"
-	shipmdns "github.com/enbility/ship-go/mdns"
 	"github.com/enbility/spine-go/model"
 	"golang.org/x/sys/unix"
 )
@@ -335,10 +334,6 @@ func runLiveVR940fProofWithDependencies(ctx context.Context, opts liveOptions, d
 }
 
 func newLiveService(opts liveOptions, certificate tls.Certificate) (*liveServiceHandler, error) {
-	loopback := defaultLoopbackInterface()
-	if loopback == "" {
-		return nil, errors.New("loopback interface required for eebus discovery isolation")
-	}
 	handler := &liveServiceHandler{
 		expectedSKI: normalizeSKI(opts.RemoteSKI),
 		denied:      make(map[string]struct{}),
@@ -359,25 +354,13 @@ func newLiveService(opts liveOptions, certificate tls.Certificate) (*liveService
 	}
 	configuration.SetAlternateIdentifier("Helianthus-EnergyManagementSystem-RawProbe")
 	configuration.SetAlternateMdnsServiceName(liveServiceName)
-	configuration.SetInterfaces([]string{loopback})
-	configuration.SetMdnsProviderSelection(shipmdns.MdnsProviderSelectionGoZeroConfOnly)
 
 	handler.service = service.NewService(configuration, handler)
 	if err := handler.service.Setup(); err != nil {
 		return nil, err
 	}
 	localService := handler.service.LocalService()
-	discovery := shipmdns.NewMDNS(
-		localService.SKI(),
-		configuration.DeviceBrand(),
-		configuration.DeviceModel(),
-		string(configuration.DeviceType()),
-		configuration.Identifier(),
-		configuration.MdnsServiceName(),
-		configuration.Port(),
-		configuration.Interfaces(),
-		configuration.MdnsProviderSelection(),
-	)
+	discovery := &disabledInternalMDNS{}
 	hubReader := &liveHubReader{delegate: handler.service, handler: handler}
 	connectionHub := shiphub.NewHub(hubReader, discovery, configuration.Port(), certificate, localService)
 	handler.hub = connectionHub
@@ -391,6 +374,15 @@ func newLiveService(opts liveOptions, certificate tls.Certificate) (*liveService
 	}
 	return handler, nil
 }
+
+type disabledInternalMDNS struct{}
+
+func (*disabledInternalMDNS) Start(shipapi.MdnsReportInterface) error { return nil }
+func (*disabledInternalMDNS) Shutdown()                               {}
+func (*disabledInternalMDNS) AnnounceMdnsEntry() error                { return nil }
+func (*disabledInternalMDNS) UnannounceMdnsEntry()                    {}
+func (*disabledInternalMDNS) SetAutoAccept(bool)                      {}
+func (*disabledInternalMDNS) RequestMdnsEntries()                     {}
 
 func (h *liveServiceHandler) approveExpectedRemote() error {
 	if h == nil || h.service == nil || h.hub == nil || !validSKI(h.expectedSKI) {
@@ -1077,7 +1069,7 @@ func buildLiveGateEvidence(opts liveOptions, binding liveRunBinding, proof opera
 			LocalIdentityState:     "disposable-in-memory",
 			ExpectedRemoteApproved: true,
 			AutoAcceptEnabled:      false,
-			DiscoveryIsolation:     "loopback",
+			DiscoveryIsolation:     "internal-mdns-disabled",
 			OperatorWindow:         window,
 		},
 		OperatorLiveProof: operatorLiveProof{
