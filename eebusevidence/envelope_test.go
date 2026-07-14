@@ -390,6 +390,215 @@ func TestInvalidObjectsAreRejected(t *testing.T) {
 	}
 }
 
+func TestEnvelopeV1HashExcludesCaptureMetadata(t *testing.T) {
+	ref := testReferenceV1(t)
+	dataTime := time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC)
+	object := NewObjectV1(ObjectKindIdentity, DigestBytes([]byte("stable-payload")), 14, dataTime)
+	first := NewEnvelopeV1(ref, dataTime, dataTime, []ObjectV1{object})
+	second := NewEnvelopeV1(ref, dataTime.Add(10*time.Minute), dataTime, []ObjectV1{object})
+
+	firstHash, err := first.ComputeDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHash, err := second.ComputeDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstHash != secondHash {
+		t.Fatalf("stable hash included captured_at: %s != %s", firstHash, secondHash)
+	}
+	sealed, err := first.WithDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recomputed, err := sealed.ComputeDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recomputed != firstHash {
+		t.Fatalf("stable hash included data_hash: %s != %s", recomputed, firstHash)
+	}
+}
+
+func TestEnvelopeV1WithDataHashCopiesNestedUnknowns(t *testing.T) {
+	ref := testReferenceV1(t)
+	dataTime := time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC)
+	object := NewObjectV1(ObjectKindUnknown, DigestBytes([]byte("stable-payload")), 14, dataTime)
+	object.Unknown = []eebusraw.UnknownField{{
+		Path:  eebusraw.UnknownPathDocument,
+		Value: eebusraw.OpaqueBytes([]byte("stable-unknown")),
+	}}
+	envelope := NewEnvelopeV1(ref, dataTime, dataTime, []ObjectV1{object})
+	sealed, err := envelope.WithDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.Objects[0].Unknown[0] = eebusraw.UnknownField{
+		Path:  eebusraw.UnknownPathRemote,
+		Value: eebusraw.OpaqueBytes([]byte("mutated")),
+	}
+	if sealed.Objects[0].Unknown[0].Path != eebusraw.UnknownPathDocument {
+		t.Fatal("WithDataHash retained source envelope nested storage")
+	}
+	if err := sealed.Validate(); err != nil {
+		t.Fatalf("sealed envelope changed after source mutation: %v", err)
+	}
+}
+
+func TestEnvelopeContractVersionsRemainIsolated(t *testing.T) {
+	alpha := testReference(t)
+	alpha.Contract = EnvelopeContractV1
+	if err := alpha.Validate(); err == nil {
+		t.Fatal("v1alpha1 reference accepted stable v1 contract")
+	}
+	stable := testReferenceV1(t)
+	stable.Contract = EnvelopeContractV1Alpha1
+	if err := stable.Validate(); err == nil {
+		t.Fatal("stable v1 reference accepted v1alpha1 contract")
+	}
+}
+
+func TestEnvelopeV1ValidationAndFormattingDoNotLeak(t *testing.T) {
+	raw := "raw-secret-v1-label"
+	ref := testReferenceV1(t)
+	ref.CaptureProvenance = CaptureProvenanceV1(raw)
+	err := ref.Validate()
+	if err == nil {
+		t.Fatal("Validate() succeeded for caller-controlled stable capture provenance")
+	}
+	combined := err.Error() + "\n" + fmt.Sprint(ref) + "\n" + fmt.Sprintf("%+v %#v", ref, ref)
+	if strings.Contains(combined, raw) {
+		t.Fatalf("stable reference validation or formatting leaked raw input: %s", combined)
+	}
+}
+
+func TestReferenceV1BindsStableRawCaptureFields(t *testing.T) {
+	ref := testReferenceV1(t)
+	if err := ref.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	changed := ref
+	changed.Scope = RawSnapshotScopeServices
+	if ref.Matches(changed) {
+		t.Fatal("reference matched after raw snapshot scope changed")
+	}
+
+	changed = ref
+	changed.CaptureProvenance = CaptureProvenanceV1("final-tool-name")
+	if err := changed.Validate(); err == nil {
+		t.Fatal("Validate() accepted caller-controlled capture provenance")
+	}
+
+	changed = ref
+	changed.AuthScope = AuthScope("raw-secret-auth-scope")
+	if err := changed.Validate(); err == nil {
+		t.Fatal("Validate() accepted caller-controlled effective auth scope")
+	}
+
+	payload, err := json.Marshal(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), `"tool"`) || strings.Contains(string(payload), "eebus.v1.") {
+		t.Fatalf("stable reference JSON leaked final MCP identity: %s", payload)
+	}
+	for _, required := range []string{`"capture_provenance":"runtime-observation"`, `"scope":"raw-root"`, `"auth_scope":"eebus.raw.read"`} {
+		if !strings.Contains(string(payload), required) {
+			t.Fatalf("stable reference JSON omitted %s: %s", required, payload)
+		}
+	}
+}
+
+func TestStableV1DigestValidationRequiresLowercaseHex(t *testing.T) {
+	dataTime := time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC)
+	valid := DigestBytes([]byte("stable-payload"))
+	uppercase := uppercaseDigest(valid)
+	nonHex := "sha256:" + strings.Repeat("g", 64)
+
+	for _, digest := range []string{uppercase, nonHex} {
+		ref := testReferenceV1(t)
+		ref.Runtime.Digest = digest
+		if err := ref.Validate(); err == nil {
+			t.Fatalf("ReferenceV1 accepted malformed runtime digest %q", digest)
+		}
+
+		object := NewObjectV1(ObjectKindIdentity, digest, 1, dataTime)
+		if err := object.Validate(); err == nil {
+			t.Fatalf("ObjectV1 accepted malformed object digest %q", digest)
+		}
+
+		object = NewObjectV1(ObjectKindUnknown, valid, 1, dataTime)
+		object.Unknown = []eebusraw.UnknownField{{
+			Path:  eebusraw.UnknownPathDocument,
+			Value: eebusraw.OpaqueValue{Masked: "[redacted]", Digest: digest},
+		}}
+		if err := object.Validate(); err == nil {
+			t.Fatalf("ObjectV1 accepted malformed unknown digest %q", digest)
+		}
+
+		envelope := NewEnvelopeV1(testReferenceV1(t), dataTime, dataTime, []ObjectV1{
+			NewObjectV1(ObjectKindIdentity, valid, 1, dataTime),
+		})
+		envelope.DataHash = digest
+		if err := envelope.Validate(); err == nil {
+			t.Fatalf("EnvelopeV1 accepted malformed data_hash %q", digest)
+		}
+	}
+}
+
+func TestEnvelopeV1RejectsForgedDataHash(t *testing.T) {
+	dataTime := time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC)
+	object := NewObjectV1(ObjectKindIdentity, DigestBytes([]byte("stable-payload")), 14, dataTime)
+	envelope, err := NewEnvelopeV1(testReferenceV1(t), dataTime, dataTime, []ObjectV1{object}).WithDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.Reference.Scope = RawSnapshotScopeServices
+	if err := envelope.Validate(); err == nil {
+		t.Fatal("Validate() accepted forged stable data_hash after reference mutation")
+	}
+	if _, err := json.Marshal(envelope); err == nil {
+		t.Fatal("json.Marshal accepted forged stable data_hash after reference mutation")
+	}
+	recomputed, err := envelope.ComputeDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recomputed == envelope.DataHash {
+		t.Fatal("ComputeDataHash returned forged stable data_hash")
+	}
+}
+
+func TestStableV1RejectsUnrepresentableTimestamps(t *testing.T) {
+	validTime := time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC)
+	invalidTime := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	object := NewObjectV1(ObjectKindIdentity, DigestBytes([]byte("stable-payload")), 14, invalidTime)
+	if err := object.Validate(); err == nil {
+		t.Fatal("ObjectV1 accepted timestamp outside RFC3339 JSON range")
+	}
+	if _, err := json.Marshal(object); err == nil {
+		t.Fatal("json.Marshal accepted ObjectV1 timestamp outside RFC3339 JSON range")
+	}
+
+	validObject := NewObjectV1(ObjectKindIdentity, DigestBytes([]byte("stable-payload")), 14, validTime)
+	for _, envelope := range []EnvelopeV1{
+		NewEnvelopeV1(testReferenceV1(t), invalidTime, validTime, []ObjectV1{validObject}),
+		NewEnvelopeV1(testReferenceV1(t), validTime, invalidTime, []ObjectV1{validObject}),
+	} {
+		if err := envelope.Validate(); err == nil {
+			t.Fatal("EnvelopeV1 accepted timestamp outside RFC3339 JSON range")
+		}
+		if _, err := envelope.ComputeDataHash(); err == nil {
+			t.Fatal("ComputeDataHash accepted timestamp outside RFC3339 JSON range")
+		}
+		if _, err := json.Marshal(envelope); err == nil {
+			t.Fatal("json.Marshal accepted EnvelopeV1 timestamp outside RFC3339 JSON range")
+		}
+	}
+}
+
 func testReference(t *testing.T) Reference {
 	t.Helper()
 	runtimeID, err := eebusraw.RedactID(eebusraw.IDKindLocalSKI, "runtime-secret")
@@ -397,6 +606,15 @@ func testReference(t *testing.T) Reference {
 		t.Fatal(err)
 	}
 	return NewReference(runtimeID, ToolCapture, ScopeWholeRoot, AuthScopeReadRaw)
+}
+
+func testReferenceV1(t *testing.T) ReferenceV1 {
+	t.Helper()
+	runtimeID, err := eebusraw.RedactID(eebusraw.IDKindLocalSKI, "runtime-secret-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewReferenceV1(runtimeID, CaptureProvenanceRuntimeObservation, RawSnapshotScopeRoot, AuthScopeReadRaw)
 }
 
 func uppercaseDigest(digest string) string {

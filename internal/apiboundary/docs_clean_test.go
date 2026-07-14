@@ -36,7 +36,9 @@ type Envelope struct{ ID string }
 
 func Observe(id string) Envelope { return Envelope{ID: id} }
 
-const StateReady = "ready"
+const StateObserved = "observed"
+
+const ToolID = "eebus.v1.snapshot.capture"
 `)
 		output, err := runTool(t, tool, root)
 		if err != nil {
@@ -243,7 +245,6 @@ type Envelope struct{}
 		{name: "registry", exported: "RegistryEnvelope", fragment: "Registry"},
 		{name: "semantic", exported: "SemanticZone", fragment: "Semantic"},
 		{name: "graphql", exported: "GraphQLResolver", fragment: "GraphQL"},
-		{name: "snapshot", exported: "SnapshotID", fragment: "Snapshot"},
 		{name: "trust store", exported: "TrustStoreRecord", fragment: "TrustStore"},
 	}
 	for _, test := range forbiddenExports {
@@ -254,12 +255,192 @@ type Envelope struct{}
 		})
 	}
 
+	t.Run("forbidden direct enbility type", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeFile(t, root, "eebusraw/forbidden.go", `package eebusraw
+
+import shipapi "github.com/enbility/ship-go/api"
+
+type ExternalConnection = shipapi.ShipConnectionDataReaderInterface
+`)
+		expectRejected(t, tool, root, "enbility", "internal")
+	})
+
+	t.Run("forbidden internal facade type", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeFile(t, root, "internal/facade/value.go", "package facade\n\ntype Value struct{}\n")
+		writeFile(t, root, "eebusraw/forbidden.go", `package eebusraw
+
+import "example.test/registry/internal/facade"
+
+type FacadeValue = facade.Value
+`)
+		expectRejected(t, tool, root, "internal implementation")
+	})
+
+	t.Run("forbidden eBUS runtime identifier", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeFile(t, root, "eebusraw/forbidden.go", "package eebusraw\n\nconst ToolID = \"ebus.v1.snapshot.capture\"\n")
+		expectRejected(t, tool, root, "eBUS runtime identifier")
+	})
+
 	unexpectedPackages := []string{"semantic", "registry", "helpers", "codec"}
 	for _, packageName := range unexpectedPackages {
 		t.Run("unexpected public package/"+packageName, func(t *testing.T) {
 			root := newSyntheticRepository(t)
 			writeFile(t, root, packageName+"/api.go", "package "+packageName+"\n")
 			expectRejected(t, tool, root, "public package", packageName)
+		})
+	}
+}
+
+func TestStableContractASTManifest(t *testing.T) {
+	tool := buildAPIBoundary(t)
+
+	t.Run("canonical module rejects both stable roots removed", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeFile(t, root, "go.mod", "module github.com/Project-Helianthus/helianthus-eebusreg\n\ngo 1.22.0\n")
+		writeFile(t, root, "eebusevidence/doc.go", "// Package eebusevidence defines raw eeBUS evidence contracts.\npackage eebusevidence\n")
+		expectRejected(t, tool, root, "IdentityDocumentV1", "EnvelopeV1", "missing")
+	})
+
+	t.Run("stable closure accepts alpha declarations without adopting them", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeStableContractFixture(t, root, stableRawFixture(), stableEvidenceFixture())
+		artifactPath := filepath.Join(t.TempDir(), "stable-contract.json")
+		output, err := runTool(t, tool, root, "-manifest", artifactPath)
+		if err != nil {
+			t.Fatalf("exact stable contract fixture was rejected: %v\n%s", err, output)
+		}
+		var manifest apiManifest
+		if err := json.Unmarshal(readArtifact(t, artifactPath), &manifest); err != nil {
+			t.Fatal(err)
+		}
+		if len(manifest.StableContracts) != 2 {
+			t.Fatalf("stable contract package count = %d, want 2", len(manifest.StableContracts))
+		}
+		stablePayload, err := json.Marshal(manifest.StableContracts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, forbidden := range []string{"PairingObservation", "SessionState", "ToolID", "ScopePairingStatus", "eebus.v1."} {
+			if bytes.Contains(stablePayload, []byte(forbidden)) {
+				t.Fatalf("stable type closure adopted alpha/final authority %q: %s", forbidden, stablePayload)
+			}
+		}
+		for _, required := range []string{"EndpointRoleV1", "EndpointIdentityV1", "SessionIdentityV1", "CaptureProvenanceV1", "RawSnapshotScopeV1", "capture_provenance"} {
+			if !bytes.Contains(stablePayload, []byte(required)) {
+				t.Fatalf("stable type closure omitted %q: %s", required, stablePayload)
+			}
+		}
+	})
+
+	t.Run("unexported typed stable enum helper is ignored", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		rawSource := strings.Replace(
+			stableRawFixture(),
+			"\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"\n)",
+			"\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"\n\tendpointRoleV1Private EndpointRoleV1 = \"private\"\n)",
+			1,
+		)
+		writeStableContractFixture(t, root, rawSource, stableEvidenceFixture())
+		if output, err := runTool(t, tool, root); err != nil {
+			t.Fatalf("private stable enum helper was rejected: %v\n%s", err, output)
+		}
+	})
+
+	tests := []struct {
+		name           string
+		mutateRaw      func(string) string
+		mutateEvidence func(string) string
+		want           []string
+	}{
+		{
+			name: "endpoint pairing field",
+			mutateRaw: func(source string) string {
+				return strings.Replace(source, "\tUnknown []UnknownField `json:\"unknown,omitempty\"`\n}\n\ntype SessionIdentityV1", "\tPairing PairingObservation `json:\"pairing,omitempty\"`\n\tUnknown []UnknownField `json:\"unknown,omitempty\"`\n}\n\ntype SessionIdentityV1", 1)
+			},
+			want: []string{"EndpointIdentityV1", "exact field/type/tag manifest"},
+		},
+		{
+			name: "session lifecycle state field",
+			mutateRaw: func(source string) string {
+				return strings.Replace(source, "\tRemoteID RedactedID `json:\"remote_id\"`\n\tUnknown", "\tRemoteID RedactedID `json:\"remote_id\"`\n\tState SessionState `json:\"state\"`\n\tUnknown", 1)
+			},
+			want: []string{"SessionIdentityV1", "exact field/type/tag manifest"},
+		},
+		{
+			name: "final MCP tool and scope types",
+			mutateEvidence: func(source string) string {
+				source = strings.Replace(source, "\tCaptureProvenance CaptureProvenanceV1 `json:\"capture_provenance\"`", "\tTool ToolID `json:\"tool\"`", 1)
+				return strings.Replace(source, "\tScope RawSnapshotScopeV1 `json:\"scope\"`", "\tScope Scope `json:\"scope\"`", 1)
+			},
+			want: []string{"ReferenceV1", "exact field/type/tag manifest"},
+		},
+		{
+			name: "stable JSON tag drift",
+			mutateEvidence: func(source string) string {
+				return strings.Replace(source, "`json:\"capture_provenance\"`", "`json:\"tool\"`", 1)
+			},
+			want: []string{"ReferenceV1", "exact field/type/tag manifest"},
+		},
+		{
+			name: "pairing scope enum value",
+			mutateEvidence: func(source string) string {
+				return strings.Replace(source, "\tRawSnapshotScopeUnknown RawSnapshotScopeV1 = \"raw-unknown\"", "\tRawSnapshotScopeUnknown RawSnapshotScopeV1 = \"raw-unknown\"\n\tRawSnapshotScopePairing RawSnapshotScopeV1 = \"pairing-status\"", 1)
+			},
+			want: []string{"stable enum", "unexpected value", "RawSnapshotScopePairing"},
+		},
+		{
+			name: "stable enum conversion bypass",
+			mutateRaw: func(source string) string {
+				return strings.Replace(source, "\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"", "\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"\n\tEndpointRoleV1Converted EndpointRoleV1 = EndpointRoleV1(\"converted\")", 1)
+			},
+			want: []string{"stable enum", "unexpected value", "EndpointRoleV1Converted"},
+		},
+		{
+			name: "stable enum concatenation bypass",
+			mutateRaw: func(source string) string {
+				return strings.Replace(source, "\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"", "\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"\n\tEndpointRoleV1Concatenated EndpointRoleV1 = \"con\" + \"catenated\"", 1)
+			},
+			want: []string{"stable enum", "unexpected value", "EndpointRoleV1Concatenated"},
+		},
+		{
+			name: "stable enum inherited declaration bypass",
+			mutateRaw: func(source string) string {
+				return strings.Replace(source, "\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"", "\tEndpointRoleV1Remote EndpointRoleV1 = \"remote\"\n\tEndpointRoleV1Inherited", 1)
+			},
+			want: []string{"stable enum", "unexpected value", "EndpointRoleV1Inherited"},
+		},
+		{
+			name: "transitive trust authority field",
+			mutateRaw: func(source string) string {
+				return strings.Replace(source, "\tDigest string `json:\"digest,omitempty\"`\n}\n\ntype UnknownPath", "\tDigest string `json:\"digest,omitempty\"`\n\tTrustAuthority string `json:\"trust_authority,omitempty\"`\n}\n\ntype UnknownPath", 1)
+			},
+			want: []string{"RedactedID", "exact field/type/tag manifest"},
+		},
+		{
+			name: "unexpected stable type",
+			mutateRaw: func(source string) string {
+				return source + "\ntype PairingAuthorityV1 struct{}\n"
+			},
+			want: []string{"unexpected stable contract type", "PairingAuthorityV1"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := newSyntheticRepository(t)
+			rawSource := stableRawFixture()
+			evidenceSource := stableEvidenceFixture()
+			if test.mutateRaw != nil {
+				rawSource = test.mutateRaw(rawSource)
+			}
+			if test.mutateEvidence != nil {
+				evidenceSource = test.mutateEvidence(evidenceSource)
+			}
+			writeStableContractFixture(t, root, rawSource, evidenceSource)
+			expectRejected(t, tool, root, test.want...)
 		})
 	}
 }
@@ -273,7 +454,7 @@ type Envelope struct{ ID string }
 
 func Observe(id string) Envelope { return Envelope{ID: id} }
 
-const StateReady = "ready"
+const StateObserved = "observed"
 `)
 	runGit(t, root, nil, "add", "--", "eebusraw/api.go")
 
@@ -290,7 +471,7 @@ const StateReady = "ready"
 
 	writeFile(t, root, "eebusraw/api.go", `package eebusraw
 
-const StateReady = "ready"
+const StateObserved = "observed"
 
 func Observe(id string) Envelope { return Envelope{ID: id} }
 
@@ -362,10 +543,11 @@ func TestDocsCleanAPIBoundaryRejectsUnsafeManifestDestinations(t *testing.T) {
 }
 
 type apiManifest struct {
-	Schema   string            `json:"schema"`
-	Version  int               `json:"version"`
-	Module   string            `json:"module"`
-	Packages []manifestPackage `json:"packages"`
+	Schema          string                   `json:"schema"`
+	Version         int                      `json:"version"`
+	Module          string                   `json:"module"`
+	Packages        []manifestPackage        `json:"packages"`
+	StableContracts []manifestStableContract `json:"stable_contracts"`
 }
 
 type manifestPackage struct {
@@ -377,6 +559,34 @@ type manifestPackage struct {
 type manifestExport struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
+}
+
+type manifestStableContract struct {
+	Enums      []manifestStableEnum `json:"enums"`
+	ImportPath string               `json:"import_path"`
+	Types      []manifestStableType `json:"types"`
+}
+
+type manifestStableEnum struct {
+	Type   string                    `json:"type"`
+	Values []manifestStableEnumValue `json:"values"`
+}
+
+type manifestStableEnumValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type manifestStableType struct {
+	Fields     []manifestStableField `json:"fields,omitempty"`
+	Name       string                `json:"name"`
+	Underlying string                `json:"underlying"`
+}
+
+type manifestStableField struct {
+	JSONTag string `json:"json_tag"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
 }
 
 func assertCanonicalManifest(t *testing.T, data []byte, fixtureRoot string) {
@@ -421,10 +631,204 @@ func assertCanonicalManifest(t *testing.T, data []byte, fixtureRoot string) {
 		}
 		return got[i].Name < got[j].Name
 	})
-	want := []manifestExport{{Kind: "const", Name: "StateReady"}, {Kind: "func", Name: "Observe"}, {Kind: "type", Name: "Envelope"}}
+	want := []manifestExport{{Kind: "const", Name: "StateObserved"}, {Kind: "func", Name: "Observe"}, {Kind: "type", Name: "Envelope"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected exported API entries: got %#v want %#v", got, want)
 	}
+}
+
+func writeStableContractFixture(t *testing.T, root, rawSource, evidenceSource string) {
+	t.Helper()
+	writeFile(t, root, "eebusraw/stable.go", rawSource)
+	writeFile(t, root, "eebusevidence/stable.go", evidenceSource)
+}
+
+func stableRawFixture() string {
+	return `package eebusraw
+
+import "time"
+
+type ContractVersion string
+
+const IdentityContractV1Alpha1 ContractVersion = "helianthus.eebus.raw.identity.v1alpha1"
+const IdentityContractV1 ContractVersion = "helianthus.eebus.raw.identity.v1"
+
+type MaskTier string
+
+const MaskTierRedacted MaskTier = "redacted"
+
+type EndpointRole string
+
+const (
+	EndpointRoleLocal EndpointRole = "local"
+	EndpointRoleRemote EndpointRole = "remote"
+)
+
+type EndpointRoleV1 string
+
+const (
+	EndpointRoleV1Local EndpointRoleV1 = "local"
+	EndpointRoleV1Remote EndpointRoleV1 = "remote"
+)
+
+type IDKind string
+
+const (
+	IDKindLocalSKI IDKind = "local-ski"
+	IDKindRemoteSKI IDKind = "remote-ski"
+	IDKindCertificateFingerprint IDKind = "certificate-fingerprint"
+	IDKindPeer IDKind = "peer"
+	IDKindSession IDKind = "session"
+)
+
+type RedactedID struct {
+	Kind IDKind ` + "`json:\"kind\"`" + `
+	Masked string ` + "`json:\"masked\"`" + `
+	Digest string ` + "`json:\"digest,omitempty\"`" + `
+}
+
+type UnknownPath string
+
+const (
+	UnknownPathDocument UnknownPath = "/document/unknown"
+	UnknownPathDevice UnknownPath = "/device/unknown"
+	UnknownPathLocal UnknownPath = "/local/unknown"
+	UnknownPathRemote UnknownPath = "/remote/unknown"
+	UnknownPathSession UnknownPath = "/session/unknown"
+)
+
+type UnknownField struct {
+	Path UnknownPath ` + "`json:\"path\"`" + `
+	Value OpaqueValue ` + "`json:\"value\"`" + `
+}
+
+type OpaqueValue struct {
+	Masked string ` + "`json:\"masked\"`" + `
+	Digest string ` + "`json:\"digest,omitempty\"`" + `
+	Size int ` + "`json:\"size,omitempty\"`" + `
+}
+
+type PairingObservation struct {
+	State string ` + "`json:\"state,omitempty\"`" + `
+}
+
+type SessionState string
+
+const SessionStateObserved SessionState = "observed"
+
+type EndpointIdentity struct {
+	Role EndpointRole ` + "`json:\"role\"`" + `
+	ID RedactedID ` + "`json:\"id\"`" + `
+	Pairing PairingObservation ` + "`json:\"pairing,omitempty\"`" + `
+}
+
+type SessionIdentity struct {
+	ID RedactedID ` + "`json:\"id\"`" + `
+	State SessionState ` + "`json:\"state\"`" + `
+}
+
+type EndpointIdentityV1 struct {
+	Role EndpointRoleV1 ` + "`json:\"role\"`" + `
+	ID RedactedID ` + "`json:\"id\"`" + `
+	Unknown []UnknownField ` + "`json:\"unknown,omitempty\"`" + `
+}
+
+type SessionIdentityV1 struct {
+	ID RedactedID ` + "`json:\"id\"`" + `
+	RemoteID RedactedID ` + "`json:\"remote_id\"`" + `
+	Unknown []UnknownField ` + "`json:\"unknown,omitempty\"`" + `
+}
+
+type IdentityDocumentV1 struct {
+	Contract ContractVersion ` + "`json:\"contract\"`" + `
+	MaskTier MaskTier ` + "`json:\"mask_tier\"`" + `
+	CapturedAt time.Time ` + "`json:\"captured_at\"`" + `
+	Local EndpointIdentityV1 ` + "`json:\"local\"`" + `
+	Remotes []EndpointIdentityV1 ` + "`json:\"remotes,omitempty\"`" + `
+	Sessions []SessionIdentityV1 ` + "`json:\"sessions,omitempty\"`" + `
+	Unknown []UnknownField ` + "`json:\"unknown,omitempty\"`" + `
+}
+`
+}
+
+func stableEvidenceFixture() string {
+	return `package eebusevidence
+
+import (
+	"time"
+
+	"example.test/registry/eebusraw"
+)
+
+type ContractVersion string
+
+const (
+	EnvelopeContractV1Alpha1 ContractVersion = "helianthus.eebus.raw.evidence-envelope.v1alpha1"
+	EnvelopeContractV1 ContractVersion = "helianthus.eebus.raw.evidence-envelope.v1"
+)
+
+type ToolID string
+
+const ToolCapture ToolID = "eebus.v1.snapshot.capture"
+
+type Scope string
+
+const ScopePairingStatus Scope = "pairing-status"
+
+type AuthScope string
+
+const AuthScopeReadRaw AuthScope = "eebus.raw.read"
+
+type ObjectKind string
+
+const (
+	ObjectKindIdentity ObjectKind = "identity"
+	ObjectKindTopology ObjectKind = "topology"
+	ObjectKindService ObjectKind = "service"
+	ObjectKindSession ObjectKind = "session"
+	ObjectKindUnknown ObjectKind = "unknown"
+)
+
+type CaptureProvenanceV1 string
+
+const CaptureProvenanceRuntimeObservation CaptureProvenanceV1 = "runtime-observation"
+
+type RawSnapshotScopeV1 string
+
+const (
+	RawSnapshotScopeRoot RawSnapshotScopeV1 = "raw-root"
+	RawSnapshotScopeIdentity RawSnapshotScopeV1 = "raw-identity"
+	RawSnapshotScopeTopology RawSnapshotScopeV1 = "raw-topology"
+	RawSnapshotScopeServices RawSnapshotScopeV1 = "raw-services"
+	RawSnapshotScopeSessions RawSnapshotScopeV1 = "raw-sessions"
+	RawSnapshotScopeUnknown RawSnapshotScopeV1 = "raw-unknown"
+)
+
+type ReferenceV1 struct {
+	Runtime eebusraw.RedactedID ` + "`json:\"runtime\"`" + `
+	Contract ContractVersion ` + "`json:\"contract\"`" + `
+	CaptureProvenance CaptureProvenanceV1 ` + "`json:\"capture_provenance\"`" + `
+	Scope RawSnapshotScopeV1 ` + "`json:\"scope\"`" + `
+	MaskTier eebusraw.MaskTier ` + "`json:\"mask_tier\"`" + `
+	AuthScope AuthScope ` + "`json:\"auth_scope\"`" + `
+}
+
+type ObjectV1 struct {
+	Kind ObjectKind ` + "`json:\"kind\"`" + `
+	Digest string ` + "`json:\"digest\"`" + `
+	Size int ` + "`json:\"size\"`" + `
+	DataTimestamp time.Time ` + "`json:\"data_timestamp\"`" + `
+	Unknown []eebusraw.UnknownField ` + "`json:\"unknown,omitempty\"`" + `
+}
+
+type EnvelopeV1 struct {
+	Reference ReferenceV1 ` + "`json:\"ref\"`" + `
+	CapturedAt time.Time ` + "`json:\"captured_at\"`" + `
+	DataTimestamp time.Time ` + "`json:\"data_timestamp\"`" + `
+	Objects []ObjectV1 ` + "`json:\"objects,omitempty\"`" + `
+	DataHash string ` + "`json:\"data_hash,omitempty\"`" + `
+}
+`
 }
 
 func buildAPIBoundary(t *testing.T) string {

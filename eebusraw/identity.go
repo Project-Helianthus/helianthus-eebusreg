@@ -15,6 +15,8 @@ type ContractVersion string
 
 const IdentityContractV1Alpha1 ContractVersion = "helianthus.eebus.raw.identity.v1alpha1"
 
+const IdentityContractV1 ContractVersion = "helianthus.eebus.raw.identity.v1"
+
 type MaskTier string
 
 const (
