@@ -1,33 +1,113 @@
 package eebusevidence
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
 
-type ReferenceV1 struct {
-	Runtime   eebusraw.RedactedID `json:"runtime"`
-	Contract  ContractVersion     `json:"contract"`
-	Tool      ToolID              `json:"tool"`
-	Scope     Scope               `json:"scope"`
-	MaskTier  eebusraw.MaskTier   `json:"mask_tier"`
-	AuthScope AuthScope           `json:"auth_scope"`
+type CaptureProvenanceV1 string
+
+const (
+	CaptureProvenanceRuntimeObservation CaptureProvenanceV1 = "runtime-observation"
+)
+
+func (p CaptureProvenanceV1) Validate() error {
+	if p != CaptureProvenanceRuntimeObservation {
+		return errors.New("unsupported capture provenance")
+	}
+	return nil
 }
 
-func NewReferenceV1(runtime eebusraw.RedactedID, tool ToolID, scope Scope, authScope AuthScope) ReferenceV1 {
+func (p CaptureProvenanceV1) MarshalJSON() ([]byte, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	return json.Marshal(string(p))
+}
+
+func (p CaptureProvenanceV1) String() string {
+	if err := p.Validate(); err != nil {
+		return "invalid-capture-provenance"
+	}
+	return string(p)
+}
+
+func (p CaptureProvenanceV1) GoString() string {
+	return p.String()
+}
+
+func (p CaptureProvenanceV1) Format(s fmt.State, verb rune) {
+	io.WriteString(s, p.String())
+}
+
+type RawSnapshotScopeV1 string
+
+const (
+	RawSnapshotScopeRoot     RawSnapshotScopeV1 = "raw-root"
+	RawSnapshotScopeIdentity RawSnapshotScopeV1 = "raw-identity"
+	RawSnapshotScopeTopology RawSnapshotScopeV1 = "raw-topology"
+	RawSnapshotScopeServices RawSnapshotScopeV1 = "raw-services"
+	RawSnapshotScopeSessions RawSnapshotScopeV1 = "raw-sessions"
+	RawSnapshotScopeUnknown  RawSnapshotScopeV1 = "raw-unknown"
+)
+
+func (s RawSnapshotScopeV1) Validate() error {
+	switch s {
+	case RawSnapshotScopeRoot, RawSnapshotScopeIdentity, RawSnapshotScopeTopology, RawSnapshotScopeServices, RawSnapshotScopeSessions, RawSnapshotScopeUnknown:
+		return nil
+	default:
+		return errors.New("unsupported raw snapshot scope")
+	}
+}
+
+func (s RawSnapshotScopeV1) MarshalJSON() ([]byte, error) {
+	if err := s.Validate(); err != nil {
+		return nil, err
+	}
+	return json.Marshal(string(s))
+}
+
+func (s RawSnapshotScopeV1) String() string {
+	if err := s.Validate(); err != nil {
+		return "invalid-raw-snapshot-scope"
+	}
+	return string(s)
+}
+
+func (s RawSnapshotScopeV1) GoString() string {
+	return s.String()
+}
+
+func (s RawSnapshotScopeV1) Format(state fmt.State, verb rune) {
+	io.WriteString(state, s.String())
+}
+
+type ReferenceV1 struct {
+	Runtime           eebusraw.RedactedID `json:"runtime"`
+	Contract          ContractVersion     `json:"contract"`
+	CaptureProvenance CaptureProvenanceV1 `json:"capture_provenance"`
+	Scope             RawSnapshotScopeV1  `json:"scope"`
+	MaskTier          eebusraw.MaskTier   `json:"mask_tier"`
+	AuthScope         AuthScope           `json:"auth_scope"`
+}
+
+func NewReferenceV1(runtime eebusraw.RedactedID, provenance CaptureProvenanceV1, scope RawSnapshotScopeV1, authScope AuthScope) ReferenceV1 {
 	return ReferenceV1{
-		Runtime:   runtime,
-		Contract:  EnvelopeContractV1,
-		Tool:      tool,
-		Scope:     scope,
-		MaskTier:  eebusraw.MaskTierRedacted,
-		AuthScope: authScope,
+		Runtime:           runtime,
+		Contract:          EnvelopeContractV1,
+		CaptureProvenance: provenance,
+		Scope:             scope,
+		MaskTier:          eebusraw.MaskTierRedacted,
+		AuthScope:         authScope,
 	}
 }
 
@@ -44,8 +124,8 @@ func (r ReferenceV1) Validate() error {
 	if r.Contract != EnvelopeContractV1 {
 		return errors.New("contract: unsupported evidence contract")
 	}
-	if err := r.Tool.Validate(); err != nil {
-		return fmt.Errorf("tool: %w", err)
+	if err := r.CaptureProvenance.Validate(); err != nil {
+		return fmt.Errorf("capture provenance: %w", err)
 	}
 	if err := r.Scope.Validate(); err != nil {
 		return fmt.Errorf("scope: %w", err)
@@ -53,8 +133,8 @@ func (r ReferenceV1) Validate() error {
 	if r.MaskTier != eebusraw.MaskTierRedacted {
 		return errors.New("mask tier must be redacted")
 	}
-	if err := r.AuthScope.Validate(); err != nil {
-		return fmt.Errorf("auth scope: %w", err)
+	if r.AuthScope != AuthScopeReadRaw {
+		return errors.New("auth scope must bind effective raw-read authorization")
 	}
 	return nil
 }
@@ -70,7 +150,7 @@ func (r ReferenceV1) MarshalJSON() ([]byte, error) {
 func (r ReferenceV1) Matches(other ReferenceV1) bool {
 	return r.Runtime == other.Runtime &&
 		r.Contract == other.Contract &&
-		r.Tool == other.Tool &&
+		r.CaptureProvenance == other.CaptureProvenance &&
 		r.Scope == other.Scope &&
 		r.MaskTier == other.MaskTier &&
 		r.AuthScope == other.AuthScope
@@ -106,7 +186,27 @@ func NewObjectV1(kind ObjectKind, digest string, size int, dataTimestamp time.Ti
 }
 
 func (o ObjectV1) Validate() error {
-	return objectV1AsObject(o).Validate()
+	if err := o.Kind.Validate(); err != nil {
+		return fmt.Errorf("kind: %w", err)
+	}
+	if !validSHA256Digest(o.Digest) {
+		return errors.New("digest must use lowercase sha256:<64 hex chars>")
+	}
+	if o.Size < 0 {
+		return errors.New("size must not be negative")
+	}
+	if err := validateTimestampV1(o.DataTimestamp); err != nil {
+		return fmt.Errorf("data timestamp: %w", err)
+	}
+	for i, unknown := range o.Unknown {
+		if err := unknown.Validate(); err != nil {
+			return fmt.Errorf("unknown field %d: %w", i, err)
+		}
+		if unknown.Value.Digest != "" && !validSHA256Digest(unknown.Value.Digest) {
+			return fmt.Errorf("unknown field %d digest must use lowercase sha256:<64 hex chars>", i)
+		}
+	}
+	return nil
 }
 
 func (o ObjectV1) MarshalJSON() ([]byte, error) {
@@ -153,11 +253,11 @@ func (e EnvelopeV1) validate(checkDataHash bool) error {
 	if err := e.Reference.Validate(); err != nil {
 		return fmt.Errorf("ref: %w", err)
 	}
-	if e.CapturedAt.IsZero() {
-		return errors.New("captured_at is required")
+	if err := validateTimestampV1(e.CapturedAt); err != nil {
+		return fmt.Errorf("captured_at: %w", err)
 	}
-	if e.DataTimestamp.IsZero() {
-		return errors.New("data_timestamp is required")
+	if err := validateTimestampV1(e.DataTimestamp); err != nil {
+		return fmt.Errorf("data_timestamp: %w", err)
 	}
 	for i, object := range e.Objects {
 		if err := object.Validate(); err != nil {
@@ -165,7 +265,7 @@ func (e EnvelopeV1) validate(checkDataHash bool) error {
 		}
 	}
 	if e.DataHash != "" && !validSHA256Digest(e.DataHash) {
-		return errors.New("data_hash must use sha256:<64 hex chars>")
+		return errors.New("data_hash must use lowercase sha256:<64 hex chars>")
 	}
 	if checkDataHash && e.DataHash != "" {
 		expected := e.computeDataHash()
@@ -184,11 +284,8 @@ func (e EnvelopeV1) ComputeDataHash() (string, error) {
 }
 
 func (e EnvelopeV1) computeDataHash() string {
-	return Envelope{
-		Reference:     referenceV1AsReference(e.Reference),
-		DataTimestamp: e.DataTimestamp,
-		Objects:       objectsV1AsObjects(e.Objects),
-	}.computeDataHash()
+	sum := sha256.Sum256(canonicalHashPayloadV1(e))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func (e EnvelopeV1) WithDataHash() (EnvelopeV1, error) {
@@ -233,17 +330,6 @@ func (e EnvelopeV1) Format(s fmt.State, verb rune) {
 	io.WriteString(s, e.String())
 }
 
-func referenceV1AsReference(ref ReferenceV1) Reference {
-	return Reference{
-		Runtime:   ref.Runtime,
-		Contract:  ref.Contract,
-		Tool:      ref.Tool,
-		Scope:     ref.Scope,
-		MaskTier:  ref.MaskTier,
-		AuthScope: ref.AuthScope,
-	}
-}
-
 func objectV1AsObject(object ObjectV1) Object {
 	return Object{
 		Kind:          object.Kind,
@@ -252,14 +338,6 @@ func objectV1AsObject(object ObjectV1) Object {
 		DataTimestamp: object.DataTimestamp,
 		Unknown:       object.Unknown,
 	}
-}
-
-func objectsV1AsObjects(objects []ObjectV1) []Object {
-	converted := make([]Object, len(objects))
-	for i, object := range objects {
-		converted[i] = objectV1AsObject(object)
-	}
-	return converted
 }
 
 func sortedObjectsV1(objects []ObjectV1) []ObjectV1 {
@@ -294,4 +372,58 @@ func copyObjectsV1(objects []ObjectV1) []ObjectV1 {
 		copied[i].Unknown = sortedUnknownFields(object.Unknown)
 	}
 	return copied
+}
+
+func canonicalHashPayloadV1(e EnvelopeV1) []byte {
+	var b strings.Builder
+	b.WriteByte('{')
+	writeCanonicalFieldName(&b, "data_timestamp")
+	writeCanonicalString(&b, canonicalTime(e.DataTimestamp))
+	b.WriteByte(',')
+	writeCanonicalFieldName(&b, "objects")
+	b.WriteByte('[')
+	for i, object := range sortedObjectsV1(e.Objects) {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		writeCanonicalObject(&b, objectV1AsObject(object))
+	}
+	b.WriteByte(']')
+	b.WriteByte(',')
+	writeCanonicalFieldName(&b, "ref")
+	writeCanonicalReferenceV1(&b, e.Reference)
+	b.WriteByte('}')
+	return []byte(b.String())
+}
+
+func writeCanonicalReferenceV1(b *strings.Builder, ref ReferenceV1) {
+	b.WriteByte('{')
+	writeCanonicalFieldName(b, "auth_scope")
+	writeCanonicalString(b, ref.AuthScope.String())
+	b.WriteByte(',')
+	writeCanonicalFieldName(b, "capture_provenance")
+	writeCanonicalString(b, ref.CaptureProvenance.String())
+	b.WriteByte(',')
+	writeCanonicalFieldName(b, "contract")
+	writeCanonicalString(b, ref.Contract.String())
+	b.WriteByte(',')
+	writeCanonicalFieldName(b, "mask_tier")
+	writeCanonicalString(b, string(ref.MaskTier))
+	b.WriteByte(',')
+	writeCanonicalFieldName(b, "runtime")
+	writeCanonicalRedactedID(b, ref.Runtime)
+	b.WriteByte(',')
+	writeCanonicalFieldName(b, "scope")
+	writeCanonicalString(b, ref.Scope.String())
+	b.WriteByte('}')
+}
+
+func validateTimestampV1(value time.Time) error {
+	if value.IsZero() {
+		return errors.New("timestamp is required")
+	}
+	if _, err := value.UTC().MarshalJSON(); err != nil {
+		return errors.New("timestamp must marshal as RFC3339 JSON")
+	}
+	return nil
 }

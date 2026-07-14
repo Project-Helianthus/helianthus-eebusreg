@@ -1,6 +1,7 @@
 package eebusraw
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,17 +12,75 @@ import (
 	"time"
 )
 
-type IdentityDocumentV1 struct {
-	Contract   ContractVersion    `json:"contract"`
-	MaskTier   MaskTier           `json:"mask_tier"`
-	CapturedAt time.Time          `json:"captured_at"`
-	Local      EndpointIdentity   `json:"local"`
-	Remotes    []EndpointIdentity `json:"remotes,omitempty"`
-	Sessions   []SessionIdentity  `json:"sessions,omitempty"`
-	Unknown    []UnknownField     `json:"unknown,omitempty"`
+type EndpointIdentityV1 struct {
+	Role    EndpointRole   `json:"role"`
+	ID      RedactedID     `json:"id"`
+	Unknown []UnknownField `json:"unknown,omitempty"`
 }
 
-func NewIdentityDocumentV1(capturedAt time.Time, local EndpointIdentity) IdentityDocumentV1 {
+func (e EndpointIdentityV1) Validate() error {
+	if e.Role != EndpointRoleLocal && e.Role != EndpointRoleRemote {
+		return errors.New("endpoint role must be local or remote")
+	}
+	if err := validateRedactedIDV1(e.ID); err != nil {
+		return fmt.Errorf("endpoint id: %w", err)
+	}
+	for i, unknown := range e.Unknown {
+		if err := validateUnknownFieldV1(unknown); err != nil {
+			return fmt.Errorf("unknown field %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func (e EndpointIdentityV1) MarshalJSON() ([]byte, error) {
+	type alias EndpointIdentityV1
+	if err := e.Validate(); err != nil {
+		return nil, err
+	}
+	return json.Marshal(alias(e))
+}
+
+type SessionIdentityV1 struct {
+	ID       RedactedID     `json:"id"`
+	RemoteID RedactedID     `json:"remote_id"`
+	Unknown  []UnknownField `json:"unknown,omitempty"`
+}
+
+func (s SessionIdentityV1) Validate() error {
+	if err := validateRedactedIDV1(s.ID); err != nil {
+		return fmt.Errorf("session id: %w", err)
+	}
+	if err := validateRedactedIDV1(s.RemoteID); err != nil {
+		return fmt.Errorf("session remote_id: %w", err)
+	}
+	for i, unknown := range s.Unknown {
+		if err := validateUnknownFieldV1(unknown); err != nil {
+			return fmt.Errorf("unknown field %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func (s SessionIdentityV1) MarshalJSON() ([]byte, error) {
+	type alias SessionIdentityV1
+	if err := s.Validate(); err != nil {
+		return nil, err
+	}
+	return json.Marshal(alias(s))
+}
+
+type IdentityDocumentV1 struct {
+	Contract   ContractVersion      `json:"contract"`
+	MaskTier   MaskTier             `json:"mask_tier"`
+	CapturedAt time.Time            `json:"captured_at"`
+	Local      EndpointIdentityV1   `json:"local"`
+	Remotes    []EndpointIdentityV1 `json:"remotes,omitempty"`
+	Sessions   []SessionIdentityV1  `json:"sessions,omitempty"`
+	Unknown    []UnknownField       `json:"unknown,omitempty"`
+}
+
+func NewIdentityDocumentV1(capturedAt time.Time, local EndpointIdentityV1) IdentityDocumentV1 {
 	return IdentityDocumentV1{
 		Contract:   IdentityContractV1,
 		MaskTier:   MaskTierRedacted,
@@ -37,27 +96,39 @@ func (d IdentityDocumentV1) Validate() error {
 	if d.MaskTier != MaskTierRedacted {
 		return fmt.Errorf("identity mask tier must be %q", MaskTierRedacted)
 	}
-	if d.CapturedAt.IsZero() {
-		return errors.New("identity captured_at is required")
+	if err := validateTimestampV1(d.CapturedAt); err != nil {
+		return fmt.Errorf("identity captured_at: %w", err)
 	}
-	if err := validateEndpointIdentityV1(d.Local); err != nil {
+	if err := d.Local.Validate(); err != nil {
 		return fmt.Errorf("local identity: %w", err)
 	}
 	if d.Local.Role != EndpointRoleLocal {
 		return errors.New("local identity role must be local")
 	}
+	remoteKeys := make(map[string]int, len(d.Remotes))
 	for i, remote := range d.Remotes {
-		if err := validateEndpointIdentityV1(remote); err != nil {
+		if err := remote.Validate(); err != nil {
 			return fmt.Errorf("remote identity %d: %w", i, err)
 		}
 		if remote.Role != EndpointRoleRemote {
 			return fmt.Errorf("remote identity %d role must be remote", i)
 		}
+		key := identityKeyV1(remote.ID)
+		if prior, exists := remoteKeys[key]; exists {
+			return fmt.Errorf("remote identity %d duplicates identity key from remote identity %d", i, prior)
+		}
+		remoteKeys[key] = i
 	}
+	sessionKeys := make(map[string]int, len(d.Sessions))
 	for i, session := range d.Sessions {
-		if err := validateSessionIdentityV1(session); err != nil {
+		if err := session.Validate(); err != nil {
 			return fmt.Errorf("session identity %d: %w", i, err)
 		}
+		key := identityKeyV1(session.ID)
+		if prior, exists := sessionKeys[key]; exists {
+			return fmt.Errorf("session identity %d duplicates identity key from session identity %d", i, prior)
+		}
+		sessionKeys[key] = i
 	}
 	for i, unknown := range d.Unknown {
 		if err := validateUnknownFieldV1(unknown); err != nil {
@@ -71,14 +142,23 @@ func (d IdentityDocumentV1) MarshalJSON() ([]byte, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
 	}
+	type identityDocumentV1JSON struct {
+		Contract   ContractVersion      `json:"contract"`
+		MaskTier   MaskTier             `json:"mask_tier"`
+		CapturedAt time.Time            `json:"captured_at"`
+		Local      EndpointIdentityV1   `json:"local"`
+		Remotes    []EndpointIdentityV1 `json:"remotes,omitempty"`
+		Sessions   []SessionIdentityV1  `json:"sessions,omitempty"`
+		Unknown    []UnknownField       `json:"unknown,omitempty"`
+	}
 	return json.Marshal(identityDocumentV1JSON{
 		Contract:   d.Contract,
 		MaskTier:   d.MaskTier,
 		CapturedAt: d.CapturedAt.UTC(),
-		Local:      newEndpointIdentityV1JSON(canonicalEndpointIdentityV1(d.Local)),
-		Remotes:    endpointIdentitiesV1JSON(sortedEndpointIdentitiesV1(d.Remotes)),
-		Sessions:   sessionIdentitiesV1JSON(sortedSessionIdentitiesV1(d.Sessions)),
-		Unknown:    unknownFieldsV1JSON(sortedIdentityUnknownFieldsV1(d.Unknown)),
+		Local:      canonicalEndpointIdentityV1(d.Local),
+		Remotes:    sortedEndpointIdentitiesV1(d.Remotes),
+		Sessions:   sortedSessionIdentitiesV1(d.Sessions),
+		Unknown:    sortedIdentityUnknownFieldsV1(d.Unknown),
 	})
 }
 
@@ -94,48 +174,8 @@ func (d IdentityDocumentV1) Format(s fmt.State, verb rune) {
 	io.WriteString(s, d.String())
 }
 
-func validateEndpointIdentityV1(e EndpointIdentity) error {
-	if e.Role != EndpointRoleLocal && e.Role != EndpointRoleRemote {
-		return errors.New("endpoint role must be local or remote")
-	}
-	if err := e.ID.Validate(); err != nil {
-		return fmt.Errorf("endpoint id: %w", err)
-	}
-	switch e.Pairing.State {
-	case "", PairingStateUnknown, PairingStateUnpaired, PairingStatePaired, PairingStateDenied:
-	default:
-		return errors.New("pairing: unsupported pairing state")
-	}
-	for i, unknown := range e.Unknown {
-		if err := validateUnknownFieldV1(unknown); err != nil {
-			return fmt.Errorf("unknown field %d: %w", i, err)
-		}
-	}
-	return nil
-}
-
-func validateSessionIdentityV1(s SessionIdentity) error {
-	if err := s.ID.Validate(); err != nil {
-		return fmt.Errorf("session id: %w", err)
-	}
-	if err := s.RemoteID.Validate(); err != nil {
-		return fmt.Errorf("session remote_id: %w", err)
-	}
-	switch s.State {
-	case SessionStateUnknown, SessionStateObserved, SessionStateDisconnected, SessionStateDegraded:
-	default:
-		return errors.New("unsupported session state")
-	}
-	for i, unknown := range s.Unknown {
-		if err := validateUnknownFieldV1(unknown); err != nil {
-			return fmt.Errorf("unknown field %d: %w", i, err)
-		}
-	}
-	return nil
-}
-
-func sortedEndpointIdentitiesV1(identities []EndpointIdentity) []EndpointIdentity {
-	sorted := make([]EndpointIdentity, len(identities))
+func sortedEndpointIdentitiesV1(identities []EndpointIdentityV1) []EndpointIdentityV1 {
+	sorted := make([]EndpointIdentityV1, len(identities))
 	for i, identity := range identities {
 		sorted[i] = canonicalEndpointIdentityV1(identity)
 	}
@@ -145,34 +185,22 @@ func sortedEndpointIdentitiesV1(identities []EndpointIdentity) []EndpointIdentit
 	return sorted
 }
 
-func canonicalEndpointIdentityV1(identity EndpointIdentity) EndpointIdentity {
+func canonicalEndpointIdentityV1(identity EndpointIdentityV1) EndpointIdentityV1 {
 	identity.Unknown = sortedIdentityUnknownFieldsV1(identity.Unknown)
 	return identity
 }
 
-func copyEndpointIdentityV1(identity EndpointIdentity) EndpointIdentity {
+func copyEndpointIdentityV1(identity EndpointIdentityV1) EndpointIdentityV1 {
 	identity.Unknown = append([]UnknownField(nil), identity.Unknown...)
 	return identity
 }
 
-func endpointIdentitySortKeyV1(identity EndpointIdentity) string {
-	var b strings.Builder
-	b.WriteString(string(identity.Role))
-	b.WriteByte(0)
-	b.WriteString(string(identity.ID.Kind))
-	b.WriteByte(0)
-	b.WriteString(identity.ID.Masked)
-	b.WriteByte(0)
-	b.WriteString(identity.ID.Digest)
-	b.WriteByte(0)
-	b.WriteString(string(identity.Pairing.State))
-	b.WriteByte(0)
-	b.WriteString(identityUnknownFieldsSortKeyV1(identity.Unknown))
-	return b.String()
+func endpointIdentitySortKeyV1(identity EndpointIdentityV1) string {
+	return string(identity.Role) + "\x00" + identityKeyV1(identity.ID) + "\x00" + identityUnknownFieldsSortKeyV1(identity.Unknown)
 }
 
-func sortedSessionIdentitiesV1(sessions []SessionIdentity) []SessionIdentity {
-	sorted := make([]SessionIdentity, len(sessions))
+func sortedSessionIdentitiesV1(sessions []SessionIdentityV1) []SessionIdentityV1 {
+	sorted := make([]SessionIdentityV1, len(sessions))
 	for i, session := range sessions {
 		sorted[i] = session
 		sorted[i].Unknown = sortedIdentityUnknownFieldsV1(session.Unknown)
@@ -183,24 +211,12 @@ func sortedSessionIdentitiesV1(sessions []SessionIdentity) []SessionIdentity {
 	return sorted
 }
 
-func sessionIdentitySortKeyV1(session SessionIdentity) string {
-	var b strings.Builder
-	b.WriteString(string(session.ID.Kind))
-	b.WriteByte(0)
-	b.WriteString(session.ID.Masked)
-	b.WriteByte(0)
-	b.WriteString(session.ID.Digest)
-	b.WriteByte(0)
-	b.WriteString(string(session.RemoteID.Kind))
-	b.WriteByte(0)
-	b.WriteString(session.RemoteID.Masked)
-	b.WriteByte(0)
-	b.WriteString(session.RemoteID.Digest)
-	b.WriteByte(0)
-	b.WriteString(string(session.State))
-	b.WriteByte(0)
-	b.WriteString(identityUnknownFieldsSortKeyV1(session.Unknown))
-	return b.String()
+func sessionIdentitySortKeyV1(session SessionIdentityV1) string {
+	return identityKeyV1(session.ID) + "\x00" + identityKeyV1(session.RemoteID) + "\x00" + identityUnknownFieldsSortKeyV1(session.Unknown)
+}
+
+func identityKeyV1(id RedactedID) string {
+	return string(id.Kind) + "\x00" + id.Digest
 }
 
 func sortedIdentityUnknownFieldsV1(unknown []UnknownField) []UnknownField {
@@ -237,84 +253,17 @@ func identityUnknownFieldsSortKeyV1(unknown []UnknownField) string {
 	return b.String()
 }
 
-type identityDocumentV1JSON struct {
-	Contract   ContractVersion          `json:"contract"`
-	MaskTier   MaskTier                 `json:"mask_tier"`
-	CapturedAt time.Time                `json:"captured_at"`
-	Local      endpointIdentityV1JSON   `json:"local"`
-	Remotes    []endpointIdentityV1JSON `json:"remotes,omitempty"`
-	Sessions   []sessionIdentityV1JSON  `json:"sessions,omitempty"`
-	Unknown    []unknownFieldV1JSON     `json:"unknown,omitempty"`
-}
-
-type endpointIdentityV1JSON struct {
-	Role    EndpointRole         `json:"role"`
-	ID      RedactedID           `json:"id"`
-	Pairing PairingObservation   `json:"pairing,omitempty"`
-	Unknown []unknownFieldV1JSON `json:"unknown,omitempty"`
-}
-
-type sessionIdentityV1JSON struct {
-	ID       RedactedID           `json:"id"`
-	RemoteID RedactedID           `json:"remote_id"`
-	State    SessionState         `json:"state"`
-	Unknown  []unknownFieldV1JSON `json:"unknown,omitempty"`
-}
-
-type unknownFieldV1JSON struct {
-	Path  UnknownPath       `json:"path"`
-	Value opaqueValueV1JSON `json:"value"`
-}
-
-type opaqueValueV1JSON struct {
-	Masked string `json:"masked"`
-	Digest string `json:"digest,omitempty"`
-	Size   int    `json:"size,omitempty"`
-}
-
-func newEndpointIdentityV1JSON(identity EndpointIdentity) endpointIdentityV1JSON {
-	return endpointIdentityV1JSON{
-		Role:    identity.Role,
-		ID:      identity.ID,
-		Pairing: identity.Pairing,
-		Unknown: unknownFieldsV1JSON(identity.Unknown),
+func validateRedactedIDV1(id RedactedID) error {
+	if err := id.Validate(); err != nil {
+		return err
 	}
-}
-
-func endpointIdentitiesV1JSON(identities []EndpointIdentity) []endpointIdentityV1JSON {
-	converted := make([]endpointIdentityV1JSON, len(identities))
-	for i, identity := range identities {
-		converted[i] = newEndpointIdentityV1JSON(identity)
+	if id.Digest == "" {
+		return errors.New("id digest is required")
 	}
-	return converted
-}
-
-func sessionIdentitiesV1JSON(sessions []SessionIdentity) []sessionIdentityV1JSON {
-	converted := make([]sessionIdentityV1JSON, len(sessions))
-	for i, session := range sessions {
-		converted[i] = sessionIdentityV1JSON{
-			ID:       session.ID,
-			RemoteID: session.RemoteID,
-			State:    session.State,
-			Unknown:  unknownFieldsV1JSON(session.Unknown),
-		}
+	if !validIdentityDigestV1(id.Digest) {
+		return errors.New("id digest must use lowercase sha256:<64 hex chars>")
 	}
-	return converted
-}
-
-func unknownFieldsV1JSON(unknown []UnknownField) []unknownFieldV1JSON {
-	converted := make([]unknownFieldV1JSON, len(unknown))
-	for i, field := range unknown {
-		converted[i] = unknownFieldV1JSON{
-			Path: field.Path,
-			Value: opaqueValueV1JSON{
-				Masked: field.Value.Masked,
-				Digest: field.Value.Digest,
-				Size:   field.Value.Size,
-			},
-		}
-	}
-	return converted
+	return nil
 }
 
 func validateUnknownFieldV1(unknown UnknownField) error {
@@ -325,7 +274,7 @@ func validateUnknownFieldV1(unknown UnknownField) error {
 		return errors.New("unknown field value: opaque value must be redacted")
 	}
 	if unknown.Value.Digest != "" && !validIdentityDigestV1(unknown.Value.Digest) {
-		return errors.New("unknown field value: opaque digest must use lowercase sha256:<64 chars>")
+		return errors.New("unknown field value: opaque digest must use lowercase sha256:<64 hex chars>")
 	}
 	if unknown.Value.Size < 0 {
 		return errors.New("unknown field value: opaque size must not be negative")
@@ -334,13 +283,19 @@ func validateUnknownFieldV1(unknown UnknownField) error {
 }
 
 func validIdentityDigestV1(value string) bool {
-	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") || value != strings.ToLower(value) {
 		return false
 	}
-	for _, char := range strings.TrimPrefix(value, "sha256:") {
-		if (char < '0' || char > '9') && (char < 'a' || char > 'z') {
-			return false
-		}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
+	return err == nil
+}
+
+func validateTimestampV1(value time.Time) error {
+	if value.IsZero() {
+		return errors.New("timestamp is required")
 	}
-	return true
+	if _, err := value.UTC().MarshalJSON(); err != nil {
+		return errors.New("timestamp must marshal as RFC3339 JSON")
+	}
+	return nil
 }

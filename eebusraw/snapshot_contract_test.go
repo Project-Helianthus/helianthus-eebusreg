@@ -2,6 +2,8 @@ package eebusraw_test
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -11,7 +13,7 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
 
-const frozenEnvelopeV1ReplayHash = "sha256:82460ef52f64f4743e504059f9f54d2ba168764cb6aca6af9763228605357152"
+const frozenEnvelopeV1ReplayHash = "sha256:b909695a848d7f1817711d46730bb511f510c3ad7bc517f3ee03e517076144e1"
 
 var (
 	_ json.Marshaler = eebusraw.IdentityDocumentV1{}
@@ -28,8 +30,8 @@ func TestFrozenEnvelopeV1DeterministicReplay(t *testing.T) {
 			Masked: "[redacted]",
 			Digest: snapshotDigest("c"),
 		},
-		eebusevidence.ToolCapture,
-		eebusevidence.ScopeWholeRoot,
+		eebusevidence.CaptureProvenanceRuntimeObservation,
+		eebusevidence.RawSnapshotScopeRoot,
 		eebusevidence.AuthScopeReadRaw,
 	)
 	identity := eebusevidence.NewObjectV1(eebusevidence.ObjectKindIdentity, snapshotDigest("a"), 10, dataTime)
@@ -52,6 +54,11 @@ func TestFrozenEnvelopeV1DeterministicReplay(t *testing.T) {
 	}
 	if firstHash != secondHash {
 		t.Fatalf("data_hash changed with insertion order: %s != %s", firstHash, secondHash)
+	}
+	independentSum := sha256.Sum256([]byte(frozenEnvelopeV1CanonicalPayload()))
+	independentHash := "sha256:" + hex.EncodeToString(independentSum[:])
+	if frozenEnvelopeV1ReplayHash != independentHash {
+		t.Fatalf("frozen replay hash %s is not independently reproducible from payload: %s", frozenEnvelopeV1ReplayHash, independentHash)
 	}
 	if firstHash != frozenEnvelopeV1ReplayHash {
 		t.Fatalf("data_hash = %s, want frozen replay hash %s", firstHash, frozenEnvelopeV1ReplayHash)
@@ -94,21 +101,21 @@ func TestFrozenIdentityDocumentV1CanonicalOrder(t *testing.T) {
 	local := snapshotEndpoint(t, eebusraw.EndpointRoleLocal, eebusraw.IDKindLocalSKI, "a")
 	remoteA := snapshotEndpoint(t, eebusraw.EndpointRoleRemote, eebusraw.IDKindRemoteSKI, "b")
 	remoteB := snapshotEndpoint(t, eebusraw.EndpointRoleRemote, eebusraw.IDKindRemoteSKI, "c")
-	sessionA := snapshotSession(t, "d", remoteA.ID, eebusraw.SessionStateObserved)
-	sessionB := snapshotSession(t, "e", remoteB.ID, eebusraw.SessionStateDisconnected)
+	sessionA := snapshotSession(t, "d", remoteA.ID)
+	sessionB := snapshotSession(t, "e", remoteB.ID)
 
 	first := eebusraw.NewIdentityDocumentV1(capturedAt, local)
-	first.Remotes = []eebusraw.EndpointIdentity{remoteB, remoteA}
-	first.Sessions = []eebusraw.SessionIdentity{sessionB, sessionA}
+	first.Remotes = []eebusraw.EndpointIdentityV1{remoteB, remoteA}
+	first.Sessions = []eebusraw.SessionIdentityV1{sessionB, sessionA}
 	first.Unknown = []eebusraw.UnknownField{
 		snapshotUnknown(eebusraw.UnknownPathRemote, "f", 9),
-		snapshotUnknown(eebusraw.UnknownPathDocument, "g", 8),
+		snapshotUnknown(eebusraw.UnknownPathDocument, "1", 8),
 	}
 	second := eebusraw.NewIdentityDocumentV1(capturedAt, local)
-	second.Remotes = []eebusraw.EndpointIdentity{remoteA, remoteB}
-	second.Sessions = []eebusraw.SessionIdentity{sessionA, sessionB}
+	second.Remotes = []eebusraw.EndpointIdentityV1{remoteA, remoteB}
+	second.Sessions = []eebusraw.SessionIdentityV1{sessionA, sessionB}
 	second.Unknown = []eebusraw.UnknownField{
-		snapshotUnknown(eebusraw.UnknownPathDocument, "g", 8),
+		snapshotUnknown(eebusraw.UnknownPathDocument, "1", 8),
 		snapshotUnknown(eebusraw.UnknownPathRemote, "f", 9),
 	}
 
@@ -128,22 +135,22 @@ func TestFrozenIdentityDocumentV1CanonicalOrder(t *testing.T) {
 	}
 }
 
-func snapshotEndpoint(t *testing.T, role eebusraw.EndpointRole, kind eebusraw.IDKind, fill string) eebusraw.EndpointIdentity {
+func snapshotEndpoint(t *testing.T, role eebusraw.EndpointRole, kind eebusraw.IDKind, fill string) eebusraw.EndpointIdentityV1 {
 	t.Helper()
 	id, err := eebusraw.RedactID(kind, fill)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return eebusraw.EndpointIdentity{Role: role, ID: id}
+	return eebusraw.EndpointIdentityV1{Role: role, ID: id}
 }
 
-func snapshotSession(t *testing.T, fill string, remote eebusraw.RedactedID, state eebusraw.SessionState) eebusraw.SessionIdentity {
+func snapshotSession(t *testing.T, fill string, remote eebusraw.RedactedID) eebusraw.SessionIdentityV1 {
 	t.Helper()
 	id, err := eebusraw.RedactID(eebusraw.IDKindSession, fill)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return eebusraw.SessionIdentity{ID: id, RemoteID: remote, State: state}
+	return eebusraw.SessionIdentityV1{ID: id, RemoteID: remote}
 }
 
 func snapshotUnknown(path eebusraw.UnknownPath, fill string, size int) eebusraw.UnknownField {
@@ -159,4 +166,8 @@ func snapshotUnknown(path eebusraw.UnknownPath, fill string, size int) eebusraw.
 
 func snapshotDigest(fill string) string {
 	return "sha256:" + strings.Repeat(fill, 64)
+}
+
+func frozenEnvelopeV1CanonicalPayload() string {
+	return `{"data_timestamp":"2026-07-08T14:00:00Z","objects":[{"data_timestamp":"2026-07-08T14:00:00Z","digest":"` + snapshotDigest("a") + `","kind":"identity","size":10},{"data_timestamp":"2026-07-08T14:00:00Z","digest":"` + snapshotDigest("b") + `","kind":"unknown","size":20,"unknown":[{"path":"/document/unknown","value":{"digest":"` + snapshotDigest("d") + `","masked":"[redacted]","size":12}},{"path":"/remote/unknown","value":{"digest":"` + snapshotDigest("e") + `","masked":"[redacted]","size":10}}]}],"ref":{"auth_scope":"eebus.raw.read","capture_provenance":"runtime-observation","contract":"helianthus.eebus.raw.evidence-envelope.v1","mask_tier":"redacted","runtime":{"digest":"` + snapshotDigest("c") + `","kind":"peer","masked":"[redacted]"},"scope":"raw-root"}}`
 }

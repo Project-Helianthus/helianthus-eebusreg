@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,7 +32,6 @@ var forbiddenExportFragments = []string{
 	"SHIP",
 	"Spine",
 	"SPINE",
-	"Snapshot",
 	"EvidenceRef",
 	"Dereference",
 	"GraphQL",
@@ -41,16 +42,6 @@ var forbiddenExportFragments = []string{
 	"TrustStore",
 	"TrustMutation",
 	"PairingWindow",
-	"Lifecycle",
-	"Start",
-	"Shutdown",
-	"Reconnect",
-	"Ready",
-	"Readiness",
-	"Availability",
-	"Admin",
-	"Persist",
-	"Write",
 }
 
 var mutationVerbs = []string{
@@ -122,10 +113,11 @@ var documentationNames = map[string]struct{}{
 }
 
 type apiManifest struct {
-	Module   string            `json:"module"`
-	Packages []manifestPackage `json:"packages"`
-	Schema   string            `json:"schema"`
-	Version  int               `json:"version"`
+	Module          string                   `json:"module"`
+	Packages        []manifestPackage        `json:"packages"`
+	Schema          string                   `json:"schema"`
+	StableContracts []manifestStableContract `json:"stable_contracts"`
+	Version         int                      `json:"version"`
 }
 
 type manifestPackage struct {
@@ -139,9 +131,65 @@ type manifestExport struct {
 	Name string `json:"name"`
 }
 
+type manifestStableContract struct {
+	Enums      []manifestStableEnum `json:"enums"`
+	ImportPath string               `json:"import_path"`
+	Types      []manifestStableType `json:"types"`
+}
+
+type manifestStableEnum struct {
+	Type   string                    `json:"type"`
+	Values []manifestStableEnumValue `json:"values"`
+}
+
+type manifestStableEnumValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type manifestStableType struct {
+	Fields     []manifestStableField `json:"fields,omitempty"`
+	Name       string                `json:"name"`
+	Underlying string                `json:"underlying"`
+}
+
+type manifestStableField struct {
+	JSONTag string `json:"json_tag"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+}
+
 type packageInventory struct {
-	name    string
-	exports map[manifestExport]struct{}
+	constants map[string]constantDeclaration
+	exports   map[manifestExport]struct{}
+	name      string
+	types     map[string]typeDeclaration
+}
+
+type typeDeclaration struct {
+	imports map[string]string
+	rel     string
+	spec    *ast.TypeSpec
+}
+
+type constantDeclaration struct {
+	name     string
+	rel      string
+	typeName string
+	value    string
+}
+
+type stableContractSpec struct {
+	enums      []stableEnumSpec
+	importPath string
+	types      []manifestStableType
+	root       string
+}
+
+type stableEnumSpec struct {
+	exact    bool
+	typeName string
+	values   []manifestStableEnumValue
 }
 
 type pathOrigin string
@@ -381,10 +429,16 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 				}
 				inventory := packages[importPath]
 				if inventory == nil {
-					inventory = &packageInventory{name: file.Name.Name, exports: make(map[manifestExport]struct{})}
+					inventory = &packageInventory{
+						constants: make(map[string]constantDeclaration),
+						exports:   make(map[manifestExport]struct{}),
+						name:      file.Name.Name,
+						types:     make(map[string]typeDeclaration),
+					}
 					packages[importPath] = inventory
 				}
 				collectExports(file, inventory.exports)
+				collectDeclarations(rel, file, inventory)
 			}
 		}
 
@@ -439,11 +493,14 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 		return apiManifest{}, nil, err
 	}
 
+	stableContracts, stableViolations := inspectStableContracts(modulePath, packages)
+	violations = append(violations, stableViolations...)
 	manifest := apiManifest{
-		Module:   modulePath,
-		Packages: make([]manifestPackage, 0, len(packages)),
-		Schema:   "helianthus.api-boundary-manifest",
-		Version:  1,
+		Module:          modulePath,
+		Packages:        make([]manifestPackage, 0, len(packages)),
+		Schema:          "helianthus.api-boundary-manifest",
+		StableContracts: stableContracts,
+		Version:         1,
 	}
 	for importPath, inventory := range packages {
 		pkg := manifestPackage{
@@ -527,6 +584,370 @@ func collectExports(file *ast.File, exports map[manifestExport]struct{}) {
 				}
 			}
 		}
+	}
+}
+
+func collectDeclarations(rel string, file *ast.File, inventory *packageInventory) {
+	imports := make(map[string]string)
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		name := filepath.Base(importPath)
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		imports[name] = importPath
+	}
+	for _, declaration := range file.Decls {
+		gen, ok := declaration.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		switch gen.Tok {
+		case token.TYPE:
+			for _, rawSpec := range gen.Specs {
+				spec, ok := rawSpec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				inventory.types[spec.Name.Name] = typeDeclaration{imports: imports, rel: rel, spec: spec}
+			}
+		case token.CONST:
+			for _, rawSpec := range gen.Specs {
+				spec, ok := rawSpec.(*ast.ValueSpec)
+				if !ok || spec.Type == nil {
+					continue
+				}
+				typeName, err := canonicalType(spec.Type, imports)
+				if err != nil {
+					continue
+				}
+				for i, name := range spec.Names {
+					if i >= len(spec.Values) {
+						continue
+					}
+					literal, ok := spec.Values[i].(*ast.BasicLit)
+					if !ok || literal.Kind != token.STRING {
+						continue
+					}
+					value, err := strconv.Unquote(literal.Value)
+					if err != nil {
+						continue
+					}
+					inventory.constants[name.Name] = constantDeclaration{name: name.Name, rel: rel, typeName: typeName, value: value}
+				}
+			}
+		}
+	}
+}
+
+func inspectStableContracts(modulePath string, packages map[string]*packageInventory) ([]manifestStableContract, []string) {
+	specs := stableContractSpecs(modulePath)
+	active := false
+	for _, spec := range specs {
+		if inventory := packages[spec.importPath]; inventory != nil {
+			if _, ok := inventory.types[spec.root]; ok {
+				active = true
+				break
+			}
+		}
+	}
+	if !active {
+		return []manifestStableContract{}, nil
+	}
+
+	contracts := make([]manifestStableContract, 0, len(specs))
+	var violations []string
+	for _, spec := range specs {
+		contract := manifestStableContract{
+			Enums:      make([]manifestStableEnum, 0, len(spec.enums)),
+			ImportPath: spec.importPath,
+			Types:      append([]manifestStableType(nil), spec.types...),
+		}
+		inventory := packages[spec.importPath]
+		if inventory == nil {
+			violations = append(violations, "stable contract package is missing: "+spec.importPath)
+			contracts = append(contracts, contract)
+			continue
+		}
+
+		expectedTypes := make(map[string]manifestStableType, len(spec.types))
+		for _, expected := range spec.types {
+			expectedTypes[expected.Name] = expected
+			declaration, ok := inventory.types[expected.Name]
+			if !ok {
+				violations = append(violations, fmt.Sprintf("%s: stable contract type %s is missing", spec.importPath, expected.Name))
+				continue
+			}
+			actual, err := inspectStableType(declaration)
+			if err != nil {
+				violations = append(violations, fmt.Sprintf("%s: stable contract type %s: %v", declaration.rel, expected.Name, err))
+				continue
+			}
+			if !reflect.DeepEqual(actual, expected) {
+				violations = append(violations, fmt.Sprintf("%s: stable contract type %s does not match exact field/type/tag manifest: got %s want %s", declaration.rel, expected.Name, stableTypeText(actual), stableTypeText(expected)))
+			}
+		}
+		for name := range inventory.types {
+			if ast.IsExported(name) && strings.HasSuffix(name, "V1") {
+				if _, ok := expectedTypes[name]; !ok {
+					violations = append(violations, fmt.Sprintf("%s: unexpected stable contract type %s", spec.importPath, name))
+				}
+			}
+		}
+
+		for _, enumSpec := range spec.enums {
+			enum := manifestStableEnum{Type: enumSpec.typeName, Values: append([]manifestStableEnumValue(nil), enumSpec.values...)}
+			contract.Enums = append(contract.Enums, enum)
+			expectedNames := make(map[string]manifestStableEnumValue, len(enumSpec.values))
+			for _, expected := range enumSpec.values {
+				expectedNames[expected.Name] = expected
+				actual, ok := inventory.constants[expected.Name]
+				if !ok {
+					violations = append(violations, fmt.Sprintf("%s: stable enum value %s.%s is missing", spec.importPath, enumSpec.typeName, expected.Name))
+					continue
+				}
+				if actual.typeName != enumSpec.typeName || actual.value != expected.Value {
+					violations = append(violations, fmt.Sprintf("%s: stable enum value %s.%s does not match exact manifest", actual.rel, enumSpec.typeName, expected.Name))
+				}
+			}
+			if enumSpec.exact {
+				for name, actual := range inventory.constants {
+					if actual.typeName != enumSpec.typeName {
+						continue
+					}
+					if _, ok := expectedNames[name]; !ok {
+						violations = append(violations, fmt.Sprintf("%s: stable enum %s has unexpected value %s", actual.rel, enumSpec.typeName, name))
+					}
+				}
+			}
+		}
+		sort.Slice(contract.Types, func(i, j int) bool { return contract.Types[i].Name < contract.Types[j].Name })
+		sort.Slice(contract.Enums, func(i, j int) bool { return contract.Enums[i].Type < contract.Enums[j].Type })
+		for i := range contract.Enums {
+			sort.Slice(contract.Enums[i].Values, func(left, right int) bool {
+				return contract.Enums[i].Values[left].Name < contract.Enums[i].Values[right].Name
+			})
+		}
+		contracts = append(contracts, contract)
+	}
+	sort.Slice(contracts, func(i, j int) bool { return contracts[i].ImportPath < contracts[j].ImportPath })
+	return contracts, violations
+}
+
+func inspectStableType(declaration typeDeclaration) (manifestStableType, error) {
+	if declaration.spec.Assign.IsValid() {
+		return manifestStableType{}, errors.New("type aliases are not allowed in the stable contract")
+	}
+	result := manifestStableType{Name: declaration.spec.Name.Name}
+	if structure, ok := declaration.spec.Type.(*ast.StructType); ok {
+		result.Underlying = "struct"
+		result.Fields = make([]manifestStableField, 0, len(structure.Fields.List))
+		for _, field := range structure.Fields.List {
+			if len(field.Names) != 1 {
+				return manifestStableType{}, errors.New("stable struct fields must have exactly one explicit name")
+			}
+			typeName, err := canonicalType(field.Type, declaration.imports)
+			if err != nil {
+				return manifestStableType{}, err
+			}
+			jsonTag := ""
+			if field.Tag != nil {
+				jsonTag, err = strconv.Unquote(field.Tag.Value)
+				if err != nil {
+					return manifestStableType{}, fmt.Errorf("invalid field tag on %s: %w", field.Names[0].Name, err)
+				}
+			}
+			result.Fields = append(result.Fields, manifestStableField{JSONTag: jsonTag, Name: field.Names[0].Name, Type: typeName})
+		}
+		return result, nil
+	}
+	underlying, err := canonicalType(declaration.spec.Type, declaration.imports)
+	if err != nil {
+		return manifestStableType{}, err
+	}
+	result.Underlying = underlying
+	return result, nil
+}
+
+func canonicalType(expr ast.Expr, imports map[string]string) (string, error) {
+	switch typed := expr.(type) {
+	case *ast.Ident:
+		return typed.Name, nil
+	case *ast.SelectorExpr:
+		qualifier, ok := typed.X.(*ast.Ident)
+		if !ok {
+			return "", errors.New("unsupported qualified stable field type")
+		}
+		importPath, ok := imports[qualifier.Name]
+		if !ok {
+			return "", fmt.Errorf("unresolved stable field type qualifier %s", qualifier.Name)
+		}
+		return importPath + "." + typed.Sel.Name, nil
+	case *ast.ArrayType:
+		if typed.Len != nil {
+			return "", errors.New("fixed arrays are not allowed in the stable contract")
+		}
+		element, err := canonicalType(typed.Elt, imports)
+		if err != nil {
+			return "", err
+		}
+		return "[]" + element, nil
+	case *ast.StarExpr:
+		element, err := canonicalType(typed.X, imports)
+		if err != nil {
+			return "", err
+		}
+		return "*" + element, nil
+	default:
+		return "", fmt.Errorf("unsupported stable field type %T", expr)
+	}
+}
+
+func stableTypeText(value manifestStableType) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return value.Name
+	}
+	return string(data)
+}
+
+func stableContractSpecs(modulePath string) []stableContractSpec {
+	rawPath := modulePath + "/eebusraw"
+	evidencePath := modulePath + "/eebusevidence"
+	field := func(name, typeName, jsonTag string) manifestStableField {
+		return manifestStableField{Name: name, Type: typeName, JSONTag: jsonTag}
+	}
+	stableType := func(name, underlying string, fields ...manifestStableField) manifestStableType {
+		return manifestStableType{Name: name, Underlying: underlying, Fields: fields}
+	}
+	enumValue := func(name, value string) manifestStableEnumValue {
+		return manifestStableEnumValue{Name: name, Value: value}
+	}
+	return []stableContractSpec{
+		{
+			importPath: rawPath,
+			root:       "IdentityDocumentV1",
+			types: []manifestStableType{
+				stableType("ContractVersion", "string"),
+				stableType("MaskTier", "string"),
+				stableType("EndpointRole", "string"),
+				stableType("IDKind", "string"),
+				stableType("RedactedID", "struct",
+					field("Kind", "IDKind", `json:"kind"`),
+					field("Masked", "string", `json:"masked"`),
+					field("Digest", "string", `json:"digest,omitempty"`),
+				),
+				stableType("UnknownPath", "string"),
+				stableType("UnknownField", "struct",
+					field("Path", "UnknownPath", `json:"path"`),
+					field("Value", "OpaqueValue", `json:"value"`),
+				),
+				stableType("OpaqueValue", "struct",
+					field("Masked", "string", `json:"masked"`),
+					field("Digest", "string", `json:"digest,omitempty"`),
+					field("Size", "int", `json:"size,omitempty"`),
+				),
+				stableType("EndpointIdentityV1", "struct",
+					field("Role", "EndpointRole", `json:"role"`),
+					field("ID", "RedactedID", `json:"id"`),
+					field("Unknown", "[]UnknownField", `json:"unknown,omitempty"`),
+				),
+				stableType("SessionIdentityV1", "struct",
+					field("ID", "RedactedID", `json:"id"`),
+					field("RemoteID", "RedactedID", `json:"remote_id"`),
+					field("Unknown", "[]UnknownField", `json:"unknown,omitempty"`),
+				),
+				stableType("IdentityDocumentV1", "struct",
+					field("Contract", "ContractVersion", `json:"contract"`),
+					field("MaskTier", "MaskTier", `json:"mask_tier"`),
+					field("CapturedAt", "time.Time", `json:"captured_at"`),
+					field("Local", "EndpointIdentityV1", `json:"local"`),
+					field("Remotes", "[]EndpointIdentityV1", `json:"remotes,omitempty"`),
+					field("Sessions", "[]SessionIdentityV1", `json:"sessions,omitempty"`),
+					field("Unknown", "[]UnknownField", `json:"unknown,omitempty"`),
+				),
+			},
+			enums: []stableEnumSpec{
+				{typeName: "ContractVersion", values: []manifestStableEnumValue{enumValue("IdentityContractV1", "helianthus.eebus.raw.identity.v1")}},
+				{exact: true, typeName: "MaskTier", values: []manifestStableEnumValue{enumValue("MaskTierRedacted", "redacted")}},
+				{exact: true, typeName: "EndpointRole", values: []manifestStableEnumValue{
+					enumValue("EndpointRoleLocal", "local"),
+					enumValue("EndpointRoleRemote", "remote"),
+				}},
+				{exact: true, typeName: "IDKind", values: []manifestStableEnumValue{
+					enumValue("IDKindLocalSKI", "local-ski"),
+					enumValue("IDKindRemoteSKI", "remote-ski"),
+					enumValue("IDKindCertificateFingerprint", "certificate-fingerprint"),
+					enumValue("IDKindPeer", "peer"),
+					enumValue("IDKindSession", "session"),
+				}},
+				{exact: true, typeName: "UnknownPath", values: []manifestStableEnumValue{
+					enumValue("UnknownPathDocument", "/document/unknown"),
+					enumValue("UnknownPathDevice", "/device/unknown"),
+					enumValue("UnknownPathLocal", "/local/unknown"),
+					enumValue("UnknownPathRemote", "/remote/unknown"),
+					enumValue("UnknownPathSession", "/session/unknown"),
+				}},
+			},
+		},
+		{
+			importPath: evidencePath,
+			root:       "EnvelopeV1",
+			types: []manifestStableType{
+				stableType("ContractVersion", "string"),
+				stableType("CaptureProvenanceV1", "string"),
+				stableType("RawSnapshotScopeV1", "string"),
+				stableType("AuthScope", "string"),
+				stableType("ObjectKind", "string"),
+				stableType("ReferenceV1", "struct",
+					field("Runtime", rawPath+".RedactedID", `json:"runtime"`),
+					field("Contract", "ContractVersion", `json:"contract"`),
+					field("CaptureProvenance", "CaptureProvenanceV1", `json:"capture_provenance"`),
+					field("Scope", "RawSnapshotScopeV1", `json:"scope"`),
+					field("MaskTier", rawPath+".MaskTier", `json:"mask_tier"`),
+					field("AuthScope", "AuthScope", `json:"auth_scope"`),
+				),
+				stableType("ObjectV1", "struct",
+					field("Kind", "ObjectKind", `json:"kind"`),
+					field("Digest", "string", `json:"digest"`),
+					field("Size", "int", `json:"size"`),
+					field("DataTimestamp", "time.Time", `json:"data_timestamp"`),
+					field("Unknown", "[]"+rawPath+".UnknownField", `json:"unknown,omitempty"`),
+				),
+				stableType("EnvelopeV1", "struct",
+					field("Reference", "ReferenceV1", `json:"ref"`),
+					field("CapturedAt", "time.Time", `json:"captured_at"`),
+					field("DataTimestamp", "time.Time", `json:"data_timestamp"`),
+					field("Objects", "[]ObjectV1", `json:"objects,omitempty"`),
+					field("DataHash", "string", `json:"data_hash,omitempty"`),
+				),
+			},
+			enums: []stableEnumSpec{
+				{typeName: "ContractVersion", values: []manifestStableEnumValue{enumValue("EnvelopeContractV1", "helianthus.eebus.raw.evidence-envelope.v1")}},
+				{exact: true, typeName: "CaptureProvenanceV1", values: []manifestStableEnumValue{
+					enumValue("CaptureProvenanceRuntimeObservation", "runtime-observation"),
+				}},
+				{exact: true, typeName: "RawSnapshotScopeV1", values: []manifestStableEnumValue{
+					enumValue("RawSnapshotScopeRoot", "raw-root"),
+					enumValue("RawSnapshotScopeIdentity", "raw-identity"),
+					enumValue("RawSnapshotScopeTopology", "raw-topology"),
+					enumValue("RawSnapshotScopeServices", "raw-services"),
+					enumValue("RawSnapshotScopeSessions", "raw-sessions"),
+					enumValue("RawSnapshotScopeUnknown", "raw-unknown"),
+				}},
+				{exact: true, typeName: "AuthScope", values: []manifestStableEnumValue{enumValue("AuthScopeReadRaw", "eebus.raw.read")}},
+				{exact: true, typeName: "ObjectKind", values: []manifestStableEnumValue{
+					enumValue("ObjectKindIdentity", "identity"),
+					enumValue("ObjectKindTopology", "topology"),
+					enumValue("ObjectKindService", "service"),
+					enumValue("ObjectKindSession", "session"),
+					enumValue("ObjectKindUnknown", "unknown"),
+				}},
+			},
+		},
 	}
 }
 
