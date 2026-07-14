@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
+	"go/build/constraint"
 	"go/constant"
 	"go/importer"
 	"go/parser"
@@ -16,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -116,6 +118,13 @@ var documentationNames = map[string]struct{}{
 	"security":     {},
 	"support":      {},
 }
+
+var (
+	cgoFunctionOpening = regexp.MustCompile(`^static[ \t]+int[ \t]+[A-Za-z_][A-Za-z0-9_]*\([ \t]*int[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\)[ \t]*\{$`)
+	cgoIdentifier      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	cgoInclude         = regexp.MustCompile(`^#include[ \t]+<[A-Za-z0-9_]+(?:/[A-Za-z0-9_]+)*\.h>$`)
+	cgoInteger         = regexp.MustCompile(`^[0-9]+$`)
+)
 
 type apiManifest struct {
 	Module          string                   `json:"module"`
@@ -539,7 +548,11 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 }
 
 func checkProductionComments(fset *token.FileSet, rel string, file *ast.File, violations *[]string) {
+	compilerComments := allowedCompilerCommentGroups(fset, file)
 	for _, group := range file.Comments {
+		if _, allowed := compilerComments[group]; allowed {
+			continue
+		}
 		if group != file.Doc {
 			*violations = append(*violations, at(fset, group.Pos(), rel, "production Go comment is not allowed"))
 			continue
@@ -553,6 +566,187 @@ func checkProductionComments(fset *token.FileSet, rel string, file *ast.File, vi
 			*violations = append(*violations, at(fset, group.Pos(), rel, "package comment must be one concise line starting with Package "+file.Name.Name))
 		}
 	}
+}
+
+func allowedCompilerCommentGroups(fset *token.FileSet, file *ast.File) map[*ast.CommentGroup]struct{} {
+	allowed := make(map[*ast.CommentGroup]struct{})
+	var buildConstraints []*ast.CommentGroup
+	for _, group := range file.Comments {
+		if isCanonicalBuildConstraintGroup(fset, file, group) {
+			buildConstraints = append(buildConstraints, group)
+		}
+	}
+	if len(buildConstraints) == 1 {
+		allowed[buildConstraints[0]] = struct{}{}
+	}
+	for _, declaration := range file.Decls {
+		imports, ok := declaration.(*ast.GenDecl)
+		if !ok || imports.Tok != token.IMPORT {
+			continue
+		}
+		for _, rawSpec := range imports.Specs {
+			spec, ok := rawSpec.(*ast.ImportSpec)
+			if !ok || spec.Name != nil || spec.Path.Value != `"C"` {
+				continue
+			}
+			preamble := spec.Doc
+			if preamble == nil && len(imports.Specs) == 1 {
+				preamble = imports.Doc
+			}
+			if isMachineOnlyCGOPreamble(preamble) {
+				allowed[preamble] = struct{}{}
+			}
+		}
+	}
+	return allowed
+}
+
+func isMachineOnlyCGOPreamble(group *ast.CommentGroup) bool {
+	if group == nil {
+		return false
+	}
+	preamble := strings.TrimSpace(group.Text())
+	if preamble == "" || strings.ContainsAny(preamble, "\"'`") {
+		return false
+	}
+	for _, marker := range []string{"//", "/*", "*/"} {
+		if strings.Contains(preamble, marker) {
+			return false
+		}
+	}
+	foundMachineLine := false
+	for _, rawLine := range strings.Split(preamble, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		foundMachineLine = true
+		if strings.HasPrefix(line, "#") {
+			if !cgoInclude.MatchString(line) {
+				return false
+			}
+			continue
+		}
+		if !isRestrictedCGOLine(line) {
+			return false
+		}
+	}
+	return foundMachineLine
+}
+
+func isRestrictedCGOLine(line string) bool {
+	if !hasRestrictedCAlphabet(line) {
+		return false
+	}
+	if line == "}" || cgoFunctionOpening.MatchString(line) {
+		return true
+	}
+	if strings.HasPrefix(line, "if (") && strings.HasSuffix(line, ") {") {
+		condition := strings.TrimSuffix(strings.TrimPrefix(line, "if ("), ") {")
+		return isCCondition(condition)
+	}
+	if !strings.HasSuffix(line, ";") {
+		return false
+	}
+	return isCStatement(strings.TrimSpace(strings.TrimSuffix(line, ";")))
+}
+
+func hasRestrictedCAlphabet(line string) bool {
+	for _, character := range line {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' || character == '_' || character == ' ' || character == '\t' {
+			continue
+		}
+		switch character {
+		case '(', ')', '{', '}', '[', ']', ',', ';', '=', '<', '>', '!', '+', '-', '*', '/', '%', '&', '|', '^', '~':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isCStatement(statement string) bool {
+	if strings.HasPrefix(statement, "if (") {
+		parts := strings.SplitN(strings.TrimPrefix(statement, "if ("), ") return ", 2)
+		return len(parts) == 2 && isCCondition(parts[0]) && isCValue(parts[1])
+	}
+	if strings.HasPrefix(statement, "return ") {
+		return isCValue(strings.TrimPrefix(statement, "return "))
+	}
+	if strings.Count(statement, "=") == 1 {
+		parts := strings.SplitN(statement, "=", 2)
+		left := strings.Fields(parts[0])
+		validLeft := len(left) == 1 && cgoIdentifier.MatchString(left[0]) ||
+			len(left) == 2 && cgoIdentifier.MatchString(left[0]) && cgoIdentifier.MatchString(left[1])
+		return validLeft && isCValue(parts[1])
+	}
+	fields := strings.Fields(statement)
+	if len(fields) == 2 && cgoIdentifier.MatchString(fields[0]) && cgoIdentifier.MatchString(fields[1]) {
+		return true
+	}
+	return isCCall(statement)
+}
+
+func isCCondition(condition string) bool {
+	for _, operator := range []string{"==", "!=", "<=", ">=", "<", ">"} {
+		parts := strings.Split(condition, operator)
+		if len(parts) == 2 {
+			return isCOperand(parts[0]) && isCOperand(parts[1])
+		}
+	}
+	return false
+}
+
+func isCValue(value string) bool {
+	return isCOperand(value) || isCCall(value)
+}
+
+func isCCall(expression string) bool {
+	expression = strings.TrimSpace(expression)
+	opening := strings.IndexByte(expression, '(')
+	if opening <= 0 || !strings.HasSuffix(expression, ")") || !cgoIdentifier.MatchString(expression[:opening]) {
+		return false
+	}
+	arguments := strings.TrimSpace(expression[opening+1 : len(expression)-1])
+	if arguments == "" {
+		return true
+	}
+	for _, argument := range strings.Split(arguments, ",") {
+		if !isCOperand(argument) {
+			return false
+		}
+	}
+	return true
+}
+
+func isCOperand(operand string) bool {
+	operand = strings.TrimSpace(operand)
+	if operand == "" {
+		return false
+	}
+	if strings.ContainsAny(operand[:1], "+-*&") {
+		operand = operand[1:]
+	}
+	return cgoIdentifier.MatchString(operand) || cgoInteger.MatchString(operand)
+}
+
+func isCanonicalBuildConstraintGroup(fset *token.FileSet, file *ast.File, group *ast.CommentGroup) bool {
+	if len(group.List) != 1 || group.End() >= file.Package {
+		return false
+	}
+	comment := group.List[0].Text
+	if !strings.HasPrefix(comment, "//go:build ") {
+		return false
+	}
+	expression, err := constraint.Parse(comment)
+	if err != nil || comment != "//go:build "+expression.String() {
+		return false
+	}
+	commentLine := fset.PositionFor(group.End(), false).Line
+	packageLine := fset.PositionFor(file.Package, false).Line
+	return commentLine > 0 && packageLine >= commentLine+2
 }
 
 func collectExports(file *ast.File, exports map[manifestExport]struct{}) {

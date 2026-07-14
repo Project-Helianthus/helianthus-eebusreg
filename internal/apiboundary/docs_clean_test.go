@@ -17,6 +17,26 @@ import (
 
 const minimalREADME = "# eeBUS Registry\n\nCanonical docs: Project-Helianthus/helianthus-docs-eebus.\n\nBuild: `./scripts/ci_local.sh`.\n"
 
+const aclCGOPreamble = `/*
+#include <errno.h>
+#include <sys/acl.h>
+
+static int helianthus_acl_entry_count(int fd) {
+	errno = 0;
+	acl_t acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
+	if (acl == NULL) {
+		if (errno == ENOENT) return 0;
+		return -errno;
+	}
+	acl_entry_t entry;
+	int result = acl_get_entry(acl, ACL_FIRST_ENTRY, &entry);
+	acl_free(acl);
+	if (result == 1) return 1;
+	if (result == 0) return 0;
+	return -errno;
+}
+*/`
+
 func TestDocsCleanOwnershipContract(t *testing.T) {
 	tool := buildAPIBoundary(t)
 
@@ -43,6 +63,49 @@ const ToolID = "eebus.v1.snapshot.capture"
 		output, err := runTool(t, tool, root)
 		if err != nil {
 			t.Fatalf("permitted eebusraw API fixture was rejected: %v\n%s", err, output)
+		}
+	})
+
+	t.Run("canonical go build constraint is accepted", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeFile(t, root, "eebusraw/platform.go", `//go:build linux || darwin
+
+package eebusraw
+`)
+		output, err := runTool(t, tool, root)
+		if err != nil {
+			t.Fatalf("canonical Go build constraint was rejected: %v\n%s", err, output)
+		}
+	})
+
+	t.Run("cgo preamble attached to import C is accepted", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeFile(t, root, "internal/eebusstore/acl_darwin.go", `//go:build darwin && cgo
+
+package eebusstore
+
+`+aclCGOPreamble+`
+import "C"
+`)
+		output, err := runTool(t, tool, root)
+		if err != nil {
+			t.Fatalf("compiler-consumed cgo preamble was rejected: %v\n%s", err, output)
+		}
+	})
+
+	t.Run("cgo preamble attached to grouped import spec is accepted", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
+
+import (
+`+aclCGOPreamble+`
+	"C"
+	"errors"
+)
+`)
+		output, err := runTool(t, tool, root)
+		if err != nil {
+			t.Fatalf("spec-attached grouped cgo preamble was rejected: %v\n%s", err, output)
 		}
 	})
 
@@ -219,6 +282,197 @@ type Envelope struct{}
 `)
 			},
 			want: []string{"comment", "eebusraw/prose.go"},
+		},
+		{
+			name: "malformed go build constraint",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "eebusraw/platform.go", `//go:build linux &&
+
+package eebusraw
+`)
+			},
+			want: []string{"comment", "eebusraw/platform.go"},
+		},
+		{
+			name: "near miss go build directive",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "eebusraw/platform.go", `//go:buildx linux
+
+package eebusraw
+`)
+			},
+			want: []string{"comment", "eebusraw/platform.go"},
+		},
+		{
+			name: "legacy build constraint syntax",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "eebusraw/platform.go", `// +build linux
+
+package eebusraw
+`)
+			},
+			want: []string{"comment", "eebusraw/platform.go"},
+		},
+		{
+			name: "misplaced valid go build constraint",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "eebusraw/platform.go", `package eebusraw
+
+//go:build linux
+`)
+			},
+			want: []string{"comment", "eebusraw/platform.go"},
+		},
+		{
+			name: "narrative comment adjacent to valid go build constraint",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "eebusraw/platform.go", `//go:build linux
+// Runtime policy belongs in external documentation.
+
+package eebusraw
+`)
+			},
+			want: []string{"comment", "eebusraw/platform.go"},
+		},
+		{
+			name: "multiple canonical go build constraint groups",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "eebusraw/platform.go", `//go:build linux
+
+//go:build darwin
+
+package eebusraw
+`)
+			},
+			want: []string{"comment", "eebusraw/platform.go"},
+		},
+		{
+			name: "detached block comment in cgo file",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
+
+/* Runtime policy belongs in external documentation. */
+
+/*
+#include <errno.h>
+*/
+import "C"
+`)
+			},
+			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
+		},
+		{
+			name: "grouped import declaration comment is not a cgo preamble",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
+
+`+aclCGOPreamble+`
+import (
+	"C"
+	"errors"
+)
+`)
+			},
+			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
+		},
+		{
+			name: "conditional narrative region in cgo preamble",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
+
+/*
+#include <errno.h>
+#if 0
+Runtime policy belongs in external documentation;
+#endif
+*/
+import "C"
+`)
+			},
+			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
+		},
+		{
+			name: "nested narrative comment in cgo preamble",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
+
+/*
+#include <errno.h>
+// Runtime policy belongs in external documentation.
+*/
+import "C"
+`)
+			},
+			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
+		},
+		{
+			name: "narrative string literal in cgo preamble",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
+
+/*
+#include <errno.h>
+static const char *policy = "Runtime policy belongs in external documentation.";
+*/
+import "C"
+`)
+			},
+			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
+		},
+		{
+			name: "empty cgo preamble",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
+
+/*
+*/
+import "C"
+`)
+			},
+			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
+		},
+		{
+			name: "rune literal in cgo preamble",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
+
+/*
+#include <errno.h>
+static const int policy = 'R';
+*/
+import "C"
+`)
+			},
+			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
+		},
+		{
+			name: "raw string delimiter in cgo preamble",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
+
+/*
+#include <errno.h>
+static const char *policy = `+"`"+`Runtime policy`+"`"+`;
+*/
+import "C"
+`)
+			},
+			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
+		},
+		{
+			name: "narrative comment after cgo import",
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
+
+/*
+#include <errno.h>
+*/
+import "C"
+
+// Runtime policy belongs in external documentation.
+`)
+			},
+			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
 		},
 		{
 			name: "README drift",
