@@ -216,7 +216,9 @@ func (r report) validate() error {
 	} else if r.LiveEvidence != nil {
 		return errors.New("canonical live evidence is only valid for a passing G19 case")
 	}
-	payload, err := r.jsonBytes()
+	publicReport := r
+	publicReport.LiveEvidence = nil
+	payload, err := publicReport.jsonBytes()
 	if err != nil {
 		return err
 	}
@@ -372,10 +374,11 @@ func currentRepoEvidence() evidenceRepo {
 func validatePublicValue(value any, path []string) error {
 	switch typed := value.(type) {
 	case map[string]any:
-		for childKey, child := range typed {
+		for _, childKey := range sortedStringMapKeys(typed) {
 			if credentialLikeKey(childKey) {
 				return fmt.Errorf("public report contains credential-like key %q", childKey)
 			}
+			child := typed[childKey]
 			if err := validatePublicValue(child, appendJSONPath(path, childKey)); err != nil {
 				return err
 			}
@@ -410,8 +413,11 @@ func validatePublicString(value string, path []string) error {
 	if secretPattern.MatchString(value) {
 		return errors.New("public report contains secret-like material")
 	}
-	if allowedGitCommitPath(path) && gitCommitPattern.MatchString(value) {
-		return nil
+	if len(hex40Pattern.FindAllString(value, -1)) != 0 {
+		if allowedGitCommitPath(path) && gitCommitPattern.MatchString(value) {
+			return nil
+		}
+		return fmt.Errorf("public report contains raw 40-hex identity at %s", strings.Join(path, "."))
 	}
 	for _, candidate := range networkCandidates(value) {
 		if net.ParseIP(candidate) != nil {
@@ -443,7 +449,7 @@ func allowedGitCommitPath(path []string) bool {
 	if len(path) == 2 && path[0] == "repo" && path[1] == "commit" {
 		return true
 	}
-	return len(path) == 3 && path[0] == "live_evidence" && path[1] == "repo" && path[2] == "commit"
+	return false
 }
 
 func networkCandidates(value string) []string {

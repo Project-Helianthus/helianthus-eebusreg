@@ -66,14 +66,36 @@ func TestReportRejectsCredentialLikeKeysStructurally(t *testing.T) {
 }
 
 func TestReportDoesNotTreatArbitraryCommitKeyAsIdentityExemption(t *testing.T) {
-	rep := newReport("fake-peer", []string{caseFakePeer}, []caseResult{{
-		ID:       caseFakePeer,
-		Status:   resultPass,
-		Evidence: []string{"fake-peer-pass"},
-		Details:  map[string]string{"commit": strings.Repeat("a", 40)},
-	}}, nil)
-	if err := rep.validate(); err == nil {
-		t.Fatal("caller-controlled commit key exempted a raw 40-hex identity")
+	for _, key := range []string{"commit", "repo_commit"} {
+		t.Run(key, func(t *testing.T) {
+			rep := newReport("fake-peer", []string{caseFakePeer}, []caseResult{{
+				ID:       caseFakePeer,
+				Status:   resultPass,
+				Evidence: []string{"fake-peer-pass"},
+				Details:  map[string]string{key: strings.Repeat("a", 40)},
+			}}, nil)
+			if err := rep.validate(); err == nil || !strings.Contains(err.Error(), "raw 40-hex identity") {
+				t.Fatalf("caller-controlled %s key exempted a raw 40-hex identity: %v", key, err)
+			}
+		})
+	}
+}
+
+func TestReportIdentityRedactionIsDeterministic(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{
+		"repo_commit": strings.Repeat("a", 40),
+		"z":           strings.Repeat("b", 40),
+		"a":           strings.Repeat("c", 40),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const expected = "public report contains raw 40-hex identity at a"
+	for i := 0; i < 100; i++ {
+		err := validatePublicRedaction(payload)
+		if err == nil || err.Error() != expected {
+			t.Fatalf("iteration %d: redaction error = %v, want %q", i, err, expected)
+		}
 	}
 }
 
