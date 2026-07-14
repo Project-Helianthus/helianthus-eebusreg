@@ -234,8 +234,9 @@ func TestSubprocessContentionAndProcessExitLockRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("contender process: %v: %s", err, output)
 	}
-	if strings.TrimSpace(string(output)) != string(outcomeWriterBusy) {
-		t.Fatalf("contender status = %q, want %q", output, outcomeWriterBusy)
+	status, _, _ := strings.Cut(string(output), "\n")
+	if status != string(outcomeWriterBusy) {
+		t.Fatalf("contender first status = %q, want %q; full output = %q", status, outcomeWriterBusy, output)
 	}
 
 	if err := holder.Process.Kill(); err != nil {

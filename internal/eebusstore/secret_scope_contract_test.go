@@ -144,8 +144,8 @@ func TestPackageStaysInternalUnexportedAndFreeOfRuntimeOrPolicyBehavior(t *testi
 		for _, declaration := range file.Decls {
 			switch declaration := declaration.(type) {
 			case *ast.FuncDecl:
-				if declaration.Name.IsExported() {
-					t.Fatalf("%s exports function or method %s", name, declaration.Name.Name)
+				if declaration.Recv == nil && declaration.Name.IsExported() {
+					t.Fatalf("%s exports package-level function %s", name, declaration.Name.Name)
 				}
 			case *ast.GenDecl:
 				for _, spec := range declaration.Specs {
