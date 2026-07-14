@@ -5,10 +5,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"syscall"
 	"time"
 
+	shipmdns "github.com/enbility/ship-go/mdns"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/sys/unix"
 )
@@ -19,133 +22,251 @@ const (
 )
 
 type liveOptions struct {
-	Interface string
-	Timeout   time.Duration
-	RemoteSKI string
+	Interface        string
+	Timeout          time.Duration
+	Port             int
+	RemoteSKI        string
+	PairingWindow    bool
+	OperatorProofRef string
+	RepoBranch       string
+	RepoCommit       string
+	ChallengeWriter  io.Writer
 }
 
 type liveDiscovery struct {
-	Records      int
-	SHIP         int
-	ServiceRef   string
-	InterfaceRef string
+	Records         int
+	SHIP            int
+	ExpectedActive  int
+	ExpectedGoodbye int
+}
+
+type lanSHIPPublisher struct {
+	provider    lanSHIPMDNSProvider
+	serviceFQDN string
+}
+
+type lanSHIPMDNSProvider interface {
+	Announce(serviceName string, port int, txt []string) error
+	Shutdown()
+}
+
+var lanSHIPInterfaceByName = net.InterfaceByName
+
+var newLANSHIPMDNSProvider = func(ifaces []net.Interface) lanSHIPMDNSProvider {
+	return shipmdns.NewZeroconfProvider(ifaces)
+}
+
+func startLANSHIPPublisher(ifaceName string, port int, ski, shipID string, pairingWindow bool) (*lanSHIPPublisher, error) {
+	ifaceName = strings.TrimSpace(ifaceName)
+	ski = normalizeSKI(ski)
+	shipID = strings.TrimSpace(shipID)
+	if ifaceName == "" || port < 1 || port > 65535 || !validSKI(ski) || shipID == "" {
+		return nil, errors.New("LAN SHIP publisher configuration invalid")
+	}
+	iface, err := lanSHIPInterfaceByName(ifaceName)
+	if err != nil {
+		return nil, fmt.Errorf("LAN SHIP publisher interface unavailable: %w", err)
+	}
+	txt := []string{
+		"txtvers=1",
+		"path=/ship/",
+		"id=" + shipID,
+		"ski=" + ski,
+		"brand=Helianthus",
+		"model=RawProbe",
+		"type=EnergyManagementSystem",
+		fmt.Sprintf("register=%t", pairingWindow),
+	}
+	provider := newLANSHIPMDNSProvider([]net.Interface{*iface})
+	if err := provider.Announce(liveServiceName, port, txt); err != nil {
+		return nil, fmt.Errorf("LAN SHIP publisher start failed: %w", err)
+	}
+	return &lanSHIPPublisher{provider: provider, serviceFQDN: liveServiceName + "._ship._tcp.local."}, nil
+}
+
+func (p *lanSHIPPublisher) shutdown() {
+	if p == nil || p.provider == nil {
+		return
+	}
+	p.provider.Shutdown()
+	p.provider = nil
 }
 
 func runLiveVR940fSmoke(ctx context.Context, opts liveOptions) caseResult {
-	if opts.Timeout <= 0 {
-		opts.Timeout = 10 * time.Second
-	}
-	discovery, err := probeSHIP(ctx, opts.Interface, opts.Timeout)
-	if err != nil {
-		return caseResult{
-			ID:       caseLive,
-			Status:   resultBlocked,
-			Evidence: []string{"live-vr940f-mdns-probe-attempted"},
-			Error:    "mdns_probe_unavailable",
+	result := runLiveVR940fProof(ctx, opts)
+	for _, item := range result.Cases {
+		if item.ID == caseLive {
+			return item
 		}
 	}
-	if discovery.SHIP == 0 {
-		return caseResult{
-			ID:     caseLive,
-			Status: resultBlocked,
-			Evidence: []string{
-				"live-vr940f-mdns-probe-attempted",
-				"live-vr940f-no-ship-service-visible",
-			},
-			Details: map[string]string{
-				"records_ref":   countRef("records", discovery.Records),
-				"interface_ref": discovery.InterfaceRef,
-			},
-			Error: "no_visible_ship_service",
-		}
-	}
-	if opts.RemoteSKI == "" {
-		return caseResult{
-			ID:     caseLive,
-			Status: resultBlocked,
-			Evidence: []string{
-				"live-vr940f-ship-service-visible",
-				"live-vr940f-pairing-not-attempted-without-remote-ski",
-			},
-			Details: map[string]string{
-				"service_ref":   discovery.ServiceRef,
-				"interface_ref": discovery.InterfaceRef,
-			},
-			Error: "remote_ski_required_for_pairing_smoke",
-		}
-	}
-	return caseResult{
-		ID:     caseLive,
-		Status: resultBlocked,
-		Evidence: []string{
-			"live-vr940f-ship-service-visible",
-			"live-vr940f-pairing-runner-not-yet-promoted-to-pass",
-		},
-		Details: map[string]string{
-			"service_ref":    discovery.ServiceRef,
-			"remote_ski_ref": digestRef(opts.RemoteSKI),
-			"interface_ref":  discovery.InterfaceRef,
-		},
-		Error: "pairing_session_feature_graph_reconnect_not_collected",
-	}
+	return caseResult{ID: caseLive, Status: resultFail, Evidence: []string{"g17-runner-returned-no-result"}, Error: "g17_result_missing"}
 }
 
 func probeSHIP(ctx context.Context, iface string, timeout time.Duration) (liveDiscovery, error) {
+	return probeSHIPService(ctx, iface, timeout, "")
+}
+
+func probeSHIPService(ctx context.Context, iface string, timeout time.Duration, expectedService string) (out liveDiscovery, resultErr error) {
+	iface = strings.TrimSpace(iface)
+	expectedService = strings.TrimSpace(expectedService)
 	if iface == "" {
 		iface = defaultLANInterface()
 	}
-	localIP, err := interfaceIPv4(iface)
+	if timeout <= 0 {
+		return liveDiscovery{}, errors.New("mDNS probe timeout must be positive")
+	}
+	udp, err := openMDNSObserver(ctx, iface)
 	if err != nil {
 		return liveDiscovery{}, err
 	}
-	interfaceRef := refLabel("iface", iface)
-	conn, err := listenMDNSPacket(ctx)
-	if err != nil {
-		return liveDiscovery{}, err
-	}
-	defer conn.Close()
-
-	udp, ok := conn.(*net.UDPConn)
-	if !ok {
-		return liveDiscovery{}, errors.New("not a udp conn")
-	}
-	if err := udp.SetReadBuffer(64 * 1024); err != nil {
-		return liveDiscovery{}, err
-	}
-	if err := joinMDNSGroup(udp, localIP); err != nil {
-		return liveDiscovery{}, err
-	}
+	defer func() {
+		if closeErr := udp.Close(); closeErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("mDNS observer close failed: %w", closeErr))
+		}
+	}()
 
 	deadline := time.Now().Add(timeout)
 	query := mdnsPTRQuery("_ship._tcp.local.")
-	out := liveDiscovery{InterfaceRef: interfaceRef}
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return out, ctx.Err()
 		default:
 		}
-		_, _ = udp.WriteTo(query, &net.UDPAddr{IP: net.ParseIP(mdnsGroup), Port: mdnsPort})
-		_ = udp.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
+		if err := writeMDNSQuery(udp, query); err != nil {
+			return out, err
+		}
+		readDeadline := time.Now().Add(400 * time.Millisecond)
+		if readDeadline.After(deadline) {
+			readDeadline = deadline
+		}
+		if err := udp.SetReadDeadline(readDeadline); err != nil {
+			return out, fmt.Errorf("mDNS read deadline failed: %w", err)
+		}
 		for {
 			buf := make([]byte, 9000)
 			n, _, err := udp.ReadFrom(buf)
 			if err != nil {
-				break
-			}
-			records := parseMDNSRecords(buf[:n])
-			out.Records += len(records)
-			for _, record := range records {
-				if record.Name == "_ship._tcp.local." || stringsHasSHIP(record.Name) || stringsHasSHIP(record.Value) {
-					out.SHIP++
-					if out.ServiceRef == "" {
-						out.ServiceRef = refLabel("ship-service", record.Name+"|"+record.Value)
-					}
+				if isTimeoutError(err) {
+					break
 				}
+				return out, fmt.Errorf("mDNS read failed: %w", err)
 			}
+			accountMDNSRecords(&out, parseMDNSRecords(buf[:n]), expectedService)
 		}
 	}
 	return out, nil
+}
+
+func observeSHIPWithdrawal(ctx context.Context, iface string, timeout time.Duration, expectedService string, withdrawAdvertisement func() error) (out liveDiscovery, resultErr error) {
+	iface = strings.TrimSpace(iface)
+	expectedService = strings.TrimSpace(expectedService)
+	if iface == "" || timeout <= 0 || expectedService == "" || withdrawAdvertisement == nil {
+		return liveDiscovery{}, errors.New("mDNS withdrawal observer configuration invalid")
+	}
+	udp, err := openMDNSObserver(ctx, iface)
+	if err != nil {
+		return liveDiscovery{}, err
+	}
+	defer func() {
+		if closeErr := udp.Close(); closeErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("mDNS withdrawal observer close failed: %w", closeErr))
+		}
+	}()
+	if err := writeMDNSQuery(udp, mdnsPTRQuery("_ship._tcp.local.")); err != nil {
+		return liveDiscovery{}, err
+	}
+
+	if err := withdrawAdvertisement(); err != nil {
+		return liveDiscovery{}, fmt.Errorf("mDNS withdrawal action failed: %w", err)
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return out, ctx.Err()
+		default:
+		}
+		readDeadline := time.Now().Add(400 * time.Millisecond)
+		if readDeadline.After(deadline) {
+			readDeadline = deadline
+		}
+		if err := udp.SetReadDeadline(readDeadline); err != nil {
+			return out, fmt.Errorf("mDNS withdrawal deadline failed: %w", err)
+		}
+		buf := make([]byte, 9000)
+		n, _, readErr := udp.ReadFrom(buf)
+		if readErr != nil {
+			if isTimeoutError(readErr) {
+				continue
+			}
+			return out, fmt.Errorf("mDNS withdrawal read failed: %w", readErr)
+		}
+		accountMDNSRecords(&out, parseMDNSRecords(buf[:n]), expectedService)
+	}
+	return out, nil
+}
+
+func openMDNSObserver(ctx context.Context, iface string) (*net.UDPConn, error) {
+	localIP, err := interfaceIPv4(iface)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := listenMDNSPacket(ctx)
+	if err != nil {
+		return nil, err
+	}
+	udp, ok := conn.(*net.UDPConn)
+	if !ok {
+		_ = conn.Close()
+		return nil, errors.New("mDNS listener is not UDP")
+	}
+	if err := udp.SetReadBuffer(64 * 1024); err != nil {
+		_ = udp.Close()
+		return nil, fmt.Errorf("mDNS read buffer setup failed: %w", err)
+	}
+	if err := joinMDNSGroup(udp, iface, localIP); err != nil {
+		_ = udp.Close()
+		return nil, err
+	}
+	return udp, nil
+}
+
+func writeMDNSQuery(udp *net.UDPConn, query []byte) error {
+	group := net.ParseIP(mdnsGroup)
+	if group == nil {
+		return errors.New("mDNS group address invalid")
+	}
+	written, err := udp.WriteTo(query, &net.UDPAddr{IP: group, Port: mdnsPort})
+	if err != nil {
+		return fmt.Errorf("mDNS query write failed: %w", err)
+	}
+	if written != len(query) {
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func accountMDNSRecords(out *liveDiscovery, records []mdnsRecord, expectedService string) {
+	out.Records += len(records)
+	for _, record := range records {
+		if strings.EqualFold(record.Name, "_ship._tcp.local.") || stringsHasSHIP(record.Name) || stringsHasSHIP(record.Value) {
+			out.SHIP++
+		}
+		if expectedService == "" || record.Type != 12 || !strings.EqualFold(record.Name, "_ship._tcp.local.") || !strings.EqualFold(record.Value, expectedService) {
+			continue
+		}
+		if record.TTL == 0 {
+			out.ExpectedGoodbye++
+		} else {
+			out.ExpectedActive++
+		}
+	}
 }
 
 func listenMDNSPacket(ctx context.Context) (net.PacketConn, error) {
@@ -167,45 +288,53 @@ func listenMDNSPacket(ctx context.Context) (net.PacketConn, error) {
 	return listener.ListenPacket(ctx, "udp4", ":5353")
 }
 
-func joinMDNSGroup(conn *net.UDPConn, localIP net.IP) error {
+func joinMDNSGroup(conn *net.UDPConn, ifaceName string, localIP net.IP) error {
 	if localIP == nil {
 		return errors.New("invalid local ip")
 	}
 	packetConn := ipv4.NewPacketConn(conn)
-	ifaces, err := net.Interfaces()
+	iface, err := net.InterfaceByName(strings.TrimSpace(ifaceName))
 	if err != nil {
 		return err
 	}
-	for _, iface := range ifaces {
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, addr := range addrs {
+		var ip net.IP
+		switch value := addr.(type) {
+		case *net.IPNet:
+			ip = value.IP
+		case *net.IPAddr:
+			ip = value.IP
 		}
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-			if ip.Equal(localIP) {
-				if err := packetConn.SetMulticastInterface(&iface); err != nil {
-					return err
-				}
-				if err := packetConn.SetMulticastTTL(255); err != nil {
-					return err
-				}
-				return packetConn.JoinGroup(&iface, &net.UDPAddr{IP: net.ParseIP(mdnsGroup)})
-			}
+		if ip.Equal(localIP) {
+			found = true
+			break
 		}
 	}
-	return errors.New("interface for local ip not found")
+	if !found {
+		return errors.New("interface for local ip not found")
+	}
+	if err := packetConn.SetMulticastInterface(iface); err != nil {
+		return err
+	}
+	if err := packetConn.SetMulticastTTL(255); err != nil {
+		return err
+	}
+	group := net.ParseIP(mdnsGroup)
+	if group == nil {
+		return errors.New("mDNS group address invalid")
+	}
+	return packetConn.JoinGroup(iface, &net.UDPAddr{IP: group})
 }
 
 type mdnsRecord struct {
 	Name  string
 	Type  uint16
+	TTL   uint32
 	Value string
 }
 
@@ -267,6 +396,7 @@ func parseMDNSRecords(packet []byte) []mdnsRecord {
 			return records
 		}
 		typ := binary.BigEndian.Uint16(packet[next : next+2])
+		ttl := binary.BigEndian.Uint32(packet[next+4 : next+8])
 		rdlen := int(binary.BigEndian.Uint16(packet[next+8 : next+10]))
 		rstart := next + 10
 		rend := rstart + rdlen
@@ -286,7 +416,7 @@ func parseMDNSRecords(packet []byte) []mdnsRecord {
 				}
 			}
 		}
-		records = append(records, mdnsRecord{Name: name, Type: typ, Value: value})
+		records = append(records, mdnsRecord{Name: name, Type: typ, TTL: ttl, Value: value})
 		offset = rend
 	}
 	return records
@@ -394,8 +524,4 @@ func defaultLANInterface() string {
 		}
 	}
 	return ""
-}
-
-func countRef(prefix string, count int) string {
-	return fmt.Sprintf("%s-%d", prefix, count)
 }
