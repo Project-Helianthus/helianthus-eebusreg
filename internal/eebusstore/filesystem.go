@@ -66,7 +66,8 @@ type syscallCall struct {
 type syscallHook func(syscallCall) error
 
 type nativeSyscallBackend struct {
-	hook syscallHook
+	hook       syscallHook
+	writeCount func(*os.File, []byte) (int, error)
 }
 
 type fileIdentity struct {
@@ -98,7 +99,10 @@ func newNativeSyscallBackend(hook syscallHook) (*nativeSyscallBackend, error) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		return nil, newStoreError(outcomeFilesystemCapabilityUnavailable, "select_backend", errors.New("unsupported platform"))
 	}
-	return &nativeSyscallBackend{hook: hook}, nil
+	return &nativeSyscallBackend{
+		hook:       hook,
+		writeCount: func(file *os.File, payload []byte) (int, error) { return file.Write(payload) },
+	}, nil
 }
 
 func (backend *nativeSyscallBackend) invoke(point syscallPoint, directory directoryRole, oldName, newName string) error {
@@ -842,7 +846,11 @@ func (backend *nativeSyscallBackend) writeAll(file *os.File, role directoryRole,
 	if err := backend.invoke(point, role, name, ""); err != nil {
 		return err
 	}
-	written, err := file.Write(payload)
+	writeCount := backend.writeCount
+	if writeCount == nil {
+		writeCount = func(file *os.File, payload []byte) (int, error) { return file.Write(payload) }
+	}
+	written, err := writeCount(file, payload)
 	if err != nil {
 		return err
 	}

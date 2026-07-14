@@ -2,7 +2,6 @@ package eebusstore
 
 import (
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -111,11 +110,11 @@ func TestCommitFailuresBeforePublicationPreserveSelectedSlot(t *testing.T) {
 		point syscallPoint
 		err   error
 	}{
-		"generation short write":      {point: pointGenerationWrite, err: io.ErrShortWrite},
+		"generation write error":      {point: pointGenerationWrite, err: errors.New("generation write")},
 		"generation file fsync":       {point: pointGenerationFileFsync, err: errors.New("generation fsync")},
 		"generation rename":           {point: pointGenerationRename, err: errors.New("generation rename")},
 		"generations directory fsync": {point: pointGenerationsFsync, err: errors.New("generations fsync")},
-		"manifest short write":        {point: pointManifestWrite, err: io.ErrShortWrite},
+		"manifest write error":        {point: pointManifestWrite, err: errors.New("manifest write")},
 		"manifest file fsync":         {point: pointManifestFileFsync, err: errors.New("manifest fsync")},
 		"manifest rename":             {point: pointManifestRename, err: errors.New("manifest rename")},
 	}
@@ -137,6 +136,36 @@ func TestCommitFailuresBeforePublicationPreserveSelectedSlot(t *testing.T) {
 			armed = true
 
 			committed := opened.store.commit(state)
+			assertOutcome(t, committed.outcome, outcomeCommitNotPublished)
+			assertManifestSlotsEqual(t, existingManifestSlots(t, root), selectedBefore)
+			closeStore(t, opened)
+		})
+	}
+}
+
+func TestCommitRejectsTrueShortWriteCounts(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		shortOnCall int
+	}{
+		{name: "generation", shortOnCall: 1},
+		{name: "manifest", shortOnCall: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "store")
+			opened := openForTest(t, root, nil, nil)
+			assertOutcome(t, opened.outcome, outcomeOpenedEmpty)
+			selectedBefore := existingManifestSlots(t, root)
+			calls := 0
+			opened.store.backend.writeCount = func(file *os.File, payload []byte) (int, error) {
+				calls++
+				if calls == test.shortOnCall {
+					return len(payload) - 1, nil
+				}
+				return file.Write(payload)
+			}
+
+			committed := opened.store.commit(emptyLogicalState(t))
 			assertOutcome(t, committed.outcome, outcomeCommitNotPublished)
 			assertManifestSlotsEqual(t, existingManifestSlots(t, root), selectedBefore)
 			closeStore(t, opened)
@@ -254,6 +283,61 @@ func TestPrePublicationMaintenanceFailureLeavesSelectionUnchanged(t *testing.T) 
 	committed := opened.store.commit(emptyLogicalState(t))
 	assertOutcome(t, committed.outcome, outcomeMaintenanceFailed)
 	assertManifestSlotsEqual(t, existingManifestSlots(t, root), before)
+	closeStore(t, opened)
+}
+
+func TestPreMaintenancePreservesLowerEpochFutureSlotGeneration(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "store")
+	first := readFixture(t, "generation-v1-empty.json")
+	second := readFixture(t, "generation-v1-child-empty.json")
+	future := testGenerationWithParent(t, 50, 1, testDigestHex(first))
+	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
+	secondRef := testGenerationRef{sequence: 2, sha256: testDigestHex(second), schema: 1}
+	futureRef := testGenerationRef{sequence: 50, sha256: testDigestHex(future), schema: 1}
+	installStoreLayout(
+		t,
+		root,
+		map[uint64][]byte{1: first, 2: second, 50: future},
+		testManifestSlotBytes(2, 1, testManifestPayloadBytes(secondRef, &firstRef, 1)),
+		testManifestSlotBytes(1, 1, testFutureManifestPayload(futureRef, &firstRef)),
+	)
+	var armed bool
+	hook := func(call syscallCall) error {
+		if armed && call.point == pointGenerationWrite {
+			return errors.New("synthetic generation write failure")
+		}
+		return nil
+	}
+	opened := openForTest(t, root, hook, nil)
+	assertOutcome(t, opened.outcome, outcomeOpenedCurrent)
+	armed = true
+
+	committed := opened.store.commit(emptyLogicalState(t))
+	assertOutcome(t, committed.outcome, outcomeCommitNotPublished)
+	if _, err := os.Stat(filepath.Join(root, "generations", testGenerationFilename(50))); err != nil {
+		t.Fatalf("future-slot generation was removed before failed publication: %v", err)
+	}
+	closeStore(t, opened)
+}
+
+func TestMaintenanceFailsBeforeDeletionWhenFutureReferencesAreUnsafe(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "store")
+	opened := openForTest(t, root, nil, nil)
+	assertOutcome(t, opened.outcome, outcomeOpenedEmpty)
+	malformedFuture := []byte("{\"current\":{\"generation\":50,\"generation_file\":\"not-a-generation\",\"generation_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"schema_version\":1},\"manifest_version\":2,\"parent\":null,\"v2_extension\":true}\n")
+	if err := validateCanonicalJSON(malformedFuture, maxManifestPayloadBytes, maxJSONDepth); err != nil {
+		t.Fatalf("future manifest test payload is not canonical: %v", err)
+	}
+	target := manifestSlotFilename(otherManifestSlot(opened.store.selected.slot))
+	testWritePrivateFile(t, filepath.Join(root, target), testManifestSlotBytes(1, 1, malformedFuture))
+	stale := filepath.Join(root, "generations", ".tmp-generation-stale")
+	testWritePrivateFile(t, stale, []byte("temporary\n"))
+
+	committed := opened.store.commit(emptyLogicalState(t))
+	assertOutcome(t, committed.outcome, outcomeMaintenanceFailed)
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatalf("maintenance deleted before proving publication references: %v", err)
+	}
 	closeStore(t, opened)
 }
 

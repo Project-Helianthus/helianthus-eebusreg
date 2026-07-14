@@ -14,7 +14,7 @@ func (opened *store) commit(state stateV1) commitResult {
 		return commitFailure(outcomeCommitNotPublished, "commit_state", errors.New("store is not usable"))
 	}
 	if err := opened.revalidateWriterIdentity(); err != nil {
-		return commitFailure(outcomeCommitNotPublished, "commit_writer_identity", err)
+		return commitResult{outcome: outcomeOf(err), err: err}
 	}
 	if err := validateStateV1(state); err != nil {
 		return commitFailure(outcomeCommitNotPublished, "commit_validate", err)
@@ -157,30 +157,9 @@ func (opened *store) maintenance(point syscallPoint) error {
 	if err := enforceArtifactBound(layout); err != nil {
 		return err
 	}
-	preserve := make(map[string]struct{})
-	for _, raw := range [][]byte{layout.slotA, layout.slotB} {
-		if len(raw) == 0 {
-			continue
-		}
-		envelope, err := decodeManifestSlot(raw)
-		if err != nil {
-			continue
-		}
-		var wire manifestPayloadWire
-		if err := validateCanonicalJSON(envelope.manifestPayload, maxManifestPayloadBytes, maxJSONDepth); err != nil || decodeClosedJSON(envelope.manifestPayload, &wire) != nil {
-			continue
-		}
-		current, err := decodeGenerationReference(wire.Current)
-		if err != nil {
-			continue
-		}
-		preserve[current.generationFile] = struct{}{}
-		if wire.Parent != nil {
-			parent, err := decodeGenerationReference(*wire.Parent)
-			if err == nil {
-				preserve[parent.generationFile] = struct{}{}
-			}
-		}
+	preserve, err := publicationGenerationReferences(layout, true)
+	if err != nil {
+		return err
 	}
 	rootChanged := false
 	rootNames, err := directoryNames(opened.root)

@@ -105,28 +105,83 @@ func TestCorruptCurrentReturnsOnlyInactiveExactParentCandidate(t *testing.T) {
 	}
 }
 
-func TestRecoveryCandidateRequiresChronologicalDirectParent(t *testing.T) {
+func TestCurrentAcceptsMonotonicNoncontiguousExactParent(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "store")
-	parentGeneration := bytes.Replace(
-		readFixture(t, "generation-v1-empty.json"),
-		[]byte(`"sequence":1`),
-		[]byte(`"sequence":3`),
-		1,
-	)
-	missingCurrentRef := testGenerationRef{sequence: 2, sha256: strings.Repeat("a", 64), schema: 1}
-	futureParentRef := testGenerationRef{sequence: 3, sha256: testDigestHex(parentGeneration), schema: 1}
+	first := readFixture(t, "generation-v1-empty.json")
+	parentSequence := uint64(1)
+	parentSHA256 := testDigestHex(first)
+	third, err := encodeGenerationV1(generationV1{
+		metadata: generationMetadata{
+			sequence:       3,
+			parentSequence: &parentSequence,
+			parentSHA256:   &parentSHA256,
+		},
+		state: emptyLogicalState(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRef := testGenerationRef{sequence: 1, sha256: parentSHA256, schema: 1}
+	thirdRef := testGenerationRef{sequence: 3, sha256: testDigestHex(third), schema: 1}
 	installStoreLayout(
 		t,
 		root,
-		map[uint64][]byte{3: parentGeneration},
-		testManifestSlotBytes(1, 1, testManifestPayloadBytes(missingCurrentRef, &futureParentRef, 1)),
+		map[uint64][]byte{1: first, 3: third},
+		testManifestSlotBytes(1, 1, testManifestPayloadBytes(thirdRef, &firstRef, 1)),
+		nil,
+	)
+
+	result := openForTest(t, root, nil, nil)
+	defer closeStore(t, result)
+	assertOutcome(t, result.outcome, outcomeOpenedCurrent)
+}
+
+func TestRecoveryCandidateRejectsParentAtOrAfterCurrent(t *testing.T) {
+	for _, parentSequence := range []uint64{2, 3} {
+		t.Run(fmt.Sprintf("parent_%d", parentSequence), func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "store")
+			parentGeneration := bytes.Replace(
+				readFixture(t, "generation-v1-empty.json"),
+				[]byte(`"sequence":1`),
+				[]byte(fmt.Sprintf(`"sequence":%d`, parentSequence)),
+				1,
+			)
+			missingCurrentRef := testGenerationRef{sequence: 2, sha256: strings.Repeat("a", 64), schema: 1}
+			parentRef := testGenerationRef{sequence: parentSequence, sha256: testDigestHex(parentGeneration), schema: 1}
+			installStoreLayout(
+				t,
+				root,
+				map[uint64][]byte{parentSequence: parentGeneration},
+				testManifestSlotBytes(1, 1, testManifestPayloadBytes(missingCurrentRef, &parentRef, 1)),
+				nil,
+			)
+
+			result := openForTest(t, root, nil, nil)
+			assertOutcome(t, result.outcome, outcomeNoValidCurrent)
+			if result.store != nil || result.state != nil || result.recovery != nil {
+				t.Fatal("non-chronological parent produced active state or recovery evidence")
+			}
+		})
+	}
+}
+
+func TestOversizedExactParentIsInvalidRecoveryEvidence(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "store")
+	parent := bytes.Repeat([]byte{'x'}, maxGenerationBytes+1)
+	currentRef := testGenerationRef{sequence: 2, sha256: strings.Repeat("a", 64), schema: 1}
+	parentRef := testGenerationRef{sequence: 1, sha256: testDigestHex(parent), schema: 1}
+	installStoreLayout(
+		t,
+		root,
+		map[uint64][]byte{1: parent},
+		testManifestSlotBytes(1, 1, testManifestPayloadBytes(currentRef, &parentRef, 1)),
 		nil,
 	)
 
 	result := openForTest(t, root, nil, nil)
 	assertOutcome(t, result.outcome, outcomeNoValidCurrent)
 	if result.store != nil || result.state != nil || result.recovery != nil {
-		t.Fatal("non-chronological parent produced active state or recovery evidence")
+		t.Fatal("oversized exact parent produced active state or recovery evidence")
 	}
 }
 
@@ -313,6 +368,99 @@ func TestOpenRejects129UnreferencedGenerationsAtArtifactBound(t *testing.T) {
 	if result.store != nil || result.state != nil || result.recovery != nil {
 		t.Fatal("129 unreferenced generations returned active state")
 	}
+}
+
+func TestFutureSelectedSlotArtifactLimitPrecedesVersionClassification(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		artifacts int
+		want      outcome
+	}{
+		{name: "at limit", artifacts: 128, want: outcomeUnsupportedFutureVersion},
+		{name: "over limit", artifacts: 129, want: outcomeLayoutRejected},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "store")
+			first := readFixture(t, "generation-v1-empty.json")
+			future := testGenerationWithParent(t, 50, 1, testDigestHex(first))
+			firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
+			futureRef := testGenerationRef{sequence: 50, sha256: testDigestHex(future), schema: 1}
+			installStoreLayout(
+				t,
+				root,
+				map[uint64][]byte{1: first, 50: future},
+				testManifestSlotBytes(1, 1, testManifestPayloadBytes(firstRef, nil, 1)),
+				testManifestSlotBytes(2, 1, testFutureManifestPayload(futureRef, &firstRef)),
+			)
+			addTemporaryGenerationArtifacts(t, root, test.artifacts)
+
+			result := openForTest(t, root, nil, nil)
+			assertOutcome(t, result.outcome, test.want)
+			if result.store != nil || result.state != nil || result.recovery != nil {
+				t.Fatal("future selected slot returned active state")
+			}
+		})
+	}
+}
+
+func TestLowerEpochFutureSlotReferencesAreExcludedFromArtifactCount(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "store")
+	first := readFixture(t, "generation-v1-empty.json")
+	second := readFixture(t, "generation-v1-child-empty.json")
+	future := testGenerationWithParent(t, 50, 1, testDigestHex(first))
+	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
+	secondRef := testGenerationRef{sequence: 2, sha256: testDigestHex(second), schema: 1}
+	futureRef := testGenerationRef{sequence: 50, sha256: testDigestHex(future), schema: 1}
+	installStoreLayout(
+		t,
+		root,
+		map[uint64][]byte{1: first, 2: second, 50: future},
+		testManifestSlotBytes(2, 1, testManifestPayloadBytes(secondRef, &firstRef, 1)),
+		testManifestSlotBytes(1, 1, testFutureManifestPayload(futureRef, &firstRef)),
+	)
+	addTemporaryGenerationArtifacts(t, root, 128)
+
+	result := openForTest(t, root, nil, nil)
+	defer closeStore(t, result)
+	assertOutcome(t, result.outcome, outcomeOpenedCurrent)
+}
+
+func testFutureManifestPayload(current testGenerationRef, parent *testGenerationRef) []byte {
+	parentJSON := "null"
+	if parent != nil {
+		parentJSON = testFutureGenerationRefJSON(*parent)
+	}
+	return []byte(fmt.Sprintf(
+		"{\"current\":%s,\"manifest_version\":2,\"parent\":%s,\"v2_extension\":true}\n",
+		testFutureGenerationRefJSON(current),
+		parentJSON,
+	))
+}
+
+func testFutureGenerationRefJSON(ref testGenerationRef) string {
+	return fmt.Sprintf(
+		"{\"generation\":%d,\"generation_file\":%q,\"generation_sha256\":%q,\"reference_extension\":true,\"schema_version\":%d}",
+		ref.sequence,
+		testGenerationFilename(ref.sequence),
+		ref.sha256,
+		ref.schema,
+	)
+}
+
+func testGenerationWithParent(t *testing.T, sequence, parentSequence uint64, parentSHA256 string) []byte {
+	t.Helper()
+	payload, err := encodeGenerationV1(generationV1{
+		metadata: generationMetadata{
+			sequence:       sequence,
+			parentSequence: &parentSequence,
+			parentSHA256:   &parentSHA256,
+		},
+		state: emptyLogicalState(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }
 
 func installThreeGenerationStore(t *testing.T, root string) {

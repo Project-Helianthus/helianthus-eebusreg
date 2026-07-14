@@ -387,6 +387,50 @@ func TestLockInodeReplacementPreservesSingleWriter(t *testing.T) {
 	holderExited = true
 }
 
+func TestCommitPreservesWriterIdentitySafetyOutcomes(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, string)
+		want   outcome
+	}{
+		{
+			name: "LOCK pathname identity replacement",
+			mutate: func(t *testing.T, root string) {
+				lockPath := filepath.Join(root, "LOCK")
+				if err := os.Remove(lockPath); err != nil {
+					t.Fatal(err)
+				}
+				testWritePrivateFile(t, lockPath, nil)
+			},
+			want: outcomeLayoutRejected,
+		},
+		{
+			name: "root permissions broadened",
+			mutate: func(t *testing.T, root string) {
+				if err := os.Chmod(root, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(root, 0o700) })
+			},
+			want: outcomePermissionsRejected,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "store")
+			opened := openForTest(t, root, nil, nil)
+			assertOutcome(t, opened.outcome, outcomeOpenedEmpty)
+			test.mutate(t, root)
+
+			committed := opened.store.commit(emptyLogicalState(t))
+			assertOutcome(t, committed.outcome, test.want)
+			assertErrorOutcome(t, committed.err, test.want)
+			closeStore(t, opened)
+		})
+	}
+}
+
 func TestStoreLockHelperProcess(t *testing.T) {
 	if os.Getenv("HELIANTHUS_STORE_LOCK_HELPER") != "1" {
 		return

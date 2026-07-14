@@ -359,6 +359,64 @@ func decodeManifestVersion(payload []byte) (uint64, error) {
 	return version, nil
 }
 
+func extractManifestGenerationReferences(payload []byte) ([]generationReference, error) {
+	if err := validateCanonicalJSON(payload, maxManifestPayloadBytes, maxJSONDepth); err != nil {
+		return nil, err
+	}
+	if _, err := decodeManifestVersion(payload); err != nil {
+		return nil, err
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &document); err != nil {
+		return nil, malformed("extract_manifest_references", err)
+	}
+	currentRaw, currentExists := document["current"]
+	parentRaw, parentExists := document["parent"]
+	if !currentExists || !parentExists {
+		return nil, malformed("extract_manifest_references", errors.New("reference fields missing"))
+	}
+	current, err := decodeForwardGenerationReference(currentRaw)
+	if err != nil {
+		return nil, err
+	}
+	references := []generationReference{current}
+	if bytes.Equal(parentRaw, []byte("null")) {
+		return references, nil
+	}
+	parent, err := decodeForwardGenerationReference(parentRaw)
+	if err != nil {
+		return nil, err
+	}
+	return append(references, parent), nil
+}
+
+func decodeForwardGenerationReference(payload []byte) (generationReference, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		return generationReference{}, malformed("extract_manifest_references", err)
+	}
+	required := []string{"generation", "generation_file", "generation_sha256", "schema_version"}
+	for _, name := range required {
+		if _, exists := fields[name]; !exists {
+			return generationReference{}, malformed("extract_manifest_references", errors.New("reference field missing"))
+		}
+	}
+	var wire generationReferenceWire
+	if err := json.Unmarshal(fields["generation"], &wire.Generation); err != nil {
+		return generationReference{}, malformed("extract_manifest_references", err)
+	}
+	if err := json.Unmarshal(fields["generation_file"], &wire.GenerationFile); err != nil {
+		return generationReference{}, malformed("extract_manifest_references", err)
+	}
+	if err := json.Unmarshal(fields["generation_sha256"], &wire.GenerationSHA256); err != nil {
+		return generationReference{}, malformed("extract_manifest_references", err)
+	}
+	if err := json.Unmarshal(fields["schema_version"], &wire.SchemaVersion); err != nil {
+		return generationReference{}, malformed("extract_manifest_references", err)
+	}
+	return decodeGenerationReference(wire)
+}
+
 func encodeManifestPayloadV1(manifest manifestPayloadV1) ([]byte, error) {
 	if manifest.manifestVersion != currentManifestVersion {
 		return nil, malformed("encode_manifest", errors.New("manifest version"))

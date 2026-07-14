@@ -14,10 +14,12 @@ static int helianthus_acl_entry_count(int fd) {
 		return -errno;
 	}
 	acl_entry_t entry;
+	errno = 0;
 	int result = acl_get_entry(acl, ACL_FIRST_ENTRY, &entry);
 	acl_free(acl);
-	if (result == 1) return 1;
-	if (result == 0) return 0;
+	if (result == 0) return 1;
+	if (errno == 0) return 0;
+	if (errno == ENOENT) return 0;
 	return -errno;
 }
 */

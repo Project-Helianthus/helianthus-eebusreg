@@ -155,6 +155,10 @@ func openStore(config storeConfig) openResult {
 		state := cloneStateV1(opened.state)
 		return openResult{outcome: outcomeOpenedEmpty, store: opened, state: &state}
 	}
+	if err := enforceArtifactBound(layout); err != nil {
+		opened.abort()
+		return openFailure(err)
+	}
 
 	selected, err := selectManifestSlots(layout.slotA, layout.slotB)
 	if err != nil {
@@ -167,10 +171,6 @@ func openStore(config storeConfig) openResult {
 	}
 	manifest, err := decodeSelectedManifest(selected.payload)
 	if err != nil {
-		opened.abort()
-		return openFailure(err)
-	}
-	if err := enforceArtifactBound(layout); err != nil {
 		opened.abort()
 		return openFailure(err)
 	}
@@ -369,24 +369,7 @@ func (opened *store) verifyLayout() (layoutSnapshot, error) {
 }
 
 func enforceArtifactBound(layout layoutSnapshot) error {
-	referenced := make(map[string]struct{}, maximumPublicationGenerationRefs)
-	for _, raw := range [][]byte{layout.slotA, layout.slotB} {
-		if len(raw) == 0 {
-			continue
-		}
-		envelope, err := decodeManifestSlot(raw)
-		if err != nil {
-			continue
-		}
-		manifest, err := decodeManifestPayloadV1(envelope.manifestPayload)
-		if err != nil {
-			continue
-		}
-		referenced[manifest.current.generationFile] = struct{}{}
-		if manifest.parent != nil {
-			referenced[manifest.parent.generationFile] = struct{}{}
-		}
-	}
+	referenced, _ := publicationGenerationReferences(layout, false)
 	artifacts := layout.temporaryEntries
 	for _, name := range layout.generationNames {
 		if _, preserved := referenced[name]; !preserved {
@@ -397,6 +380,30 @@ func enforceArtifactBound(layout layoutSnapshot) error {
 		return newStoreError(outcomeLayoutRejected, "enumerate_layout", errors.New("artifact bound"))
 	}
 	return nil
+}
+
+func publicationGenerationReferences(layout layoutSnapshot, requireSafe bool) (map[string]struct{}, error) {
+	referenced := make(map[string]struct{}, maximumPublicationGenerationRefs)
+	for _, raw := range [][]byte{layout.slotA, layout.slotB} {
+		if len(raw) == 0 {
+			continue
+		}
+		envelope, err := decodeManifestSlot(raw)
+		if err != nil {
+			continue
+		}
+		references, err := extractManifestGenerationReferences(envelope.manifestPayload)
+		if err != nil {
+			if requireSafe {
+				return nil, newStoreError(outcomeMalformedState, "extract_manifest_references", err)
+			}
+			continue
+		}
+		for _, reference := range references {
+			referenced[reference.generationFile] = struct{}{}
+		}
+	}
+	return referenced, nil
 }
 
 func (opened *store) loadCurrentGeneration(manifest manifestPayloadV1) (generationV1, error) {
@@ -458,6 +465,9 @@ func (opened *store) classifyRecovery(manifest manifestPayloadV1, currentErr err
 	payload, err := readVerifiedFile(opened.generations, manifest.parent.generationFile, maxGenerationBytes)
 	if err != nil {
 		opened.abort()
+		if outcomeOf(err) == outcomeMalformedState {
+			return openFailure(newStoreError(outcomeNoValidCurrent, "validate_recovery", err))
+		}
 		return openFailure(err)
 	}
 	if sha256Hex(payload) != manifest.parent.generationSHA256 {
@@ -482,7 +492,7 @@ func hasDirectParentChronology(manifest manifestPayloadV1) bool {
 	if manifest.current.generation == 1 {
 		return manifest.parent == nil
 	}
-	return manifest.parent != nil && manifest.parent.generation == manifest.current.generation-1
+	return manifest.parent != nil && manifest.parent.generation < manifest.current.generation
 }
 
 func (opened *store) close() error {
