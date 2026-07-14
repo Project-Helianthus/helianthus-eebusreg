@@ -36,7 +36,9 @@ type Envelope struct{ ID string }
 
 func Observe(id string) Envelope { return Envelope{ID: id} }
 
-const StateReady = "ready"
+const StateObserved = "observed"
+
+const ToolID = "eebus.v1.snapshot.capture"
 `)
 		output, err := runTool(t, tool, root)
 		if err != nil {
@@ -254,6 +256,63 @@ type Envelope struct{}
 		})
 	}
 
+	forbiddenAuthorityExports := []struct {
+		name     string
+		exported string
+	}{
+		{name: "lifecycle", exported: "LifecycleController"},
+		{name: "start", exported: "StartRuntime"},
+		{name: "shutdown", exported: "ShutdownRuntime"},
+		{name: "reconnect", exported: "ReconnectRuntime"},
+		{name: "readiness", exported: "RuntimeReady"},
+		{name: "availability", exported: "AvailabilityGuarantee"},
+		{name: "admin", exported: "AdminPolicy"},
+		{name: "persistence", exported: "PersistentRecord"},
+		{name: "write", exported: "WriteRaw"},
+	}
+	for _, test := range forbiddenAuthorityExports {
+		t.Run("forbidden authority boundary/"+test.name, func(t *testing.T) {
+			root := newSyntheticRepository(t)
+			writeFile(t, root, "eebusraw/forbidden.go", "package eebusraw\n\nfunc "+test.exported+"() {}\n")
+			expectRejected(t, tool, root, "forbidden boundary")
+		})
+	}
+
+	t.Run("forbidden lifecycle method in exported interface", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeFile(t, root, "eebusraw/forbidden.go", "package eebusraw\n\ntype RuntimeV1 interface { Start() }\n")
+		expectRejected(t, tool, root, "forbidden boundary", "Start")
+	})
+
+	t.Run("forbidden direct enbility type", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeFile(t, root, "eebusraw/forbidden.go", `package eebusraw
+
+import shipapi "github.com/enbility/ship-go/api"
+
+type ExternalConnection = shipapi.ShipConnectionDataReaderInterface
+`)
+		expectRejected(t, tool, root, "enbility", "internal")
+	})
+
+	t.Run("forbidden internal facade type", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeFile(t, root, "internal/facade/value.go", "package facade\n\ntype Value struct{}\n")
+		writeFile(t, root, "eebusraw/forbidden.go", `package eebusraw
+
+import "example.test/registry/internal/facade"
+
+type FacadeValue = facade.Value
+`)
+		expectRejected(t, tool, root, "internal implementation")
+	})
+
+	t.Run("forbidden eBUS runtime identifier", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeFile(t, root, "eebusraw/forbidden.go", "package eebusraw\n\nconst ToolID = \"ebus.v1.snapshot.capture\"\n")
+		expectRejected(t, tool, root, "eBUS runtime identifier")
+	})
+
 	unexpectedPackages := []string{"semantic", "registry", "helpers", "codec"}
 	for _, packageName := range unexpectedPackages {
 		t.Run("unexpected public package/"+packageName, func(t *testing.T) {
@@ -273,7 +332,7 @@ type Envelope struct{ ID string }
 
 func Observe(id string) Envelope { return Envelope{ID: id} }
 
-const StateReady = "ready"
+const StateObserved = "observed"
 `)
 	runGit(t, root, nil, "add", "--", "eebusraw/api.go")
 
@@ -290,7 +349,7 @@ const StateReady = "ready"
 
 	writeFile(t, root, "eebusraw/api.go", `package eebusraw
 
-const StateReady = "ready"
+const StateObserved = "observed"
 
 func Observe(id string) Envelope { return Envelope{ID: id} }
 
@@ -421,7 +480,7 @@ func assertCanonicalManifest(t *testing.T, data []byte, fixtureRoot string) {
 		}
 		return got[i].Name < got[j].Name
 	})
-	want := []manifestExport{{Kind: "const", Name: "StateReady"}, {Kind: "func", Name: "Observe"}, {Kind: "type", Name: "Envelope"}}
+	want := []manifestExport{{Kind: "const", Name: "StateObserved"}, {Kind: "func", Name: "Observe"}, {Kind: "type", Name: "Envelope"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected exported API entries: got %#v want %#v", got, want)
 	}

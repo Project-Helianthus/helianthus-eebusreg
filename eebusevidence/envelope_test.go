@@ -390,6 +390,89 @@ func TestInvalidObjectsAreRejected(t *testing.T) {
 	}
 }
 
+func TestEnvelopeV1HashExcludesCaptureMetadata(t *testing.T) {
+	ref := testReferenceV1(t)
+	dataTime := time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC)
+	object := NewObjectV1(ObjectKindIdentity, DigestBytes([]byte("stable-payload")), 14, dataTime)
+	first := NewEnvelopeV1(ref, dataTime, dataTime, []ObjectV1{object})
+	second := NewEnvelopeV1(ref, dataTime.Add(10*time.Minute), dataTime, []ObjectV1{object})
+
+	firstHash, err := first.ComputeDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHash, err := second.ComputeDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstHash != secondHash {
+		t.Fatalf("stable hash included captured_at: %s != %s", firstHash, secondHash)
+	}
+	sealed, err := first.WithDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recomputed, err := sealed.ComputeDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recomputed != firstHash {
+		t.Fatalf("stable hash included data_hash: %s != %s", recomputed, firstHash)
+	}
+}
+
+func TestEnvelopeV1WithDataHashCopiesNestedUnknowns(t *testing.T) {
+	ref := testReferenceV1(t)
+	dataTime := time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC)
+	object := NewObjectV1(ObjectKindUnknown, DigestBytes([]byte("stable-payload")), 14, dataTime)
+	object.Unknown = []eebusraw.UnknownField{{
+		Path:  eebusraw.UnknownPathDocument,
+		Value: eebusraw.OpaqueBytes([]byte("stable-unknown")),
+	}}
+	envelope := NewEnvelopeV1(ref, dataTime, dataTime, []ObjectV1{object})
+	sealed, err := envelope.WithDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.Objects[0].Unknown[0] = eebusraw.UnknownField{
+		Path:  eebusraw.UnknownPathRemote,
+		Value: eebusraw.OpaqueBytes([]byte("mutated")),
+	}
+	if sealed.Objects[0].Unknown[0].Path != eebusraw.UnknownPathDocument {
+		t.Fatal("WithDataHash retained source envelope nested storage")
+	}
+	if err := sealed.Validate(); err != nil {
+		t.Fatalf("sealed envelope changed after source mutation: %v", err)
+	}
+}
+
+func TestEnvelopeContractVersionsRemainIsolated(t *testing.T) {
+	alpha := testReference(t)
+	alpha.Contract = EnvelopeContractV1
+	if err := alpha.Validate(); err == nil {
+		t.Fatal("v1alpha1 reference accepted stable v1 contract")
+	}
+	stable := testReferenceV1(t)
+	stable.Contract = EnvelopeContractV1Alpha1
+	if err := stable.Validate(); err == nil {
+		t.Fatal("stable v1 reference accepted v1alpha1 contract")
+	}
+}
+
+func TestEnvelopeV1ValidationAndFormattingDoNotLeak(t *testing.T) {
+	raw := "raw-secret-v1-label"
+	ref := testReferenceV1(t)
+	ref.Tool = ToolID(raw)
+	err := ref.Validate()
+	if err == nil {
+		t.Fatal("Validate() succeeded for caller-controlled stable tool id")
+	}
+	combined := err.Error() + "\n" + fmt.Sprint(ref) + "\n" + fmt.Sprintf("%+v %#v", ref, ref)
+	if strings.Contains(combined, raw) {
+		t.Fatalf("stable reference validation or formatting leaked raw input: %s", combined)
+	}
+}
+
 func testReference(t *testing.T) Reference {
 	t.Helper()
 	runtimeID, err := eebusraw.RedactID(eebusraw.IDKindLocalSKI, "runtime-secret")
@@ -397,6 +480,15 @@ func testReference(t *testing.T) Reference {
 		t.Fatal(err)
 	}
 	return NewReference(runtimeID, ToolCapture, ScopeWholeRoot, AuthScopeReadRaw)
+}
+
+func testReferenceV1(t *testing.T) ReferenceV1 {
+	t.Helper()
+	runtimeID, err := eebusraw.RedactID(eebusraw.IDKindLocalSKI, "runtime-secret-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewReferenceV1(runtimeID, ToolCapture, ScopeWholeRoot, AuthScopeReadRaw)
 }
 
 func uppercaseDigest(digest string) string {

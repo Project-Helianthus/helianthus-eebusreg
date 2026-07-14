@@ -3,6 +3,7 @@ package eebusraw
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -228,4 +229,108 @@ func TestInvalidContractVersionIsRejected(t *testing.T) {
 	if err := doc.Validate(); err == nil {
 		t.Fatal("Validate() succeeded for unsupported contract")
 	}
+}
+
+func TestIdentityDocumentV1ConstructorAndMarshalDoNotAliasOrReorder(t *testing.T) {
+	localID, err := RedactID(IDKindLocalSKI, "local-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteAID, err := RedactID(IDKindRemoteSKI, "remote-a-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteBID, err := RedactID(IDKindRemoteSKI, "remote-b-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localUnknown := []UnknownField{
+		{Path: UnknownPathRemote, Value: OpaqueBytes([]byte("local-remote"))},
+		{Path: UnknownPathDocument, Value: OpaqueBytes([]byte("local-document"))},
+	}
+	local := EndpointIdentity{Role: EndpointRoleLocal, ID: localID, Unknown: localUnknown}
+	doc := NewIdentityDocumentV1(time.Date(2026, 7, 8, 14, 0, 0, 0, time.UTC), local)
+	local.Unknown[0] = UnknownField{Path: UnknownPathSession, Value: OpaqueBytes([]byte("mutated"))}
+	if doc.Local.Unknown[0].Path != UnknownPathRemote {
+		t.Fatal("constructor retained caller-owned local unknown storage")
+	}
+
+	doc.Remotes = []EndpointIdentity{
+		{Role: EndpointRoleRemote, ID: remoteBID},
+		{Role: EndpointRoleRemote, ID: remoteAID},
+	}
+	doc.Sessions = []SessionIdentity{
+		{ID: mustRedactID(t, IDKindSession, "session-b-v1"), RemoteID: remoteBID, State: SessionStateDisconnected},
+		{ID: mustRedactID(t, IDKindSession, "session-a-v1"), RemoteID: remoteAID, State: SessionStateObserved},
+	}
+	doc.Unknown = []UnknownField{
+		{Path: UnknownPathRemote, Value: OpaqueBytes([]byte("document-remote"))},
+		{Path: UnknownPathDocument, Value: OpaqueBytes([]byte("document-document"))},
+	}
+	beforeRemotes := append([]EndpointIdentity(nil), doc.Remotes...)
+	beforeSessions := append([]SessionIdentity(nil), doc.Sessions...)
+	beforeUnknown := append([]UnknownField(nil), doc.Unknown...)
+	beforeLocalUnknown := append([]UnknownField(nil), doc.Local.Unknown...)
+
+	if _, err := json.Marshal(doc); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(doc.Remotes, beforeRemotes) || !reflect.DeepEqual(doc.Sessions, beforeSessions) || !reflect.DeepEqual(doc.Unknown, beforeUnknown) || !reflect.DeepEqual(doc.Local.Unknown, beforeLocalUnknown) {
+		t.Fatal("canonical identity marshal mutated caller-visible collection order")
+	}
+}
+
+func TestIdentityDocumentV1ValidationAndFormattingDoNotLeak(t *testing.T) {
+	raw := "raw-secret-v1-state"
+	localID := mustRedactID(t, IDKindLocalSKI, "local-v1")
+	doc := NewIdentityDocumentV1(time.Now(), EndpointIdentity{
+		Role:    EndpointRoleLocal,
+		ID:      localID,
+		Pairing: PairingObservation{State: PairingState(raw)},
+	})
+	err := doc.Validate()
+	if err == nil {
+		t.Fatal("Validate() succeeded for caller-controlled pairing state")
+	}
+	combined := err.Error() + "\n" + fmt.Sprint(doc) + "\n" + fmt.Sprintf("%+v %#v", doc, doc)
+	if strings.Contains(combined, raw) {
+		t.Fatalf("stable identity validation or formatting leaked raw input: %s", combined)
+	}
+
+	doc = NewIdentityDocumentV1(time.Now(), EndpointIdentity{Role: EndpointRoleLocal, ID: localID})
+	doc.Sessions = []SessionIdentity{{
+		ID:       mustRedactID(t, IDKindSession, "session-v1"),
+		RemoteID: mustRedactID(t, IDKindRemoteSKI, "remote-v1"),
+		State:    SessionState(raw),
+	}}
+	err = doc.Validate()
+	if err == nil {
+		t.Fatal("Validate() succeeded for caller-controlled session state")
+	}
+	if strings.Contains(err.Error(), raw) {
+		t.Fatalf("stable identity validation leaked raw session state: %v", err)
+	}
+}
+
+func TestIdentityContractVersionsRemainIsolated(t *testing.T) {
+	local := EndpointIdentity{Role: EndpointRoleLocal, ID: mustRedactID(t, IDKindLocalSKI, "local-contract")}
+	alpha := NewIdentityDocument(time.Now(), local)
+	alpha.Contract = IdentityContractV1
+	if err := alpha.Validate(); err == nil {
+		t.Fatal("v1alpha1 identity accepted stable v1 contract")
+	}
+	stable := NewIdentityDocumentV1(time.Now(), local)
+	stable.Contract = IdentityContractV1Alpha1
+	if err := stable.Validate(); err == nil {
+		t.Fatal("stable v1 identity accepted v1alpha1 contract")
+	}
+}
+
+func mustRedactID(t *testing.T, kind IDKind, raw string) RedactedID {
+	t.Helper()
+	id, err := RedactID(kind, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

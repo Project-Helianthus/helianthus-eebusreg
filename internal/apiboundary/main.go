@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -40,6 +41,16 @@ var forbiddenExportFragments = []string{
 	"TrustStore",
 	"TrustMutation",
 	"PairingWindow",
+	"Lifecycle",
+	"Start",
+	"Shutdown",
+	"Reconnect",
+	"Ready",
+	"Readiness",
+	"Availability",
+	"Admin",
+	"Persist",
+	"Write",
 }
 
 var mutationVerbs = []string{
@@ -382,6 +393,9 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 			if !internal && strings.Contains(importPath, "github.com/enbility") {
 				violations = append(violations, at(fset, imp.Pos(), rel, "direct enbility imports are allowed only under internal/"))
 			}
+			if !internal && !testFile && strings.HasPrefix(importPath, modulePath+"/internal/") {
+				violations = append(violations, at(fset, imp.Pos(), rel, "public API packages must not import internal implementation types"))
+			}
 			for _, forbidden := range forbiddenImports {
 				if strings.Contains(importPath, forbidden) {
 					violations = append(violations, at(fset, imp.Pos(), rel, "gateway or consumer imports are not allowed in this repo"))
@@ -391,17 +405,26 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 		if internal {
 			return nil
 		}
+		if !testFile {
+			checkCrossRuntimeStrings(fset, rel, file, &violations)
+		}
 		for _, decl := range file.Decls {
 			switch declaration := decl.(type) {
 			case *ast.FuncDecl:
 				if declaration.Name != nil {
 					checkExportedName(fset, rel, declaration.Name, &violations)
+					if declaration.Name.IsExported() {
+						checkExportedTypeSurface(fset, rel, declaration.Type, &violations)
+					}
 				}
 			case *ast.GenDecl:
 				for _, spec := range declaration.Specs {
 					switch typed := spec.(type) {
 					case *ast.TypeSpec:
 						checkExportedName(fset, rel, typed.Name, &violations)
+						if typed.Name.IsExported() {
+							checkExportedTypeSurface(fset, rel, typed.Type, &violations)
+						}
 					case *ast.ValueSpec:
 						for _, name := range typed.Names {
 							checkExportedName(fset, rel, name, &violations)
@@ -729,6 +752,30 @@ func checkExportedName(fset *token.FileSet, rel string, ident *ast.Ident, violat
 	if looksLikeMutationSurface(name) {
 		*violations = append(*violations, at(fset, ident.Pos(), rel, "public API exposes premature trust or pairing mutation surface"))
 	}
+}
+
+func checkExportedTypeSurface(fset *token.FileSet, rel string, node ast.Node, violations *[]string) {
+	ast.Inspect(node, func(current ast.Node) bool {
+		ident, ok := current.(*ast.Ident)
+		if ok {
+			checkExportedName(fset, rel, ident, violations)
+		}
+		return true
+	})
+}
+
+func checkCrossRuntimeStrings(fset *token.FileSet, rel string, file *ast.File, violations *[]string) {
+	ast.Inspect(file, func(node ast.Node) bool {
+		literal, ok := node.(*ast.BasicLit)
+		if !ok || literal.Kind != token.STRING {
+			return true
+		}
+		value, err := strconv.Unquote(literal.Value)
+		if err == nil && strings.HasPrefix(strings.TrimSpace(value), "ebus.v1.") {
+			*violations = append(*violations, at(fset, literal.Pos(), rel, "public API exposes forbidden eBUS runtime identifier"))
+		}
+		return true
+	})
 }
 
 func looksLikeMutationSurface(name string) bool {

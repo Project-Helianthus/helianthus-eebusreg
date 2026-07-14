@@ -17,10 +17,13 @@ import (
 
 type ContractVersion string
 
-const EnvelopeContractV1Alpha1 ContractVersion = "helianthus.eebus.raw.evidence-envelope.v1alpha1"
+const (
+	EnvelopeContractV1Alpha1 ContractVersion = "helianthus.eebus.raw.evidence-envelope.v1alpha1"
+	EnvelopeContractV1       ContractVersion = "helianthus.eebus.raw.evidence-envelope.v1"
+)
 
 func (c ContractVersion) Validate() error {
-	if c != EnvelopeContractV1Alpha1 {
+	if c != EnvelopeContractV1Alpha1 && c != EnvelopeContractV1 {
 		return errors.New("unsupported evidence contract")
 	}
 	return nil
@@ -242,8 +245,8 @@ func (r Reference) Validate() error {
 	if !validSHA256Digest(r.Runtime.Digest) {
 		return errors.New("runtime digest must use lowercase sha256:<64 hex chars>")
 	}
-	if err := r.Contract.Validate(); err != nil {
-		return fmt.Errorf("contract: %w", err)
+	if r.Contract != EnvelopeContractV1Alpha1 {
+		return errors.New("contract: unsupported evidence contract")
 	}
 	if err := r.Tool.Validate(); err != nil {
 		return fmt.Errorf("tool: %w", err)
