@@ -123,7 +123,19 @@ type liveServiceHandler struct {
 	withdrawal       *postWithdrawalTracker
 }
 
+type liveProofDependencies struct {
+	startService func(*liveServiceHandler) error
+}
+
 func runLiveVR940fProof(ctx context.Context, opts liveOptions) liveProofResult {
+	return runLiveVR940fProofWithDependencies(ctx, opts, liveProofDependencies{
+		startService: func(handler *liveServiceHandler) error {
+			return handler.start()
+		},
+	})
+}
+
+func runLiveVR940fProofWithDependencies(ctx context.Context, opts liveOptions, dependencies liveProofDependencies) liveProofResult {
 	ctx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
@@ -163,7 +175,7 @@ func runLiveVR940fProof(ctx context.Context, opts liveOptions) liveProofResult {
 	if err := handler.approveExpectedRemote(); err != nil {
 		return liveProofFailures("expected_remote_approval_failed")
 	}
-	if err := handler.start(); err != nil {
+	if dependencies.startService == nil || dependencies.startService(handler) != nil {
 		return liveProofFailures("live_service_start_failed")
 	}
 	publisher, err := startLANSHIPPublisher(

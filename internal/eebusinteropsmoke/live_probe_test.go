@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"reflect"
 	"testing"
@@ -85,18 +86,64 @@ func TestStartLANSHIPPublisherAnnouncesCustomLANSHIPService(t *testing.T) {
 }
 
 func TestLiveSmokeFailsClosedWhenLocalAdvertisementProbeIsUnavailable(t *testing.T) {
-	result := runLiveVR940fSmoke(context.Background(), liveOptions{
+	startCalls := 0
+	result := runLiveVR940fProofWithDependencies(context.Background(), liveOptions{
 		Interface: "definitely-missing-interface",
 		Timeout:   time.Millisecond,
 		Port:      4712,
 		RemoteSKI: "0123456789abcdef0123456789abcdef01234567",
+	}, liveProofDependencies{
+		startService: func(*liveServiceHandler) error {
+			startCalls++
+			return nil
+		},
 	})
-	if result.ID != caseLive || result.Status != resultFail {
-		t.Fatalf("live smoke result = %+v", result)
+	live := liveCaseResult(t, result)
+	if startCalls != 1 {
+		t.Fatalf("service start calls = %d, want 1", startCalls)
 	}
-	if result.Error != "mdns_probe_unavailable" {
-		t.Fatalf("error = %q, want mdns_probe_unavailable", result.Error)
+	if live.ID != caseLive || live.Status != resultFail {
+		t.Fatalf("live smoke result = %+v", live)
 	}
+	if live.Error != "mdns_probe_unavailable" {
+		t.Fatalf("error = %q, want mdns_probe_unavailable", live.Error)
+	}
+}
+
+func TestLiveSmokeServiceStartFailurePrecedesAdvertisementProbeFailure(t *testing.T) {
+	startCalls := 0
+	result := runLiveVR940fProofWithDependencies(context.Background(), liveOptions{
+		Interface: "definitely-missing-interface",
+		Timeout:   time.Millisecond,
+		Port:      4712,
+		RemoteSKI: "0123456789abcdef0123456789abcdef01234567",
+	}, liveProofDependencies{
+		startService: func(*liveServiceHandler) error {
+			startCalls++
+			return errors.New("injected service start failure")
+		},
+	})
+	live := liveCaseResult(t, result)
+	if startCalls != 1 {
+		t.Fatalf("service start calls = %d, want 1", startCalls)
+	}
+	if live.ID != caseLive || live.Status != resultFail {
+		t.Fatalf("live smoke result = %+v", live)
+	}
+	if live.Error != "live_service_start_failed" {
+		t.Fatalf("error = %q, want live_service_start_failed", live.Error)
+	}
+}
+
+func liveCaseResult(t *testing.T, result liveProofResult) caseResult {
+	t.Helper()
+	for _, item := range result.Cases {
+		if item.ID == caseLive {
+			return item
+		}
+	}
+	t.Fatal("live proof result is missing G17")
+	return caseResult{}
 }
 
 func TestParseMDNSRecordsFindsSHIPPtr(t *testing.T) {
