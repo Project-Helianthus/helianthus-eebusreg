@@ -86,6 +86,9 @@ type manifestEnvelopeWire struct {
 
 func decodeGenerationV1(payload []byte) (generationV1, error) {
 	var result generationV1
+	if err := preflightGenerationArrayBounds(payload); err != nil {
+		return result, err
+	}
 	if err := validateCanonicalJSON(payload, maxGenerationBytes, maxJSONDepth); err != nil {
 		return result, err
 	}
@@ -113,6 +116,152 @@ func decodeGenerationV1(payload []byte) (generationV1, error) {
 		return generationV1{}, malformed("decode_generation", errors.New("noncanonical bytes"))
 	}
 	return result, nil
+}
+
+func preflightGenerationArrayBounds(payload []byte) error {
+	if len(payload) == 0 || len(payload) > maxGenerationBytes {
+		return malformed("preflight_generation", errors.New("document size"))
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return malformed("preflight_generation", errors.New("generation object"))
+	}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return malformed("preflight_generation", err)
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return malformed("preflight_generation", errors.New("generation key"))
+		}
+		switch key {
+		case "local_identity":
+			if err := preflightLocalIdentity(decoder); err != nil {
+				return malformed("preflight_generation", err)
+			}
+		case "remote_identities":
+			if err := preflightBoundedArray(decoder, maxRemoteIdentityCount, 2); err != nil {
+				return malformed("preflight_generation", err)
+			}
+		default:
+			if err := skipPreflightJSONValue(decoder, 2); err != nil {
+				return malformed("preflight_generation", err)
+			}
+		}
+	}
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim('}') {
+		return malformed("preflight_generation", errors.New("generation object end"))
+	}
+	return nil
+}
+
+func preflightLocalIdentity(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if token == nil {
+		return nil
+	}
+	if token != json.Delim('{') {
+		return errors.New("local identity object")
+	}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return errors.New("local identity key")
+		}
+		if key == "certificate_chain_der" {
+			if err := preflightBoundedArray(decoder, maxCertificateCount, 3); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := skipPreflightJSONValue(decoder, 3); err != nil {
+			return err
+		}
+	}
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim('}') {
+		return errors.New("local identity object end")
+	}
+	return nil
+}
+
+func preflightBoundedArray(decoder *json.Decoder, maximum, depth int) error {
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('[') {
+		return errors.New("bounded array")
+	}
+	count := 0
+	for decoder.More() {
+		count++
+		if count > maximum {
+			return errors.New("array count bound")
+		}
+		if err := skipPreflightJSONValue(decoder, depth+1); err != nil {
+			return err
+		}
+	}
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim(']') {
+		return errors.New("bounded array end")
+	}
+	return nil
+}
+
+func skipPreflightJSONValue(decoder *json.Decoder, depth int) error {
+	if depth > maxJSONDepth {
+		return errors.New("nesting limit")
+	}
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		for decoder.More() {
+			key, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			if _, ok := key.(string); !ok {
+				return errors.New("object key")
+			}
+			if err := skipPreflightJSONValue(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil || end != json.Delim('}') {
+			return errors.New("object end")
+		}
+	case '[':
+		for decoder.More() {
+			if err := skipPreflightJSONValue(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil || end != json.Delim(']') {
+			return errors.New("array end")
+		}
+	default:
+		return errors.New("unexpected delimiter")
+	}
+	return nil
 }
 
 func encodeGenerationV1(generation generationV1) ([]byte, error) {
@@ -192,6 +341,22 @@ func decodeManifestPayloadV1(payload []byte) (manifestPayloadV1, error) {
 		return manifestPayloadV1{}, malformed("decode_manifest", errors.New("noncanonical bytes"))
 	}
 	return result, nil
+}
+
+func decodeManifestVersion(payload []byte) (uint64, error) {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &document); err != nil {
+		return 0, malformed("decode_manifest_version", err)
+	}
+	raw, exists := document["manifest_version"]
+	if !exists {
+		return 0, malformed("decode_manifest_version", errors.New("manifest version missing"))
+	}
+	var version uint64
+	if err := json.Unmarshal(raw, &version); err != nil {
+		return 0, malformed("decode_manifest_version", err)
+	}
+	return version, nil
 }
 
 func encodeManifestPayloadV1(manifest manifestPayloadV1) ([]byte, error) {

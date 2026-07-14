@@ -23,21 +23,30 @@ import (
 type syscallPoint string
 
 const (
-	pointBootstrapParentFsync     syscallPoint = "bootstrap_parent_fsync"
-	pointBootstrapLockFsync       syscallPoint = "bootstrap_lock_fsync"
-	pointBootstrapRootFsync       syscallPoint = "bootstrap_root_fsync"
-	pointCapabilityACL            syscallPoint = "capability_acl"
-	pointCapabilityDirectoryFsync syscallPoint = "capability_directory_fsync"
-	pointGenerationWrite          syscallPoint = "generation_write"
-	pointGenerationFileFsync      syscallPoint = "generation_file_fsync"
-	pointGenerationRename         syscallPoint = "generation_rename"
-	pointGenerationsFsync         syscallPoint = "generations_fsync"
-	pointManifestWrite            syscallPoint = "manifest_write"
-	pointManifestFileFsync        syscallPoint = "manifest_file_fsync"
-	pointManifestRename           syscallPoint = "manifest_rename"
-	pointPublicationRootFsync     syscallPoint = "publication_root_fsync"
-	pointPreMaintenanceRemove     syscallPoint = "pre_maintenance_remove"
-	pointPostMaintenanceRemove    syscallPoint = "post_maintenance_remove"
+	pointBootstrapParentFsync        syscallPoint = "bootstrap_parent_fsync"
+	pointBootstrapLockFsync          syscallPoint = "bootstrap_lock_fsync"
+	pointBootstrapRootFsync          syscallPoint = "bootstrap_root_fsync"
+	pointCapabilityBackendPolicy     syscallPoint = "capability_backend_policy"
+	pointCapabilityStableIdentity    syscallPoint = "capability_stable_identity"
+	pointCapabilityAtomicReplacement syscallPoint = "capability_atomic_replacement"
+	pointCapabilityProcessLock       syscallPoint = "capability_process_lock"
+	pointCapabilityNoFollowCreate    syscallPoint = "capability_nofollow_create"
+	pointCapabilityFileFsync         syscallPoint = "capability_file_fsync"
+	pointCapabilityDirectoryFsync    syscallPoint = "capability_directory_fsync"
+	pointCapabilityACL               syscallPoint = "capability_acl"
+	pointCapabilityCleanup           syscallPoint = "capability_cleanup"
+	pointGenerationWrite             syscallPoint = "generation_write"
+	pointGenerationFileFsync         syscallPoint = "generation_file_fsync"
+	pointGenerationRename            syscallPoint = "generation_rename"
+	pointGenerationsFsync            syscallPoint = "generations_fsync"
+	pointManifestWrite               syscallPoint = "manifest_write"
+	pointManifestFileFsync           syscallPoint = "manifest_file_fsync"
+	pointManifestRename              syscallPoint = "manifest_rename"
+	pointPublicationRootFsync        syscallPoint = "publication_root_fsync"
+	pointPreMaintenanceRemove        syscallPoint = "pre_maintenance_remove"
+	pointPreMaintenanceFsync         syscallPoint = "pre_maintenance_fsync"
+	pointPostMaintenanceRemove       syscallPoint = "post_maintenance_remove"
+	pointPostMaintenanceFsync        syscallPoint = "post_maintenance_fsync"
 )
 
 type directoryRole string
@@ -66,9 +75,14 @@ type fileIdentity struct {
 }
 
 type preparedRoot struct {
-	root     *os.File
-	lock     *os.File
-	identity fileIdentity
+	configuredPath   string
+	parent           *os.File
+	rootName         string
+	root             *os.File
+	lock             *os.File
+	rootIdentity     fileIdentity
+	lockIdentity     fileIdentity
+	bootstrapDurable bool
 }
 
 var localWriters = struct {
@@ -101,15 +115,23 @@ func (backend *nativeSyscallBackend) prepareRoot(path string) (preparedRoot, err
 	}
 	parentPath := filepath.Dir(path)
 	rootName := filepath.Base(path)
-	canonicalParent, err := filepath.EvalSymlinks(parentPath)
+	parent, err := openAbsoluteDirectoryNoFollow(parentPath)
 	if err != nil {
 		return prepared, newStoreError(outcomePathRejected, "open_parent", err)
 	}
-	parent, err := openAbsoluteDirectoryNoFollow(canonicalParent)
-	if err != nil {
-		return prepared, newStoreError(outcomePathRejected, "open_parent", err)
-	}
-	defer parent.Close()
+	cleanup := true
+	defer func() {
+		if !cleanup {
+			return
+		}
+		if prepared.lock != nil {
+			_ = prepared.lock.Close()
+		}
+		if prepared.root != nil {
+			_ = prepared.root.Close()
+		}
+		_ = parent.Close()
+	}()
 
 	created := false
 	var pathStat unix.Stat_t
@@ -129,24 +151,15 @@ func (backend *nativeSyscallBackend) prepareRoot(path string) (preparedRoot, err
 	if err != nil {
 		return prepared, remapRootSafety(err)
 	}
+	prepared.configuredPath = path
+	prepared.parent = parent
+	prepared.rootName = rootName
 	prepared.root = root
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = root.Close()
-		}
-	}()
 
 	if created {
-		if err := backend.invoke(pointBootstrapParentFsync, directoryRoot, "", ""); err != nil {
-			return preparedRoot{}, newStoreError(outcomeBootstrapDurabilityUnknown, "bootstrap_parent_fsync", err)
+		if err := backend.syncBootstrapParent(parent); err != nil {
+			return preparedRoot{}, err
 		}
-		if err := parent.Sync(); err != nil {
-			return preparedRoot{}, newStoreError(outcomeBootstrapDurabilityUnknown, "bootstrap_parent_fsync", err)
-		}
-	}
-	if err := backend.probeCapabilities(root); err != nil {
-		return preparedRoot{}, err
 	}
 
 	lock, err := openVerifiedAtOptional(root, "LOCK", false, true)
@@ -154,28 +167,175 @@ func (backend *nativeSyscallBackend) prepareRoot(path string) (preparedRoot, err
 		return preparedRoot{}, err
 	}
 	if lock == nil {
-		if err := backend.resumeBootstrap(root); err != nil {
-			return preparedRoot{}, err
-		}
-		lock, _, err = openVerifiedAt(root, "LOCK", false, true)
+		safe, err := inspectBootstrapSubset(root)
 		if err != nil {
 			return preparedRoot{}, err
 		}
-	}
-	info, err := lock.Stat()
-	if err != nil || info.Size() != 0 {
-		_ = lock.Close()
-		return preparedRoot{}, newStoreError(outcomeLayoutRejected, "verify_lock", err)
-	}
-	identity, err := descriptorIdentity(root)
-	if err != nil {
-		_ = lock.Close()
-		return preparedRoot{}, newStoreError(outcomeFilesystemCapabilityUnavailable, "root_identity", err)
+		if !safe {
+			return preparedRoot{}, newStoreError(outcomeLayoutRejected, "resume_bootstrap", errors.New("non-bootstrap store"))
+		}
+		lock, err = backend.completeBootstrap(parent, root, nil, created)
+		if err != nil {
+			return preparedRoot{}, err
+		}
+		prepared.bootstrapDurable = true
 	}
 	prepared.lock = lock
-	prepared.identity = identity
+	if err := verifyEmptyLock(lock); err != nil {
+		_ = lock.Close()
+		prepared.lock = nil
+		return preparedRoot{}, newStoreError(outcomeLayoutRejected, "verify_lock", err)
+	}
+	rootIdentity, err := descriptorIdentity(root)
+	if err != nil {
+		return preparedRoot{}, newStoreError(outcomeFilesystemCapabilityUnavailable, "root_identity", err)
+	}
+	lockIdentity, err := descriptorIdentity(lock)
+	if err != nil {
+		return preparedRoot{}, newStoreError(outcomeFilesystemCapabilityUnavailable, "lock_identity", err)
+	}
+	prepared.rootIdentity = rootIdentity
+	prepared.lockIdentity = lockIdentity
 	cleanup = false
 	return prepared, nil
+}
+
+func (backend *nativeSyscallBackend) syncBootstrapParent(parent *os.File) error {
+	if err := backend.invoke(pointBootstrapParentFsync, directoryRoot, "", ""); err != nil {
+		return newStoreError(outcomeBootstrapDurabilityUnknown, "bootstrap_parent_fsync", err)
+	}
+	if err := parent.Sync(); err != nil {
+		return newStoreError(outcomeBootstrapDurabilityUnknown, "bootstrap_parent_fsync", err)
+	}
+	return nil
+}
+
+func inspectBootstrapSubset(root *os.File) (bool, error) {
+	names, err := directoryNames(root)
+	if err != nil {
+		return false, newStoreError(outcomeIOFailed, "inspect_bootstrap", err)
+	}
+	for _, name := range names {
+		switch name {
+		case "LOCK":
+			lock, _, err := openVerifiedAt(root, name, false, true)
+			if err != nil {
+				return false, err
+			}
+			err = verifyEmptyLock(lock)
+			_ = lock.Close()
+			if err != nil {
+				return false, newStoreError(outcomeLayoutRejected, "verify_lock", err)
+			}
+		case "generations":
+			generations, _, err := openVerifiedAt(root, name, true, false)
+			if err != nil {
+				return false, err
+			}
+			generationNames, readErr := directoryNames(generations)
+			_ = generations.Close()
+			if readErr != nil {
+				return false, newStoreError(outcomeIOFailed, "inspect_bootstrap", readErr)
+			}
+			if len(generationNames) != 0 {
+				return false, nil
+			}
+		default:
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (backend *nativeSyscallBackend) completeBootstrap(parent, root, heldLock *os.File, parentAlreadySynced bool) (*os.File, error) {
+	safe, err := inspectBootstrapSubset(root)
+	if err != nil {
+		return nil, err
+	}
+	if !safe {
+		return nil, newStoreError(outcomeLayoutRejected, "resume_bootstrap", errors.New("non-bootstrap store"))
+	}
+	if !parentAlreadySynced {
+		if err := backend.syncBootstrapParent(parent); err != nil {
+			return nil, err
+		}
+	}
+
+	generations, err := openVerifiedAtOptional(root, "generations", true, false)
+	if err != nil {
+		return nil, err
+	}
+	if generations == nil {
+		if err := unix.Mkdirat(int(root.Fd()), "generations", 0o700); err != nil {
+			return nil, newStoreError(outcomeIOFailed, "create_generations", err)
+		}
+		generations, _, err = openVerifiedAt(root, "generations", true, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+	_ = generations.Close()
+
+	lock := heldLock
+	ownsLock := false
+	if lock == nil {
+		lockFD, openErr := unix.Openat(int(root.Fd()), "LOCK", unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+		if errors.Is(openErr, unix.EEXIST) {
+			lock, _, openErr = openVerifiedAt(root, "LOCK", false, true)
+		} else if openErr == nil {
+			lock = os.NewFile(uintptr(lockFD), "LOCK")
+			openErr = verifyOpenedDescriptor(lock, false)
+		}
+		ownsLock = lock != nil
+		if openErr != nil {
+			if lock != nil {
+				_ = lock.Close()
+			}
+			return nil, newStoreError(outcomeIOFailed, "create_lock", openErr)
+		}
+	}
+	if err := verifyEmptyLock(lock); err != nil {
+		if ownsLock {
+			_ = lock.Close()
+		}
+		return nil, newStoreError(outcomeLayoutRejected, "verify_lock", err)
+	}
+	if err := backend.invoke(pointBootstrapLockFsync, directoryRoot, "LOCK", ""); err != nil {
+		if ownsLock {
+			_ = lock.Close()
+		}
+		return nil, newStoreError(outcomeBootstrapDurabilityUnknown, "bootstrap_lock_fsync", err)
+	}
+	if err := lock.Sync(); err != nil {
+		if ownsLock {
+			_ = lock.Close()
+		}
+		return nil, newStoreError(outcomeBootstrapDurabilityUnknown, "bootstrap_lock_fsync", err)
+	}
+	if err := backend.invoke(pointBootstrapRootFsync, directoryRoot, "", ""); err != nil {
+		if ownsLock {
+			_ = lock.Close()
+		}
+		return nil, newStoreError(outcomeBootstrapDurabilityUnknown, "bootstrap_root_fsync", err)
+	}
+	if err := root.Sync(); err != nil {
+		if ownsLock {
+			_ = lock.Close()
+		}
+		return nil, newStoreError(outcomeBootstrapDurabilityUnknown, "bootstrap_root_fsync", err)
+	}
+	return lock, nil
+}
+
+func verifyEmptyLock(lock *os.File) error {
+	info, err := lock.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() != 0 {
+		return errors.New("LOCK is not empty")
+	}
+	return nil
 }
 
 func validateRootPath(path string) error {
@@ -221,76 +381,248 @@ func remapRootSafety(err error) error {
 	return err
 }
 
-func (backend *nativeSyscallBackend) probeCapabilities(root *os.File) error {
-	if err := backend.invoke(pointCapabilityDirectoryFsync, directoryRoot, "", ""); err != nil {
-		return newStoreError(outcomeFilesystemCapabilityUnavailable, "probe_directory_fsync", err)
+type probeArtifact struct {
+	directory *os.File
+	role      directoryRole
+	name      string
+}
+
+type capabilityProbe struct {
+	backend   *nativeSyscallBackend
+	artifacts []probeArtifact
+}
+
+func (backend *nativeSyscallBackend) probeCapabilities(root, generations *os.File) (result error) {
+	probe := capabilityProbe{backend: backend}
+	defer func() {
+		if cleanupErr := probe.cleanup(); cleanupErr != nil {
+			result = capabilityUnavailable("probe_cleanup", cleanupErr)
+		}
+	}()
+
+	if err := backend.invoke(pointCapabilityBackendPolicy, directoryRoot, "", ""); err != nil {
+		return capabilityUnavailable("probe_backend_policy", err)
 	}
-	if err := root.Sync(); err != nil {
-		return newStoreError(outcomeFilesystemCapabilityUnavailable, "probe_directory_fsync", err)
+	if err := qualifyFilesystemPolicy(int(root.Fd())); err != nil {
+		return capabilityUnavailable("probe_backend_policy", err)
+	}
+	rootIdentity, err := descriptorIdentity(root)
+	if err != nil {
+		return capabilityUnavailable("probe_stable_identity", err)
+	}
+	generationIdentity, err := descriptorIdentity(generations)
+	if err != nil {
+		return capabilityUnavailable("probe_stable_identity", err)
+	}
+	if rootIdentity.device == 0 || rootIdentity.inode == 0 || generationIdentity.device == 0 || generationIdentity.inode == 0 || rootIdentity.device != generationIdentity.device {
+		return capabilityUnavailable("probe_stable_identity", errors.New("unstable directory identity"))
+	}
+
+	if err := backend.invoke(pointCapabilityProcessLock, directoryRoot, "LOCK", ""); err != nil {
+		return capabilityUnavailable("probe_process_lock", err)
 	}
 	if err := backend.invoke(pointCapabilityACL, directoryRoot, "", ""); err != nil {
-		return newStoreError(outcomeFilesystemCapabilityUnavailable, "probe_acl", err)
+		return capabilityUnavailable("probe_acl", err)
 	}
-	additional, err := inspectAdditionalAccess(int(root.Fd()))
-	if err != nil {
-		return newStoreError(outcomeFilesystemCapabilityUnavailable, "probe_acl", err)
+	for _, directory := range []*os.File{root, generations} {
+		additional, err := inspectAdditionalAccess(int(directory.Fd()))
+		if err != nil {
+			return capabilityUnavailable("probe_acl", err)
+		}
+		if additional {
+			return newStoreError(outcomePermissionsRejected, "probe_acl", errors.New("additional access"))
+		}
 	}
-	if additional {
-		return newStoreError(outcomePermissionsRejected, "probe_acl", errors.New("additional access"))
+
+	if err := probe.probeDirectory(root, directoryRoot, ".tmp-manifest-", true); err != nil {
+		return err
+	}
+	if err := probe.probeDirectory(generations, directoryGenerations, ".tmp-generation-", false); err != nil {
+		return err
 	}
 	return nil
 }
 
-func (backend *nativeSyscallBackend) resumeBootstrap(root *os.File) error {
-	names, err := directoryNames(root)
+func (probe *capabilityProbe) probeDirectory(directory *os.File, role directoryRole, prefix string, testLock bool) error {
+	source, sourceName, err := probe.createFile(directory, role, prefix)
 	if err != nil {
-		return newStoreError(outcomeIOFailed, "inspect_bootstrap", err)
-	}
-	generationsPresent := false
-	for _, name := range names {
-		if name != "generations" {
-			return newStoreError(outcomeLayoutRejected, "resume_bootstrap", errors.New("non-bootstrap object"))
-		}
-		generationsPresent = true
-	}
-	if generationsPresent {
-		generations, _, err := openVerifiedAt(root, "generations", true, false)
-		if err != nil {
-			return err
-		}
-		names, readErr := directoryNames(generations)
-		_ = generations.Close()
-		if readErr != nil || len(names) != 0 {
-			return newStoreError(outcomeLayoutRejected, "resume_bootstrap", readErr)
-		}
-	} else if err := unix.Mkdirat(int(root.Fd()), "generations", 0o700); err != nil {
-		return newStoreError(outcomeIOFailed, "create_generations", err)
-	}
-	lockFD, err := unix.Openat(int(root.Fd()), "LOCK", unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
-	if err != nil {
-		return newStoreError(outcomeIOFailed, "create_lock", err)
-	}
-	lock := os.NewFile(uintptr(lockFD), "LOCK")
-	if err := verifyOpenedDescriptor(lock, false); err != nil {
-		_ = lock.Close()
 		return err
 	}
-	if err := backend.invoke(pointBootstrapLockFsync, directoryRoot, "LOCK", ""); err != nil {
-		_ = lock.Close()
-		return newStoreError(outcomeBootstrapDurabilityUnknown, "bootstrap_lock_fsync", err)
+	defer source.Close()
+	target, targetName, err := probe.createFile(directory, role, prefix)
+	if err != nil {
+		return err
 	}
-	if err := lock.Sync(); err != nil {
-		_ = lock.Close()
-		return newStoreError(outcomeBootstrapDurabilityUnknown, "bootstrap_lock_fsync", err)
+	targetIdentity, err := descriptorIdentity(target)
+	if err != nil || targetIdentity.device == 0 || targetIdentity.inode == 0 {
+		_ = target.Close()
+		return capabilityUnavailable("probe_stable_identity", err)
 	}
-	_ = lock.Close()
-	if err := backend.invoke(pointBootstrapRootFsync, directoryRoot, "", ""); err != nil {
-		return newStoreError(outcomeBootstrapDurabilityUnknown, "bootstrap_root_fsync", err)
+	if err := target.Close(); err != nil {
+		return capabilityUnavailable("probe_close", err)
 	}
-	if err := root.Sync(); err != nil {
-		return newStoreError(outcomeBootstrapDurabilityUnknown, "bootstrap_root_fsync", err)
+
+	if err := probe.backend.invoke(pointCapabilityStableIdentity, role, sourceName, ""); err != nil {
+		return capabilityUnavailable("probe_stable_identity", err)
+	}
+	sourceIdentity, err := descriptorIdentity(source)
+	if err != nil || sourceIdentity.device == 0 || sourceIdentity.inode == 0 {
+		return capabilityUnavailable("probe_stable_identity", err)
+	}
+	if sourceIdentity == targetIdentity {
+		return capabilityUnavailable("probe_stable_identity", errors.New("distinct files shared identity"))
+	}
+	var pathStat unix.Stat_t
+	if err := unix.Fstatat(int(directory.Fd()), sourceName, &pathStat, unix.AT_SYMLINK_NOFOLLOW); err != nil || sourceIdentity != (fileIdentity{device: uint64(pathStat.Dev), inode: uint64(pathStat.Ino)}) {
+		return capabilityUnavailable("probe_stable_identity", err)
+	}
+	if _, err := source.Write([]byte("capability-probe")); err != nil {
+		return capabilityUnavailable("probe_file_write", err)
+	}
+	if err := probe.backend.invoke(pointCapabilityFileFsync, role, sourceName, ""); err != nil {
+		return capabilityUnavailable("probe_file_fsync", err)
+	}
+	if err := source.Sync(); err != nil {
+		return capabilityUnavailable("probe_file_fsync", err)
+	}
+
+	if testLock {
+		contender, _, err := openVerifiedAt(directory, sourceName, false, true)
+		if err != nil {
+			return capabilityUnavailable("probe_process_lock", err)
+		}
+		if err := unix.Flock(int(source.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+			_ = contender.Close()
+			return capabilityUnavailable("probe_process_lock", err)
+		}
+		contenderErr := unix.Flock(int(contender.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if contenderErr == nil {
+			_ = unix.Flock(int(contender.Fd()), unix.LOCK_UN)
+		}
+		_ = contender.Close()
+		_ = unix.Flock(int(source.Fd()), unix.LOCK_UN)
+		if !errors.Is(contenderErr, unix.EWOULDBLOCK) && !errors.Is(contenderErr, unix.EAGAIN) {
+			return capabilityUnavailable("probe_process_lock", errors.New("nonblocking lock did not contend"))
+		}
+	}
+
+	if err := probe.backend.invoke(pointCapabilityAtomicReplacement, role, sourceName, targetName); err != nil {
+		return capabilityUnavailable("probe_atomic_replacement", err)
+	}
+	if err := unix.Renameat(int(directory.Fd()), sourceName, int(directory.Fd()), targetName); err != nil {
+		return capabilityUnavailable("probe_atomic_replacement", err)
+	}
+	replacement, _, err := openVerifiedAt(directory, targetName, false, false)
+	if err != nil {
+		return capabilityUnavailable("probe_atomic_replacement", err)
+	}
+	replacementIdentity, identityErr := descriptorIdentity(replacement)
+	_ = replacement.Close()
+	if identityErr != nil || replacementIdentity != sourceIdentity || replacementIdentity == targetIdentity {
+		return capabilityUnavailable("probe_atomic_replacement", identityErr)
+	}
+	replacementPayload, err := readVerifiedFile(directory, targetName, 64)
+	if err != nil || string(replacementPayload) != "capability-probe" {
+		return capabilityUnavailable("probe_atomic_replacement", err)
+	}
+
+	symlinkName, err := randomTemporaryName(prefix)
+	if err != nil {
+		return capabilityUnavailable("probe_nofollow_create", err)
+	}
+	if err := unix.Symlinkat(targetName, int(directory.Fd()), symlinkName); err != nil {
+		return capabilityUnavailable("probe_nofollow_create", err)
+	}
+	probe.artifacts = append(probe.artifacts, probeArtifact{directory: directory, role: role, name: symlinkName})
+	if err := probe.backend.invoke(pointCapabilityNoFollowCreate, role, symlinkName, ""); err != nil {
+		return capabilityUnavailable("probe_nofollow_create", err)
+	}
+	openedFD, openErr := unix.Openat(int(directory.Fd()), symlinkName, unix.O_WRONLY|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	if openErr == nil {
+		_ = unix.Close(openedFD)
+		return capabilityUnavailable("probe_nofollow_create", errors.New("nofollow creation followed symlink"))
+	}
+	if !errors.Is(openErr, unix.ELOOP) {
+		return capabilityUnavailable("probe_nofollow_create", openErr)
+	}
+
+	if err := probe.backend.invoke(pointCapabilityDirectoryFsync, role, "", ""); err != nil {
+		return capabilityUnavailable("probe_directory_fsync", err)
+	}
+	if err := directory.Sync(); err != nil {
+		return capabilityUnavailable("probe_directory_fsync", err)
 	}
 	return nil
+}
+
+func (probe *capabilityProbe) createFile(directory *os.File, role directoryRole, prefix string) (*os.File, string, error) {
+	for attempt := 0; attempt < 16; attempt++ {
+		name, err := randomTemporaryName(prefix)
+		if err != nil {
+			return nil, "", capabilityUnavailable("probe_create", err)
+		}
+		fd, err := unix.Openat(int(directory.Fd()), name, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+		if errors.Is(err, unix.EEXIST) {
+			continue
+		}
+		if err != nil {
+			return nil, "", capabilityUnavailable("probe_create", err)
+		}
+		file := os.NewFile(uintptr(fd), name)
+		probe.artifacts = append(probe.artifacts, probeArtifact{directory: directory, role: role, name: name})
+		if err := verifyOpenedDescriptor(file, false); err != nil {
+			_ = file.Close()
+			return nil, "", capabilityUnavailable("probe_create", err)
+		}
+		return file, name, nil
+	}
+	return nil, "", capabilityUnavailable("probe_create", errors.New("temporary name collisions"))
+}
+
+func (probe *capabilityProbe) cleanup() error {
+	var first error
+	changed := make(map[*os.File]directoryRole)
+	for _, artifact := range probe.artifacts {
+		if err := probe.backend.invoke(pointCapabilityCleanup, artifact.role, artifact.name, ""); err != nil && first == nil {
+			first = err
+		}
+		if err := unix.Unlinkat(int(artifact.directory.Fd()), artifact.name, 0); err != nil && !errors.Is(err, unix.ENOENT) && first == nil {
+			first = err
+		}
+		changed[artifact.directory] = artifact.role
+	}
+	for directory := range changed {
+		if err := directory.Sync(); err != nil && first == nil {
+			first = err
+		}
+	}
+	for _, artifact := range probe.artifacts {
+		var stat unix.Stat_t
+		err := unix.Fstatat(int(artifact.directory.Fd()), artifact.name, &stat, unix.AT_SYMLINK_NOFOLLOW)
+		if !errors.Is(err, unix.ENOENT) && first == nil {
+			if err == nil {
+				first = errors.New("probe artifact remained")
+			} else {
+				first = err
+			}
+		}
+	}
+	return first
+}
+
+func randomTemporaryName(prefix string) (string, error) {
+	random := make([]byte, 12)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	return prefix + hex.EncodeToString(random), nil
+}
+
+func capabilityUnavailable(operation string, cause error) error {
+	if cause == nil {
+		cause = errors.New("capability proof failed")
+	}
+	return newStoreError(outcomeFilesystemCapabilityUnavailable, operation, cause)
 }
 
 func openVerifiedAtOptional(directory *os.File, name string, wantDirectory, writable bool) (*os.File, error) {

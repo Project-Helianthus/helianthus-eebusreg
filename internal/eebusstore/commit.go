@@ -13,6 +13,9 @@ func (opened *store) commit(state stateV1) commitResult {
 	if opened.closed || opened.poisoned {
 		return commitFailure(outcomeCommitNotPublished, "commit_state", errors.New("store is not usable"))
 	}
+	if err := opened.revalidateWriterIdentity(); err != nil {
+		return commitFailure(outcomeCommitNotPublished, "commit_writer_identity", err)
+	}
 	if err := validateStateV1(state); err != nil {
 		return commitFailure(outcomeCommitNotPublished, "commit_validate", err)
 	}
@@ -151,6 +154,9 @@ func (opened *store) maintenance(point syscallPoint) error {
 	if err != nil {
 		return err
 	}
+	if err := enforceArtifactBound(layout); err != nil {
+		return err
+	}
 	preserve := make(map[string]struct{})
 	for _, raw := range [][]byte{layout.slotA, layout.slotB} {
 		if len(raw) == 0 {
@@ -206,13 +212,17 @@ func (opened *store) maintenance(point syscallPoint) error {
 		}
 		generationChanged = true
 	}
+	fsyncPoint := pointPreMaintenanceFsync
+	if point == pointPostMaintenanceRemove {
+		fsyncPoint = pointPostMaintenanceFsync
+	}
 	if rootChanged {
-		if err := opened.root.Sync(); err != nil {
+		if err := opened.backend.syncDirectory(opened.root, fsyncPoint, directoryRoot); err != nil {
 			return err
 		}
 	}
 	if generationChanged {
-		if err := opened.generations.Sync(); err != nil {
+		if err := opened.backend.syncDirectory(opened.generations, fsyncPoint, directoryGenerations); err != nil {
 			return err
 		}
 	}

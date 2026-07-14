@@ -36,19 +36,23 @@ type commitResult struct {
 }
 
 type store struct {
-	mu          sync.Mutex
-	backend     *nativeSyscallBackend
-	providers   map[providerKey]protectedKeyProvider
-	migrations  migrationGraph
-	root        *os.File
-	generations *os.File
-	lock        *os.File
-	identity    fileIdentity
-	selected    *selectedManifest
-	manifest    *manifestPayloadV1
-	state       stateV1
-	closed      bool
-	poisoned    bool
+	mu             sync.Mutex
+	backend        *nativeSyscallBackend
+	providers      map[providerKey]protectedKeyProvider
+	migrations     migrationGraph
+	configuredPath string
+	parent         *os.File
+	rootName       string
+	root           *os.File
+	generations    *os.File
+	lock           *os.File
+	rootIdentity   fileIdentity
+	lockIdentity   fileIdentity
+	selected       *selectedManifest
+	manifest       *manifestPayloadV1
+	state          stateV1
+	closed         bool
+	poisoned       bool
 }
 
 func openStore(config storeConfig) openResult {
@@ -59,25 +63,60 @@ func openStore(config storeConfig) openResult {
 	if err != nil {
 		return openFailure(err)
 	}
-	if !acquireLocalWriter(prepared.identity) {
+	closePrepared := func() {
 		_ = prepared.lock.Close()
 		_ = prepared.root.Close()
+		_ = prepared.parent.Close()
+	}
+	if !acquireLocalWriter(prepared.rootIdentity) {
+		closePrepared()
 		return openFailure(newStoreError(outcomeWriterBusy, "acquire_local_lock", errors.New("writer busy")))
 	}
+	if err := acquireProcessLock(prepared.root); err != nil {
+		releaseLocalWriter(prepared.rootIdentity)
+		closePrepared()
+		return openFailure(err)
+	}
 	if err := acquireProcessLock(prepared.lock); err != nil {
-		releaseLocalWriter(prepared.identity)
-		_ = prepared.lock.Close()
-		_ = prepared.root.Close()
+		_ = releaseProcessLock(prepared.root)
+		releaseLocalWriter(prepared.rootIdentity)
+		closePrepared()
 		return openFailure(err)
 	}
 
 	opened := &store{
-		backend:    config.backend,
-		providers:  config.providers,
-		migrations: config.migrations,
-		root:       prepared.root,
-		lock:       prepared.lock,
-		identity:   prepared.identity,
+		backend:        config.backend,
+		providers:      config.providers,
+		migrations:     config.migrations,
+		configuredPath: prepared.configuredPath,
+		parent:         prepared.parent,
+		rootName:       prepared.rootName,
+		root:           prepared.root,
+		lock:           prepared.lock,
+		rootIdentity:   prepared.rootIdentity,
+		lockIdentity:   prepared.lockIdentity,
+	}
+	if err := opened.revalidateWriterIdentity(); err != nil {
+		opened.abort()
+		return openFailure(err)
+	}
+	if !prepared.bootstrapDurable {
+		safe, err := inspectBootstrapSubset(opened.root)
+		if err != nil {
+			opened.abort()
+			return openFailure(err)
+		}
+		if safe {
+			lock, err := opened.backend.completeBootstrap(opened.parent, opened.root, opened.lock, false)
+			if err != nil {
+				opened.abort()
+				return openFailure(err)
+			}
+			if lock != opened.lock {
+				opened.abort()
+				return openFailure(newStoreError(outcomeFilesystemCapabilityUnavailable, "resume_bootstrap", errors.New("lock identity changed")))
+			}
+		}
 	}
 	if opened.migrations.current == 0 {
 		opened.migrations, err = newMigrationGraph(currentSchemaVersion, nil)
@@ -90,12 +129,20 @@ func openStore(config storeConfig) openResult {
 		opened.abort()
 		return openFailure(err)
 	}
+	if err := opened.backend.probeCapabilities(opened.root, opened.generations); err != nil {
+		opened.abort()
+		return openFailure(err)
+	}
 	layout, err := opened.verifyLayout()
 	if err != nil {
 		opened.abort()
 		return openFailure(err)
 	}
 	if len(layout.slotA) == 0 && len(layout.slotB) == 0 {
+		if err := enforceArtifactBound(layout); err != nil {
+			opened.abort()
+			return openFailure(err)
+		}
 		if layout.generationEntries != 0 || layout.temporaryEntries != 0 {
 			opened.abort()
 			return openFailure(newStoreError(outcomeNoValidManifest, "open_manifest", errors.New("existing state has no manifest")))
@@ -120,6 +167,10 @@ func openStore(config storeConfig) openResult {
 	}
 	manifest, err := decodeSelectedManifest(selected.payload)
 	if err != nil {
+		opened.abort()
+		return openFailure(err)
+	}
+	if err := enforceArtifactBound(layout); err != nil {
 		opened.abort()
 		return openFailure(err)
 	}
@@ -169,23 +220,15 @@ func versionError(operation string, found, current uint64) error {
 }
 
 func decodeSelectedManifest(payload []byte) (manifestPayloadV1, error) {
-	var wire manifestPayloadWire
 	if err := validateCanonicalJSON(payload, maxManifestPayloadBytes, maxJSONDepth); err != nil {
 		return manifestPayloadV1{}, err
 	}
-	if err := decodeClosedJSON(payload, &wire); err != nil {
-		return manifestPayloadV1{}, malformed("decode_manifest", err)
-	}
-	if _, err := decodeGenerationReference(wire.Current); err != nil {
+	version, err := decodeManifestVersion(payload)
+	if err != nil {
 		return manifestPayloadV1{}, err
 	}
-	if wire.Parent != nil {
-		if _, err := decodeGenerationReference(*wire.Parent); err != nil {
-			return manifestPayloadV1{}, err
-		}
-	}
-	if wire.ManifestVersion != currentManifestVersion {
-		return manifestPayloadV1{}, versionError("manifest_version", wire.ManifestVersion, currentManifestVersion)
+	if version != currentManifestVersion {
+		return manifestPayloadV1{}, versionError("manifest_version", version, currentManifestVersion)
 	}
 	return decodeManifestPayloadV1(payload)
 }
@@ -196,22 +239,50 @@ func (opened *store) openGenerationDirectory() error {
 		return err
 	}
 	if directory == nil {
-		names, err := directoryNames(opened.root)
-		if err != nil || len(names) != 1 || names[0] != "LOCK" {
-			return newStoreError(outcomeLayoutRejected, "resume_bootstrap", err)
-		}
-		if err := unix.Mkdirat(int(opened.root.Fd()), "generations", 0o700); err != nil {
-			return newStoreError(outcomeIOFailed, "create_generations", err)
-		}
-		if err := opened.backend.syncDirectory(opened.root, pointBootstrapRootFsync, directoryRoot); err != nil {
-			return newStoreError(outcomeBootstrapDurabilityUnknown, "bootstrap_root_fsync", err)
-		}
-		directory, _, err = openVerifiedAt(opened.root, "generations", true, false)
-		if err != nil {
-			return err
-		}
+		return newStoreError(outcomeLayoutRejected, "open_generations", errors.New("generations directory missing"))
 	}
 	opened.generations = directory
+	return nil
+}
+
+func (opened *store) revalidateWriterIdentity() error {
+	heldRootIdentity, err := descriptorIdentity(opened.root)
+	if err != nil || heldRootIdentity != opened.rootIdentity {
+		return newStoreError(outcomeLayoutRejected, "revalidate_root", errors.New("held root identity changed"))
+	}
+	heldLockIdentity, err := descriptorIdentity(opened.lock)
+	if err != nil || heldLockIdentity != opened.lockIdentity {
+		return newStoreError(outcomeLayoutRejected, "revalidate_lock", errors.New("held lock identity changed"))
+	}
+	var parentStat unix.Stat_t
+	if err := unix.Fstatat(int(opened.parent.Fd()), opened.rootName, &parentStat, unix.AT_SYMLINK_NOFOLLOW); err != nil || opened.rootIdentity != (fileIdentity{device: uint64(parentStat.Dev), inode: uint64(parentStat.Ino)}) {
+		return newStoreError(outcomeLayoutRejected, "revalidate_root", errors.New("parent root identity changed"))
+	}
+
+	configuredRoot, err := openAbsoluteDirectoryNoFollow(opened.configuredPath)
+	if err != nil {
+		return newStoreError(outcomeLayoutRejected, "revalidate_root", err)
+	}
+	defer configuredRoot.Close()
+	if err := verifyOpenedDescriptor(configuredRoot, true); err != nil {
+		return err
+	}
+	configuredIdentity, err := descriptorIdentity(configuredRoot)
+	if err != nil || configuredIdentity != opened.rootIdentity {
+		return newStoreError(outcomeLayoutRejected, "revalidate_root", errors.New("configured root identity changed"))
+	}
+	configuredLock, _, err := openVerifiedAt(configuredRoot, "LOCK", false, true)
+	if err != nil {
+		return err
+	}
+	defer configuredLock.Close()
+	configuredLockIdentity, err := descriptorIdentity(configuredLock)
+	if err != nil || configuredLockIdentity != opened.lockIdentity {
+		return newStoreError(outcomeLayoutRejected, "revalidate_lock", errors.New("configured lock identity changed"))
+	}
+	if err := verifyEmptyLock(configuredLock); err != nil {
+		return newStoreError(outcomeLayoutRejected, "revalidate_lock", err)
+	}
 	return nil
 }
 
@@ -220,7 +291,13 @@ type layoutSnapshot struct {
 	slotB             []byte
 	generationEntries int
 	temporaryEntries  int
+	generationNames   []string
 }
+
+const (
+	maximumArtifactEntries           = 128
+	maximumPublicationGenerationRefs = 4
+)
 
 func (opened *store) verifyLayout() (layoutSnapshot, error) {
 	var snapshot layoutSnapshot
@@ -282,12 +359,44 @@ func (opened *store) verifyLayout() (layoutSnapshot, error) {
 			snapshot.temporaryEntries++
 		} else {
 			snapshot.generationEntries++
+			snapshot.generationNames = append(snapshot.generationNames, name)
 		}
 	}
-	if snapshot.temporaryEntries+snapshot.generationEntries > 130 {
+	if snapshot.temporaryEntries+snapshot.generationEntries > maximumArtifactEntries+maximumPublicationGenerationRefs {
 		return snapshot, newStoreError(outcomeLayoutRejected, "enumerate_layout", errors.New("entry bound"))
 	}
 	return snapshot, nil
+}
+
+func enforceArtifactBound(layout layoutSnapshot) error {
+	referenced := make(map[string]struct{}, maximumPublicationGenerationRefs)
+	for _, raw := range [][]byte{layout.slotA, layout.slotB} {
+		if len(raw) == 0 {
+			continue
+		}
+		envelope, err := decodeManifestSlot(raw)
+		if err != nil {
+			continue
+		}
+		manifest, err := decodeManifestPayloadV1(envelope.manifestPayload)
+		if err != nil {
+			continue
+		}
+		referenced[manifest.current.generationFile] = struct{}{}
+		if manifest.parent != nil {
+			referenced[manifest.parent.generationFile] = struct{}{}
+		}
+	}
+	artifacts := layout.temporaryEntries
+	for _, name := range layout.generationNames {
+		if _, preserved := referenced[name]; !preserved {
+			artifacts++
+		}
+	}
+	if artifacts > maximumArtifactEntries {
+		return newStoreError(outcomeLayoutRejected, "enumerate_layout", errors.New("artifact bound"))
+	}
+	return nil
 }
 
 func (opened *store) loadCurrentGeneration(manifest manifestPayloadV1) (generationV1, error) {
@@ -317,7 +426,7 @@ func (opened *store) loadCurrentGeneration(manifest manifestPayloadV1) (generati
 }
 
 func generationMatchesManifest(generation generationV1, manifest manifestPayloadV1) bool {
-	if generation.metadata.sequence != manifest.current.generation {
+	if generation.metadata.sequence != manifest.current.generation || !hasDirectParentChronology(manifest) {
 		return false
 	}
 	if manifest.parent == nil {
@@ -333,7 +442,7 @@ func (opened *store) classifyRecovery(manifest manifestPayloadV1, currentErr err
 		opened.abort()
 		return openFailure(currentErr)
 	}
-	if manifest.parent == nil || manifest.parent.schemaVersion != currentSchemaVersion {
+	if !hasDirectParentChronology(manifest) || manifest.parent == nil || manifest.parent.schemaVersion != currentSchemaVersion {
 		opened.abort()
 		return openFailure(newStoreError(outcomeNoValidCurrent, "classify_recovery", currentErr))
 	}
@@ -369,6 +478,13 @@ func (opened *store) classifyRecovery(manifest manifestPayloadV1, currentErr err
 	}
 }
 
+func hasDirectParentChronology(manifest manifestPayloadV1) bool {
+	if manifest.current.generation == 1 {
+		return manifest.parent == nil
+	}
+	return manifest.parent != nil && manifest.parent.generation == manifest.current.generation-1
+}
+
 func (opened *store) close() error {
 	opened.mu.Lock()
 	defer opened.mu.Unlock()
@@ -384,14 +500,17 @@ func (opened *store) closeLocked() error {
 	if err := releaseProcessLock(opened.lock); err != nil {
 		first = err
 	}
-	for _, file := range []*os.File{opened.generations, opened.lock, opened.root} {
+	if err := releaseProcessLock(opened.root); err != nil && first == nil {
+		first = err
+	}
+	for _, file := range []*os.File{opened.generations, opened.lock, opened.root, opened.parent} {
 		if file != nil {
 			if err := file.Close(); err != nil && first == nil {
 				first = newStoreError(outcomeIOFailed, "close_store", err)
 			}
 		}
 	}
-	releaseLocalWriter(opened.identity)
+	releaseLocalWriter(opened.rootIdentity)
 	return first
 }
 
