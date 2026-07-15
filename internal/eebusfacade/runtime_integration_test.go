@@ -6,6 +6,9 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -146,6 +149,214 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	}
 }
 
+func TestAcquireRuntimeKeepsFirstTrustDisabledWithoutInternalAuthorization(t *testing.T) {
+	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "runtime-disabled-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localSKI := certificateSKI(t, certificate)
+	remoteSKI := "0000000000000000000000000000000000000002"
+	stateRoot := filepath.Join(t.TempDir(), "state")
+	service := &fakeRuntimeService{started: make(chan struct{})}
+	backend, err := acquireRuntime(context.Background(), RuntimeConfig{
+		StateRoot:  stateRoot,
+		Interface:  "fixture-interface",
+		ListenPort: 4711,
+		Remotes:    []RuntimeRemote{{SKI: remoteSKI}},
+	}, runtimeDependencies{
+		loadMaterial: func(context.Context, string) (runtimeMaterial, error) {
+			return runtimeMaterial{
+				certificate: certificate,
+				localSKI:    localSKI,
+				pretrusted:  map[string]bool{remoteSKI: true},
+			}, nil
+		},
+		newService: func(RuntimeConfig, runtimeMaterial, eebusapi.ServiceReaderInterface) (runtimeService, error) {
+			return service, nil
+		},
+		now: time.Now,
+	})
+	if err != nil {
+		t.Fatalf("acquireRuntime() error = %v", err)
+	}
+	implementation, ok := backend.(*serviceBackend)
+	if !ok {
+		t.Fatal("runtime backend implementation changed")
+	}
+	if implementation.firstTrust != nil {
+		t.Fatal("first trust activated without internal authorization")
+	}
+	service.mu.Lock()
+	autoAcceptCalls := len(service.autoAccept)
+	waitingCalls := len(service.waiting)
+	service.mu.Unlock()
+	if autoAcceptCalls != 0 || waitingCalls != 0 {
+		t.Fatal("disabled first trust changed service pairing controls")
+	}
+	if _, err := os.Lstat(stateRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("disabled first trust touched StateRoot: %v", err)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAcquireRuntimeComposesAndOwnsAuthorizedFirstTrustResources(t *testing.T) {
+	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "runtime-first-trust-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localSKI := certificateSKI(t, certificate)
+	remoteSKI := "0000000000000000000000000000000000000002"
+	candidateSKI := "0000000000000000000000000000000000000003"
+	root := canonicalRuntimeTempDir(t)
+	stateRoot := filepath.Join(root, "state")
+	adminRuntimeDir := filepath.Join(root, "admin-runtime")
+	service := &fakeRuntimeService{started: make(chan struct{})}
+	var reader eebusapi.ServiceReaderInterface
+	acquireContext, cancelAcquire := context.WithCancel(context.Background())
+	defer cancelAcquire()
+	dependencies := defaultRuntimeDependencies
+	dependencies.loadMaterial = func(context.Context, string) (runtimeMaterial, error) {
+		return runtimeMaterial{
+			certificate: certificate,
+			localSKI:    localSKI,
+			pretrusted:  map[string]bool{remoteSKI: true},
+			firstTrust: &runtimeFirstTrustAuthorization{
+				adminRuntimeDir: adminRuntimeDir,
+			},
+		}, nil
+	}
+	dependencies.newService = func(_ RuntimeConfig, _ runtimeMaterial, callback eebusapi.ServiceReaderInterface) (runtimeService, error) {
+		reader = callback
+		return service, nil
+	}
+	dependencies.now = time.Now
+	backend, err := acquireRuntime(acquireContext, RuntimeConfig{
+		StateRoot:  stateRoot,
+		Interface:  "fixture-interface",
+		ListenPort: 4711,
+		Remotes:    []RuntimeRemote{{SKI: remoteSKI}},
+	}, dependencies)
+	if err != nil {
+		t.Fatalf("acquireRuntime() error = %v", err)
+	}
+	cancelAcquire()
+	implementation, ok := backend.(*serviceBackend)
+	if !ok || implementation.firstTrust == nil {
+		t.Fatal("authorized runtime did not compose first trust resources")
+	}
+	resources := implementation.firstTrust
+	if resources.coordinator.state() != "PAIRING_CLOSED" || resources.store.SelectedGeneration() == 0 {
+		t.Fatal("authorized first trust did not reopen the selected durable generation")
+	}
+	if reader == nil {
+		t.Fatal("runtime service reader was not composed")
+	}
+	if got := resources.coordinator.openPairingWindow(context.Background(), "runtime-composition-window", time.Minute); got != "open_empty" {
+		t.Fatalf("open pairing window outcome = %q", got)
+	}
+	reader.ServiceShipIDUpdate(candidateSKI, "runtime-composition-ship-id")
+	reader.RemoteSKIConnected(nil, candidateSKI)
+	reader.ServicePairingDetailUpdate(candidateSKI, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateReceivedPairingRequest, nil))
+	if _, _, _, _, _, complete, candidate := resources.coordinator.candidate(); !candidate || !complete {
+		t.Fatal("runtime callback composition did not reach the first trust coordinator")
+	}
+
+	adminAddress := resources.admin.Address()
+	connection, err := net.Dial("unix", adminAddress)
+	if err != nil {
+		t.Fatalf("dial composed AF_UNIX admin endpoint: %v", err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	service.mu.Lock()
+	autoAccept := append([]bool(nil), service.autoAccept...)
+	waiting := append([]bool(nil), service.waiting...)
+	service.mu.Unlock()
+	if len(autoAccept) != 1 || autoAccept[0] || len(waiting) == 0 {
+		t.Fatalf("service pairing controls auto=%v waiting=%v", autoAccept, waiting)
+	}
+	for _, value := range waiting {
+		if value && resources.coordinator.state() == "PAIRING_CLOSED" {
+			t.Fatal("pairing waiting was enabled while the coordinator was closed")
+		}
+	}
+
+	if err := backend.Close(); err != nil {
+		t.Fatalf("close authorized runtime: %v", err)
+	}
+	if _, err := os.Lstat(adminAddress); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("admin socket survived backend close: %v", err)
+	}
+	if resources.store.SelectedGeneration() != 0 {
+		t.Fatal("association bridge remained open after backend close")
+	}
+	service.mu.Lock()
+	shutdowns := service.shutdowns
+	service.mu.Unlock()
+	if shutdowns != 1 {
+		t.Fatalf("service shutdown count = %d, want 1", shutdowns)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatalf("second backend close: %v", err)
+	}
+}
+
+func TestAcquireRuntimeFailsClosedAndReleasesStoreWhenAdminStartFails(t *testing.T) {
+	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "runtime-first-trust-failure-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localSKI := certificateSKI(t, certificate)
+	remoteSKI := "0000000000000000000000000000000000000002"
+	root := canonicalRuntimeTempDir(t)
+	stateRoot := filepath.Join(root, "state")
+	adminRuntimeDir := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(adminRuntimeDir, []byte("occupied"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := &fakeRuntimeService{started: make(chan struct{})}
+	dependencies := defaultRuntimeDependencies
+	dependencies.loadMaterial = func(context.Context, string) (runtimeMaterial, error) {
+		return runtimeMaterial{
+			certificate: certificate,
+			localSKI:    localSKI,
+			pretrusted:  map[string]bool{remoteSKI: true},
+			firstTrust: &runtimeFirstTrustAuthorization{
+				adminRuntimeDir: adminRuntimeDir,
+			},
+		}, nil
+	}
+	dependencies.newService = func(RuntimeConfig, runtimeMaterial, eebusapi.ServiceReaderInterface) (runtimeService, error) {
+		return service, nil
+	}
+	dependencies.now = time.Now
+	backend, err := acquireRuntime(context.Background(), RuntimeConfig{
+		StateRoot:  stateRoot,
+		Interface:  "fixture-interface",
+		ListenPort: 4711,
+		Remotes:    []RuntimeRemote{{SKI: remoteSKI}},
+	}, dependencies)
+	if err == nil || backend != nil {
+		t.Fatal("runtime acquisition did not fail closed when admin startup failed")
+	}
+	service.mu.Lock()
+	shutdowns := service.shutdowns
+	service.mu.Unlock()
+	if shutdowns != 1 {
+		t.Fatalf("failed acquisition service shutdown count = %d, want 1", shutdowns)
+	}
+	store, outcome := openRuntimeAssociationBridge(stateRoot, nil)
+	if store == nil || outcome != "opened_current" {
+		t.Fatalf("store remained owned after failed acquisition: %q", outcome)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAcquireRuntimeFailsClosedBeforeServiceSetupWithoutProtectedMaterial(t *testing.T) {
 	serviceCreated := false
 	_, err := acquireRuntime(context.Background(), RuntimeConfig{
@@ -221,10 +432,14 @@ func TestServiceBackendCloseBeforeStartCannotReopenTransport(t *testing.T) {
 }
 
 type fakeRuntimeService struct {
+	mu         sync.Mutex
 	setup      bool
 	started    chan struct{}
 	shutdowns  int
 	registered []string
+	autoAccept []bool
+	waiting    []bool
+	cancels    int
 }
 
 func (service *fakeRuntimeService) Setup() error {
@@ -234,10 +449,32 @@ func (service *fakeRuntimeService) Setup() error {
 
 func (service *fakeRuntimeService) Start() { close(service.started) }
 
-func (service *fakeRuntimeService) Shutdown() { service.shutdowns++ }
+func (service *fakeRuntimeService) Shutdown() {
+	service.mu.Lock()
+	service.shutdowns++
+	service.mu.Unlock()
+}
 
 func (service *fakeRuntimeService) RegisterRemoteSKI(ski string) {
 	service.registered = append(service.registered, ski)
+}
+
+func (service *fakeRuntimeService) SetAutoAccept(value bool) {
+	service.mu.Lock()
+	service.autoAccept = append(service.autoAccept, value)
+	service.mu.Unlock()
+}
+
+func (service *fakeRuntimeService) CancelPairingWithSKI(string) {
+	service.mu.Lock()
+	service.cancels++
+	service.mu.Unlock()
+}
+
+func (service *fakeRuntimeService) UserIsAbleToApproveOrCancelPairingRequests(value bool) {
+	service.mu.Lock()
+	service.waiting = append(service.waiting, value)
+	service.mu.Unlock()
 }
 
 func (*fakeRuntimeService) LocalService() *shipapi.ServiceDetails { return nil }
@@ -322,4 +559,26 @@ func waitRuntimePayload(t *testing.T, updates <-chan []byte) []byte {
 
 func containsRuntimeError(err error, text string) bool {
 	return err != nil && strings.Contains(err.Error(), text)
+}
+
+func canonicalRuntimeTempDir(t *testing.T) string {
+	t.Helper()
+	base := os.TempDir()
+	if short, err := filepath.EvalSymlinks(filepath.Join(string(filepath.Separator), "tmp")); err == nil {
+		base = short
+	}
+	base, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.MkdirTemp(base, "e4b-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("remove runtime temp directory: %v", err)
+		}
+	})
+	return root
 }

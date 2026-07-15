@@ -184,7 +184,11 @@ func checkPackage(root, packagePath string, checked map[string]*checkedPackage, 
 		files = append(files, file)
 	}
 	info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Types: map[ast.Expr]types.TypeAndValue{}}
-	config := types.Config{Importer: &publicImporter{root: root, local: checked, fallback: external}, GoVersion: "go1.22"}
+	config := types.Config{
+		Importer:    &publicImporter{root: root, local: checked, fallback: external},
+		GoVersion:   "go1.22",
+		FakeImportC: true,
+	}
 	pkg, err := config.Check(packagePath, fset, files, info)
 	if err != nil {
 		return nil, fmt.Errorf("type-check %s: %w", packagePath, err)
