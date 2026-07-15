@@ -155,14 +155,17 @@ func TestServiceReaderShapeMatchesExpectedCallbacks(t *testing.T) {
 	}
 }
 
-func TestNoRuntimeImplementationImportedByFacade(t *testing.T) {
+func TestFacadeDoesNotOwnLowLevelNetworkIO(t *testing.T) {
 	files := parseImplementationFiles(t)
 	for path, file := range files {
+		if filepath.Base(path) == "runtime.go" {
+			continue
+		}
 		for _, imp := range file.Imports {
 			importPath := strings.Trim(imp.Path.Value, `"`)
 			switch importPath {
-			case "net", "net/http", "crypto/tls", "github.com/enbility/eebus-go/service":
-				t.Fatalf("%s imports premature runtime dependency %q", path, importPath)
+			case "net", "net/http", "crypto/tls":
+				t.Fatalf("%s imports low-level network dependency %q", path, importPath)
 			}
 		}
 	}
@@ -176,7 +179,7 @@ func TestExportedFacadeAPIUsesOnlyPlainTypes(t *testing.T) {
 		for _, decl := range file.Decls {
 			switch d := decl.(type) {
 			case *ast.FuncDecl:
-				if d.Name.IsExported() {
+				if d.Name.IsExported() && exportedFacadeReceiver(d) {
 					assertExprNoExternal(t, fset, path, d.Type, importAliases, localTypes, map[string]bool{})
 				}
 			case *ast.GenDecl:
@@ -197,6 +200,18 @@ func TestExportedFacadeAPIUsesOnlyPlainTypes(t *testing.T) {
 			}
 		}
 	}
+}
+
+func exportedFacadeReceiver(declaration *ast.FuncDecl) bool {
+	if declaration.Recv == nil || len(declaration.Recv.List) == 0 {
+		return true
+	}
+	receiver := declaration.Recv.List[0].Type
+	if pointer, ok := receiver.(*ast.StarExpr); ok {
+		receiver = pointer.X
+	}
+	identifier, ok := receiver.(*ast.Ident)
+	return ok && identifier.IsExported()
 }
 
 func TestFacadeImplementationHasNoRuntimeSideEffects(t *testing.T) {

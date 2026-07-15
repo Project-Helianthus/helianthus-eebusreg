@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   validate:
@@ -40,3 +41,103 @@ jobs:
             -e HELIANTHUS_EEBUSREG_MAX_GO_VERSION=1.26 \
             golang:1.26-alpine \
             sh -c 'apk add --no-cache bash git && export PATH=/usr/local/go/bin:$PATH && git config --global --add safe.directory /workspace && ./scripts/toolchain_boundary_proof.sh'
+
+  api-surface-attestation:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      SOURCE_REF: ${{ github.event_name == 'pull_request' && format('refs/heads/{0}', github.head_ref) || github.ref }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ env.SOURCE_SHA }}
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.24.x'
+          check-latest: true
+      - name: Generate normalized API surface
+        run: GOWORK=off GOTOOLCHAIN=local go run ./internal/apisurface -output "$RUNNER_TEMP/helianthus-eebusreg-api-surface-v1.json"
+      - name: Prove exact clean checkout
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Generate custom attestation predicate
+        env:
+          MANIFEST_PATH: ${{ runner.temp }}/helianthus-eebusreg-api-surface-v1.json
+          PREDICATE_PATH: ${{ runner.temp }}/helianthus-eebusreg-api-surface-v1-predicate.json
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          manifest_path = pathlib.Path(os.environ["MANIFEST_PATH"])
+          manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+          predicate = {
+              "schema_id": "helianthus.eebus.api-surface.provenance.v1",
+              "schema_version": 1,
+              "source": {
+                  "repository": os.environ["GITHUB_REPOSITORY"],
+                  "commit": os.environ["SOURCE_SHA"],
+                  "ref": os.environ["SOURCE_REF"],
+                  "event_name": os.environ["GITHUB_EVENT_NAME"],
+                  "pull_request_number": os.environ.get("PULL_REQUEST_NUMBER", ""),
+              },
+              "workflow": {
+                  "name": os.environ["GITHUB_WORKFLOW"],
+                  "run_id": os.environ["GITHUB_RUN_ID"],
+                  "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              },
+              "producer": {
+                  "command": "GOWORK=off GOTOOLCHAIN=local go run ./internal/apisurface -output <manifest>",
+                  "go_version": subprocess.check_output(
+                      ["go", "env", "GOVERSION"], text=True
+                  ).strip(),
+                  "api_schema_id": "helianthus.eebus.api-surface.v1",
+                  "api_schema_version": 1,
+              },
+              "checkout": {
+                  "clean": True,
+                  "head": subprocess.check_output(
+                      ["git", "rev-parse", "HEAD"], text=True
+                  ).strip(),
+              },
+              "subject": {
+                  "name": manifest_path.name,
+                  "sha256": manifest_sha256,
+              },
+          }
+          pathlib.Path(os.environ["PREDICATE_PATH"]).write_text(
+              json.dumps(predicate, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+              + "\n",
+              encoding="utf-8",
+          )
+          PY
+      - name: Attest normalized API surface
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        id: attest
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: ${{ runner.temp }}/helianthus-eebusreg-api-surface-v1.json
+          predicate-type: https://project-helianthus.github.io/attestations/eebus-api-surface/v1
+          predicate-path: ${{ runner.temp }}/helianthus-eebusreg-api-surface-v1-predicate.json
+      - name: Upload API surface evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: helianthus-eebusreg-api-surface-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/helianthus-eebusreg-api-surface-v1.json
+            ${{ runner.temp }}/helianthus-eebusreg-api-surface-v1-predicate.json
+            ${{ steps.attest.outputs.bundle-path }}
+          if-no-files-found: error

@@ -118,6 +118,7 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "const", Name: "FeatureRoleV1Unspecified"}:                  {},
 	{Kind: "const", Name: "FeatureRoleV1Client"}:                       {},
 	{Kind: "const", Name: "FeatureRoleV1Server"}:                       {},
+	{Kind: "func", Name: "New"}:                                        {},
 	{Kind: "func", Name: "NewSnapshotV1"}:                              {},
 	{Kind: "func", Name: "SnapshotV1.Clone"}:                           {},
 	{Kind: "func", Name: "SnapshotV1.ComputeDataHash"}:                 {},
@@ -135,6 +136,8 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "type", Name: "ObservedRuntimeStateV1"}:                     {},
 	{Kind: "type", Name: "ObservedSessionStateV1"}:                     {},
 	{Kind: "type", Name: "PairingObservationV1"}:                       {},
+	{Kind: "type", Name: "Remote"}:                                     {},
+	{Kind: "type", Name: "Runtime"}:                                    {},
 	{Kind: "type", Name: "RuntimeObservationV1"}:                       {},
 	{Kind: "type", Name: "ServiceKindV1"}:                              {},
 	{Kind: "type", Name: "ServiceV1"}:                                  {},
@@ -143,6 +146,18 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "type", Name: "SnapshotV1"}:                                 {},
 	{Kind: "type", Name: "TopologyV1"}:                                 {},
 	{Kind: "type", Name: "UseCaseClaimV1"}:                             {},
+	{Kind: "type", Name: "Config"}:                                     {},
+	{Kind: "var", Name: "ErrRuntimeDisabled"}:                          {},
+	{Kind: "var", Name: "ErrRuntimeShutdown"}:                          {},
+}
+
+var msp055RuntimeExports = map[manifestExport]struct{}{
+	{Kind: "func", Name: "New"}:               {},
+	{Kind: "type", Name: "Config"}:            {},
+	{Kind: "type", Name: "Remote"}:            {},
+	{Kind: "type", Name: "Runtime"}:           {},
+	{Kind: "var", Name: "ErrRuntimeDisabled"}: {},
+	{Kind: "var", Name: "ErrRuntimeShutdown"}: {},
 }
 
 var allowedMSP035RawExports = frozenExportInventory(`
@@ -691,9 +706,20 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 	if err != nil {
 		return apiManifest{}, nil, fmt.Errorf("read module identity: %w", err)
 	}
-	modulePath := modfile.ModulePath(moduleData)
-	if modulePath == "" {
+	moduleFile, err := modfile.Parse("go.mod", moduleData, nil)
+	if err != nil {
+		return apiManifest{}, nil, fmt.Errorf("read module identity: %w", err)
+	}
+	if moduleFile.Module == nil || moduleFile.Module.Mod.Path == "" {
 		return apiManifest{}, nil, fmt.Errorf("read module identity: go.mod has no module directive")
+	}
+	modulePath := moduleFile.Module.Mod.Path
+	runtimeLifecycleActive := false
+	for _, required := range moduleFile.Require {
+		if required.Mod.Path == "github.com/enbility/eebus-go" {
+			runtimeLifecycleActive = true
+			break
+		}
 	}
 
 	fset := token.NewFileSet()
@@ -755,12 +781,16 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 			}
 		}
 
+		internalAliases := internalImportAliases(file, modulePath)
 		for _, imp := range file.Imports {
 			importPath := strings.Trim(imp.Path.Value, `"`)
 			if !internal && strings.Contains(importPath, "github.com/enbility") {
 				violations = append(violations, at(fset, imp.Pos(), rel, "direct enbility imports are allowed only under internal/"))
 			}
-			if !internal && !testFile && strings.HasPrefix(importPath, modulePath+"/internal/") {
+			rootRuntimeImplementation := !internal && !testFile && filepath.ToSlash(filepath.Dir(rel)) == "." && file.Name.Name == "eebusruntime"
+			facadeImplementationImport := rootRuntimeImplementation && importPath == modulePath+"/internal/eebusfacade" &&
+				(imp.Name == nil || imp.Name.Name != ".")
+			if !internal && !testFile && strings.HasPrefix(importPath, modulePath+"/internal/") && !facadeImplementationImport {
 				violations = append(violations, at(fset, imp.Pos(), rel, "public API packages must not import internal implementation types"))
 			}
 			for _, forbidden := range forbiddenImports {
@@ -782,6 +812,7 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 					checkExportedName(fset, rel, declaration.Name, &violations)
 					if declaration.Name.IsExported() {
 						checkExportedTypeSurface(fset, rel, declaration.Type, &violations)
+						checkInternalTypeEscape(fset, rel, declaration.Type, internalAliases, &violations)
 					}
 				}
 			case *ast.GenDecl:
@@ -791,10 +822,16 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 						checkExportedName(fset, rel, typed.Name, &violations)
 						if typed.Name.IsExported() {
 							checkExportedTypeSurface(fset, rel, typed.Type, &violations)
+							checkInternalTypeEscape(fset, rel, typed.Type, internalAliases, &violations)
 						}
 					case *ast.ValueSpec:
+						exported := false
 						for _, name := range typed.Names {
 							checkExportedName(fset, rel, name, &violations)
+							exported = exported || name.IsExported()
+						}
+						if exported {
+							checkInternalTypeEscape(fset, rel, typed, internalAliases, &violations)
 						}
 					}
 				}
@@ -808,7 +845,7 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 
 	stableContracts, stableViolations := inspectStableContracts(root, modulePath, fset, packages)
 	violations = append(violations, stableViolations...)
-	violations = append(violations, inspectRuntimeExports(modulePath, packages)...)
+	violations = append(violations, inspectRuntimeExports(modulePath, packages, runtimeLifecycleActive)...)
 	violations = append(violations, inspectMSP035DependencyExports(modulePath, packages)...)
 	manifest := apiManifest{
 		Module:          modulePath,
@@ -840,7 +877,7 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 	return manifest, violations, nil
 }
 
-func inspectRuntimeExports(modulePath string, packages map[string]*packageInventory) []string {
+func inspectRuntimeExports(modulePath string, packages map[string]*packageInventory, lifecycleActive bool) []string {
 	inventory := packages[modulePath]
 	if inventory == nil {
 		if modulePath == canonicalModulePath {
@@ -853,6 +890,7 @@ func inspectRuntimeExports(modulePath string, packages map[string]*packageInvent
 			return nil
 		}
 	}
+	snapshotOnlyContract := modulePath == canonicalModulePath && !lifecycleActive
 	var violations []string
 	for actual := range inventory.exports {
 		if _, allowed := allowedRuntimeExports[actual]; !allowed {
@@ -860,6 +898,11 @@ func inspectRuntimeExports(modulePath string, packages map[string]*packageInvent
 		}
 	}
 	for expected := range allowedRuntimeExports {
+		if snapshotOnlyContract {
+			if _, lifecycle := msp055RuntimeExports[expected]; lifecycle {
+				continue
+			}
+		}
 		if _, present := inventory.exports[expected]; !present {
 			violations = append(violations, fmt.Sprintf("root eebusruntime export required by MSP-036 is missing: %s %s", expected.Kind, expected.Name))
 		}
@@ -1112,9 +1155,11 @@ func collectExports(file *ast.File, exports map[manifestExport]struct{}) {
 			}
 			name := declaration.Name.Name
 			if declaration.Recv != nil && len(declaration.Recv.List) > 0 {
-				if receiver := receiverName(declaration.Recv.List[0].Type); receiver != "" {
-					name = receiver + "." + name
+				receiver := receiverName(declaration.Recv.List[0].Type)
+				if receiver == "" || !ast.IsExported(receiver) {
+					continue
 				}
+				name = receiver + "." + name
 			}
 			exports[manifestExport{Kind: "func", Name: name}] = struct{}{}
 		case *ast.GenDecl:
@@ -1320,12 +1365,30 @@ func (i *sourceImporter) Import(path string) (*types.Package, error) {
 	i.checking[path] = true
 	defer delete(i.checking, path)
 	config := types.Config{Importer: i}
-	checked, err := config.Check(path, i.fset, inventory.files, nil)
+	checked, err := config.Check(path, i.fset, stableTypeCheckFiles(path, inventory.files), nil)
 	if err != nil {
 		return nil, err
 	}
 	i.checked[path] = checked
 	return checked, nil
+}
+
+func stableTypeCheckFiles(packagePath string, files []*ast.File) []*ast.File {
+	result := make([]*ast.File, 0, len(files))
+	for _, file := range files {
+		implementation := false
+		for _, spec := range file.Imports {
+			importPath, err := strconv.Unquote(spec.Path.Value)
+			if err == nil && strings.HasPrefix(importPath, packagePath+"/internal/") {
+				implementation = true
+				break
+			}
+		}
+		if !implementation {
+			result = append(result, file)
+		}
+	}
+	return result
 }
 
 func typedConstants(root string, fset *token.FileSet, pkg *types.Package) map[string]constantDeclaration {
@@ -1930,6 +1993,47 @@ func checkExportedTypeSurface(fset *token.FileSet, rel string, node ast.Node, vi
 		ident, ok := current.(*ast.Ident)
 		if ok {
 			checkExportedName(fset, rel, ident, violations)
+		}
+		return true
+	})
+}
+
+func internalImportAliases(file *ast.File, modulePath string) map[string]string {
+	aliases := make(map[string]string)
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil || !strings.HasPrefix(importPath, modulePath+"/internal/") {
+			continue
+		}
+		name := filepath.Base(importPath)
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		if name != "" && name != "_" && name != "." {
+			aliases[name] = importPath
+		}
+	}
+	return aliases
+}
+
+func checkInternalTypeEscape(fset *token.FileSet, rel string, node ast.Node, aliases map[string]string, violations *[]string) {
+	found := false
+	ast.Inspect(node, func(current ast.Node) bool {
+		if found {
+			return false
+		}
+		selector, ok := current.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		identifier, ok := selector.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if _, internal := aliases[identifier.Name]; internal {
+			*violations = append(*violations, at(fset, selector.Pos(), rel, "public API packages must not import internal implementation types"))
+			found = true
+			return false
 		}
 		return true
 	})
