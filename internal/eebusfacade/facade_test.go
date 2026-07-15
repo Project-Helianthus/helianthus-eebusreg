@@ -155,14 +155,14 @@ func TestServiceReaderShapeMatchesExpectedCallbacks(t *testing.T) {
 	}
 }
 
-func TestNoRuntimeImplementationImportedByFacade(t *testing.T) {
+func TestFacadeDoesNotOwnLowLevelNetworkIO(t *testing.T) {
 	files := parseImplementationFiles(t)
 	for path, file := range files {
 		for _, imp := range file.Imports {
 			importPath := strings.Trim(imp.Path.Value, `"`)
 			switch importPath {
-			case "net", "net/http", "crypto/tls", "github.com/enbility/eebus-go/service":
-				t.Fatalf("%s imports premature runtime dependency %q", path, importPath)
+			case "net", "net/http", "crypto/tls":
+				t.Fatalf("%s imports low-level network dependency %q", path, importPath)
 			}
 		}
 	}
