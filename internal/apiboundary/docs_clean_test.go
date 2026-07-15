@@ -699,6 +699,27 @@ func TestStableContractASTManifest(t *testing.T) {
 	}
 }
 
+func TestMSP035DependencyExportInventory(t *testing.T) {
+	tool := buildAPIBoundary(t)
+
+	t.Run("canonical dependency inventories are exact", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeMSP035DependencyFixture(t, root)
+		if output, err := runTool(t, tool, root); err != nil {
+			t.Fatalf("canonical MSP-035 dependency fixture was rejected: %v\n%s", err, output)
+		}
+	})
+
+	for _, packageName := range []string{"eebusraw", "eebusevidence"} {
+		t.Run("extra "+packageName+" export is rejected", func(t *testing.T) {
+			root := newSyntheticRepository(t)
+			writeMSP035DependencyFixture(t, root)
+			writeFile(t, root, packageName+"/zebra.go", "package "+packageName+"\n\ntype Zebra struct{}\n")
+			expectRejected(t, tool, root, "MSP-035 dependency", packageName, "type Zebra")
+		})
+	}
+}
+
 func TestDocsCleanAPIBoundaryManifestArtifact(t *testing.T) {
 	tool := buildAPIBoundary(t)
 	root := newSyntheticRepository(t)
@@ -895,6 +916,47 @@ func writeStableContractFixture(t *testing.T, root, rawSource, evidenceSource st
 	t.Helper()
 	writeFile(t, root, "eebusraw/stable.go", rawSource)
 	writeFile(t, root, "eebusevidence/stable.go", evidenceSource)
+}
+
+func writeMSP035DependencyFixture(t *testing.T, root string) {
+	t.Helper()
+	writeFile(t, root, "go.mod", "module github.com/Project-Helianthus/helianthus-eebusreg\n\ngo 1.22.0\n")
+	copyMSP035FixtureDirectory(t, root, "eebusraw")
+	copyMSP035FixtureDirectory(t, root, "eebusevidence")
+	data, err := os.ReadFile(filepath.Join(msp035FixtureSourceRoot(t), "raw_snapshot_v1.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "raw_snapshot_v1.go", string(data))
+	runGit(t, root, nil, "add", "--", ".")
+}
+
+func copyMSP035FixtureDirectory(t *testing.T, root, directory string) {
+	t.Helper()
+	source := filepath.Join(msp035FixtureSourceRoot(t), directory)
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(source, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, root, filepath.Join(directory, entry.Name()), string(data))
+	}
+}
+
+func msp035FixtureSourceRoot(t *testing.T) string {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Clean(filepath.Join(cwd, "..", ".."))
 }
 
 func stableRawFixture() string {

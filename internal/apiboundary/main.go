@@ -94,6 +94,285 @@ var allowedPublicPackages = map[string]string{
 	"eebusraw":      "eebusraw",
 }
 
+var allowedRuntimeExports = map[manifestExport]struct{}{
+	{Kind: "const", Name: "SnapshotContractV1"}:                        {},
+	{Kind: "const", Name: "ObservedRuntimeStateV1Unknown"}:             {},
+	{Kind: "const", Name: "ObservedRuntimeStateV1Stopped"}:             {},
+	{Kind: "const", Name: "ObservedRuntimeStateV1Starting"}:            {},
+	{Kind: "const", Name: "ObservedRuntimeStateV1Ready"}:               {},
+	{Kind: "const", Name: "ObservedRuntimeStateV1Degraded"}:            {},
+	{Kind: "const", Name: "ObservedRuntimeStateV1Shutdown"}:            {},
+	{Kind: "const", Name: "DegradationReasonV1MissingDiscovery"}:       {},
+	{Kind: "const", Name: "DegradationReasonV1DeniedTrust"}:            {},
+	{Kind: "const", Name: "DegradationReasonV1RemoteDisconnect"}:       {},
+	{Kind: "const", Name: "DegradationReasonV1CertificateUnavailable"}: {},
+	{Kind: "const", Name: "DegradationReasonV1NoVisibleServices"}:      {},
+	{Kind: "const", Name: "DegradationReasonV1NoData"}:                 {},
+	{Kind: "const", Name: "ServiceKindV1Local"}:                        {},
+	{Kind: "const", Name: "ServiceKindV1Remote"}:                       {},
+	{Kind: "const", Name: "ObservedSessionStateV1Unknown"}:             {},
+	{Kind: "const", Name: "ObservedSessionStateV1Connecting"}:          {},
+	{Kind: "const", Name: "ObservedSessionStateV1Connected"}:           {},
+	{Kind: "const", Name: "ObservedSessionStateV1Disconnected"}:        {},
+	{Kind: "const", Name: "ObservedSessionStateV1Degraded"}:            {},
+	{Kind: "const", Name: "FeatureRoleV1Unspecified"}:                  {},
+	{Kind: "const", Name: "FeatureRoleV1Client"}:                       {},
+	{Kind: "const", Name: "FeatureRoleV1Server"}:                       {},
+	{Kind: "func", Name: "NewSnapshotV1"}:                              {},
+	{Kind: "func", Name: "SnapshotV1.Clone"}:                           {},
+	{Kind: "func", Name: "SnapshotV1.ComputeDataHash"}:                 {},
+	{Kind: "func", Name: "SnapshotV1.Format"}:                          {},
+	{Kind: "func", Name: "SnapshotV1.GoString"}:                        {},
+	{Kind: "func", Name: "SnapshotV1.MarshalJSON"}:                     {},
+	{Kind: "func", Name: "SnapshotV1.String"}:                          {},
+	{Kind: "func", Name: "SnapshotV1.Validate"}:                        {},
+	{Kind: "type", Name: "DegradationReasonV1"}:                        {},
+	{Kind: "type", Name: "DegradationV1"}:                              {},
+	{Kind: "type", Name: "DeviceV1"}:                                   {},
+	{Kind: "type", Name: "EntityV1"}:                                   {},
+	{Kind: "type", Name: "FeatureRoleV1"}:                              {},
+	{Kind: "type", Name: "FeatureV1"}:                                  {},
+	{Kind: "type", Name: "ObservedRuntimeStateV1"}:                     {},
+	{Kind: "type", Name: "ObservedSessionStateV1"}:                     {},
+	{Kind: "type", Name: "PairingObservationV1"}:                       {},
+	{Kind: "type", Name: "RuntimeObservationV1"}:                       {},
+	{Kind: "type", Name: "ServiceKindV1"}:                              {},
+	{Kind: "type", Name: "ServiceV1"}:                                  {},
+	{Kind: "type", Name: "SessionV1"}:                                  {},
+	{Kind: "type", Name: "SnapshotMetaV1"}:                             {},
+	{Kind: "type", Name: "SnapshotV1"}:                                 {},
+	{Kind: "type", Name: "TopologyV1"}:                                 {},
+	{Kind: "type", Name: "UseCaseClaimV1"}:                             {},
+}
+
+var allowedMSP035RawExports = frozenExportInventory(`
+const EndpointRoleLocal
+const EndpointRoleRemote
+const EndpointRoleV1Local
+const EndpointRoleV1Remote
+const IDKindCertificateFingerprint
+const IDKindLocalSKI
+const IDKindPeer
+const IDKindRemoteSKI
+const IDKindSession
+const IdentityContractV1
+const IdentityContractV1Alpha1
+const MaskTierRedacted
+const PairingStateDenied
+const PairingStatePaired
+const PairingStateUnknown
+const PairingStateUnpaired
+const SessionStateDegraded
+const SessionStateDisconnected
+const SessionStateObserved
+const SessionStateUnknown
+const UnknownPathDevice
+const UnknownPathDocument
+const UnknownPathLocal
+const UnknownPathRemote
+const UnknownPathSession
+func EndpointIdentity.Validate
+func EndpointIdentityV1.Format
+func EndpointIdentityV1.GoString
+func EndpointIdentityV1.MarshalJSON
+func EndpointIdentityV1.String
+func EndpointIdentityV1.Validate
+func EndpointRoleV1.Format
+func EndpointRoleV1.GoString
+func EndpointRoleV1.MarshalJSON
+func EndpointRoleV1.String
+func EndpointRoleV1.Validate
+func IDKind.Format
+func IDKind.GoString
+func IDKind.MarshalJSON
+func IDKind.String
+func IDKind.Validate
+func IdentityDocument.Format
+func IdentityDocument.GoString
+func IdentityDocument.MarshalJSON
+func IdentityDocument.String
+func IdentityDocument.Validate
+func IdentityDocumentV1.Format
+func IdentityDocumentV1.GoString
+func IdentityDocumentV1.MarshalJSON
+func IdentityDocumentV1.String
+func IdentityDocumentV1.Validate
+func NewIdentityDocument
+func NewIdentityDocumentV1
+func OpaqueBytes
+func OpaqueValue.Format
+func OpaqueValue.GoString
+func OpaqueValue.MarshalJSON
+func OpaqueValue.String
+func OpaqueValue.Validate
+func PairingObservation.Validate
+func RedactID
+func RedactedID.Format
+func RedactedID.GoString
+func RedactedID.MarshalJSON
+func RedactedID.String
+func RedactedID.Validate
+func SessionIdentity.Validate
+func SessionIdentityV1.Format
+func SessionIdentityV1.GoString
+func SessionIdentityV1.MarshalJSON
+func SessionIdentityV1.String
+func SessionIdentityV1.Validate
+func UnknownField.Format
+func UnknownField.GoString
+func UnknownField.MarshalJSON
+func UnknownField.String
+func UnknownField.Validate
+func UnknownPath.Format
+func UnknownPath.GoString
+func UnknownPath.MarshalJSON
+func UnknownPath.String
+func UnknownPath.Validate
+type ContractVersion
+type EndpointIdentity
+type EndpointIdentityV1
+type EndpointRole
+type EndpointRoleV1
+type IDKind
+type IdentityDocument
+type IdentityDocumentV1
+type MaskTier
+type OpaqueValue
+type PairingObservation
+type PairingState
+type RedactedID
+type SessionIdentity
+type SessionIdentityV1
+type SessionState
+type UnknownField
+type UnknownPath
+`)
+
+var allowedMSP035EvidenceExports = frozenExportInventory(`
+const AuthScopeReadRaw
+const CaptureProvenanceRuntimeObservation
+const EnvelopeContractV1
+const EnvelopeContractV1Alpha1
+const ObjectKindIdentity
+const ObjectKindService
+const ObjectKindSession
+const ObjectKindTopology
+const ObjectKindUnknown
+const RawSnapshotScopeIdentity
+const RawSnapshotScopeRoot
+const RawSnapshotScopeServices
+const RawSnapshotScopeSessions
+const RawSnapshotScopeTopology
+const RawSnapshotScopeUnknown
+const ScopePairingStatus
+const ScopeRuntimeStatus
+const ScopeService
+const ScopeServices
+const ScopeSession
+const ScopeSessions
+const ScopeTopology
+const ScopeWholeRoot
+const ToolCapture
+const ToolPairingStatus
+const ToolRuntimeStatus
+const ToolServicesGet
+const ToolServicesList
+const ToolSessionsGet
+const ToolSessionsList
+const ToolTopologyGet
+func AuthScope.Format
+func AuthScope.GoString
+func AuthScope.MarshalJSON
+func AuthScope.String
+func AuthScope.Validate
+func CaptureProvenanceV1.Format
+func CaptureProvenanceV1.GoString
+func CaptureProvenanceV1.MarshalJSON
+func CaptureProvenanceV1.String
+func CaptureProvenanceV1.Validate
+func ContractVersion.Format
+func ContractVersion.GoString
+func ContractVersion.MarshalJSON
+func ContractVersion.String
+func ContractVersion.Validate
+func DigestBytes
+func Envelope.ComputeDataHash
+func Envelope.Format
+func Envelope.GoString
+func Envelope.MarshalJSON
+func Envelope.String
+func Envelope.Validate
+func Envelope.WithDataHash
+func EnvelopeV1.ComputeDataHash
+func EnvelopeV1.Format
+func EnvelopeV1.GoString
+func EnvelopeV1.MarshalJSON
+func EnvelopeV1.String
+func EnvelopeV1.Validate
+func EnvelopeV1.WithDataHash
+func NewEnvelope
+func NewEnvelopeV1
+func NewObject
+func NewObjectV1
+func NewReference
+func NewReferenceV1
+func Object.Format
+func Object.GoString
+func Object.MarshalJSON
+func Object.String
+func Object.Validate
+func ObjectKind.Format
+func ObjectKind.GoString
+func ObjectKind.MarshalJSON
+func ObjectKind.String
+func ObjectKind.Validate
+func ObjectV1.Format
+func ObjectV1.GoString
+func ObjectV1.MarshalJSON
+func ObjectV1.String
+func ObjectV1.Validate
+func RawSnapshotScopeV1.Format
+func RawSnapshotScopeV1.GoString
+func RawSnapshotScopeV1.MarshalJSON
+func RawSnapshotScopeV1.String
+func RawSnapshotScopeV1.Validate
+func Reference.Format
+func Reference.GoString
+func Reference.MarshalJSON
+func Reference.Matches
+func Reference.String
+func Reference.Validate
+func ReferenceV1.Format
+func ReferenceV1.GoString
+func ReferenceV1.MarshalJSON
+func ReferenceV1.Matches
+func ReferenceV1.String
+func ReferenceV1.Validate
+func Scope.Format
+func Scope.GoString
+func Scope.MarshalJSON
+func Scope.String
+func Scope.Validate
+func ToolID.Format
+func ToolID.GoString
+func ToolID.MarshalJSON
+func ToolID.String
+func ToolID.Validate
+type AuthScope
+type CaptureProvenanceV1
+type ContractVersion
+type Envelope
+type EnvelopeV1
+type Object
+type ObjectKind
+type ObjectV1
+type RawSnapshotScopeV1
+type Reference
+type ReferenceV1
+type Scope
+type ToolID
+`)
+
 var documentationExtensions = map[string]struct{}{
 	".adoc":     {},
 	".asciidoc": {},
@@ -143,6 +422,18 @@ type manifestPackage struct {
 type manifestExport struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
+}
+
+func frozenExportInventory(entries string) map[manifestExport]struct{} {
+	inventory := make(map[manifestExport]struct{})
+	for _, line := range strings.Split(strings.TrimSpace(entries), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			panic("invalid frozen public export inventory entry")
+		}
+		inventory[manifestExport{Kind: fields[0], Name: fields[1]}] = struct{}{}
+	}
+	return inventory
 }
 
 type manifestStableContract struct {
@@ -517,6 +808,8 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 
 	stableContracts, stableViolations := inspectStableContracts(root, modulePath, fset, packages)
 	violations = append(violations, stableViolations...)
+	violations = append(violations, inspectRuntimeExports(modulePath, packages)...)
+	violations = append(violations, inspectMSP035DependencyExports(modulePath, packages)...)
 	manifest := apiManifest{
 		Module:          modulePath,
 		Packages:        make([]manifestPackage, 0, len(packages)),
@@ -545,6 +838,67 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 		return manifest.Packages[i].ImportPath < manifest.Packages[j].ImportPath
 	})
 	return manifest, violations, nil
+}
+
+func inspectRuntimeExports(modulePath string, packages map[string]*packageInventory) []string {
+	inventory := packages[modulePath]
+	if inventory == nil {
+		if modulePath == canonicalModulePath {
+			return []string{"root eebusruntime package is missing"}
+		}
+		return nil
+	}
+	if modulePath != canonicalModulePath {
+		if _, active := inventory.types["SnapshotV1"]; !active {
+			return nil
+		}
+	}
+	var violations []string
+	for actual := range inventory.exports {
+		if _, allowed := allowedRuntimeExports[actual]; !allowed {
+			violations = append(violations, fmt.Sprintf("root eebusruntime export is outside the MSP-036 closed inventory: %s %s", actual.Kind, actual.Name))
+		}
+	}
+	for expected := range allowedRuntimeExports {
+		if _, present := inventory.exports[expected]; !present {
+			violations = append(violations, fmt.Sprintf("root eebusruntime export required by MSP-036 is missing: %s %s", expected.Kind, expected.Name))
+		}
+	}
+	return violations
+}
+
+func inspectMSP035DependencyExports(modulePath string, packages map[string]*packageInventory) []string {
+	if modulePath != canonicalModulePath {
+		return nil
+	}
+	dependencies := []struct {
+		name    string
+		path    string
+		exports map[manifestExport]struct{}
+	}{
+		{name: "eebusraw", path: modulePath + "/eebusraw", exports: allowedMSP035RawExports},
+		{name: "eebusevidence", path: modulePath + "/eebusevidence", exports: allowedMSP035EvidenceExports},
+	}
+	var violations []string
+	for _, dependency := range dependencies {
+		inventory := packages[dependency.path]
+		if inventory == nil {
+			violations = append(violations, fmt.Sprintf("MSP-035 dependency %s public package is missing", dependency.name))
+			continue
+		}
+		for actual := range inventory.exports {
+			if _, allowed := dependency.exports[actual]; !allowed {
+				violations = append(violations, fmt.Sprintf("MSP-035 dependency %s public export is outside the frozen inventory: %s %s", dependency.name, actual.Kind, actual.Name))
+			}
+		}
+		for expected := range dependency.exports {
+			if _, present := inventory.exports[expected]; !present {
+				violations = append(violations, fmt.Sprintf("MSP-035 dependency %s frozen public export is missing: %s %s", dependency.name, expected.Kind, expected.Name))
+			}
+		}
+	}
+	sort.Strings(violations)
+	return violations
 }
 
 func checkProductionComments(fset *token.FileSet, rel string, file *ast.File, violations *[]string) {
@@ -846,6 +1200,15 @@ func inspectStableContracts(root, modulePath string, fset *token.FileSet, packag
 	contracts := make([]manifestStableContract, 0, len(specs))
 	violations := append([]string(nil), typeViolations...)
 	for _, spec := range specs {
+		if modulePath != canonicalModulePath {
+			inventory := packages[spec.importPath]
+			if inventory == nil {
+				continue
+			}
+			if _, ok := inventory.types[spec.root]; !ok {
+				continue
+			}
+		}
 		contract := manifestStableContract{
 			Enums:      make([]manifestStableEnum, 0, len(spec.enums)),
 			ImportPath: spec.importPath,
@@ -1092,6 +1455,128 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 		return manifestStableEnumValue{Name: name, Value: value}
 	}
 	return []stableContractSpec{
+		{
+			importPath: modulePath,
+			root:       "SnapshotV1",
+			types: []manifestStableType{
+				stableType("ObservedRuntimeStateV1", "string"),
+				stableType("DegradationReasonV1", "string"),
+				stableType("ServiceKindV1", "string"),
+				stableType("ObservedSessionStateV1", "string"),
+				stableType("FeatureRoleV1", "string"),
+				stableType("SnapshotV1", "struct",
+					field("Meta", "SnapshotMetaV1", `json:"meta"`),
+					field("Status", "RuntimeObservationV1", `json:"status"`),
+					field("Pairing", "[]PairingObservationV1", `json:"pairing,omitempty"`),
+					field("Services", "[]ServiceV1", `json:"services,omitempty"`),
+					field("Sessions", "[]SessionV1", `json:"sessions,omitempty"`),
+					field("Topology", "TopologyV1", `json:"topology"`),
+					field("Raw", "[]"+evidencePath+".ObjectV1", `json:"raw,omitempty"`),
+				),
+				stableType("SnapshotMetaV1", "struct",
+					field("Contract", "string", `json:"contract"`),
+					field("Runtime", rawPath+".RedactedID", `json:"runtime"`),
+					field("LocalSKI", rawPath+".RedactedID", `json:"local_ski"`),
+					field("MaskTier", rawPath+".MaskTier", `json:"mask_tier"`),
+					field("CapturedAt", "time.Time", `json:"captured_at"`),
+					field("DataTimestamp", "time.Time", `json:"data_timestamp"`),
+					field("DataHash", "string", `json:"data_hash,omitempty"`),
+				),
+				stableType("RuntimeObservationV1", "struct",
+					field("State", "ObservedRuntimeStateV1", `json:"state"`),
+					field("Degradation", "*DegradationV1", `json:"degradation,omitempty"`),
+				),
+				stableType("DegradationV1", "struct",
+					field("Reason", "DegradationReasonV1", `json:"reason"`),
+					field("Since", "time.Time", `json:"since"`),
+				),
+				stableType("PairingObservationV1", "struct",
+					field("Remote", rawPath+".RedactedID", `json:"remote"`),
+					field("State", rawPath+".PairingState", `json:"state"`),
+					field("Since", "time.Time", `json:"since,omitempty"`),
+					field("Raw", "[]"+evidencePath+".ObjectV1", `json:"raw,omitempty"`),
+					field("Unknown", "[]"+rawPath+".UnknownField", `json:"unknown,omitempty"`),
+				),
+				stableType("ServiceV1", "struct",
+					field("ID", rawPath+".RedactedID", `json:"id"`),
+					field("Kind", "ServiceKindV1", `json:"kind"`),
+					field("Visible", "bool", `json:"visible"`),
+					field("Paired", "bool", `json:"paired"`),
+					field("Raw", "[]"+evidencePath+".ObjectV1", `json:"raw,omitempty"`),
+					field("Unknown", "[]"+rawPath+".UnknownField", `json:"unknown,omitempty"`),
+				),
+				stableType("SessionV1", "struct",
+					field("ID", rawPath+".RedactedID", `json:"id"`),
+					field("Remote", rawPath+".RedactedID", `json:"remote"`),
+					field("State", "ObservedSessionStateV1", `json:"state"`),
+					field("Since", "time.Time", `json:"since,omitempty"`),
+					field("Raw", "[]"+evidencePath+".ObjectV1", `json:"raw,omitempty"`),
+					field("Unknown", "[]"+rawPath+".UnknownField", `json:"unknown,omitempty"`),
+				),
+				stableType("TopologyV1", "struct",
+					field("Devices", "[]DeviceV1", `json:"devices,omitempty"`),
+				),
+				stableType("DeviceV1", "struct",
+					field("ID", rawPath+".RedactedID", `json:"id"`),
+					field("Entities", "[]EntityV1", `json:"entities,omitempty"`),
+					field("UseCaseClaims", "[]UseCaseClaimV1", `json:"usecase_claims,omitempty"`),
+					field("Raw", "[]"+evidencePath+".ObjectV1", `json:"raw,omitempty"`),
+					field("Unknown", "[]"+rawPath+".UnknownField", `json:"unknown,omitempty"`),
+				),
+				stableType("EntityV1", "struct",
+					field("ID", rawPath+".RedactedID", `json:"id"`),
+					field("Features", "[]FeatureV1", `json:"features,omitempty"`),
+					field("Raw", "[]"+evidencePath+".ObjectV1", `json:"raw,omitempty"`),
+					field("Unknown", "[]"+rawPath+".UnknownField", `json:"unknown,omitempty"`),
+				),
+				stableType("FeatureV1", "struct",
+					field("ID", rawPath+".RedactedID", `json:"id"`),
+					field("Role", "FeatureRoleV1", `json:"role"`),
+					field("Raw", "[]"+evidencePath+".ObjectV1", `json:"raw,omitempty"`),
+					field("Unknown", "[]"+rawPath+".UnknownField", `json:"unknown,omitempty"`),
+				),
+				stableType("UseCaseClaimV1", "struct",
+					field("ID", rawPath+".RedactedID", `json:"id"`),
+					field("Raw", "[]"+evidencePath+".ObjectV1", `json:"raw,omitempty"`),
+					field("Unknown", "[]"+rawPath+".UnknownField", `json:"unknown,omitempty"`),
+				),
+			},
+			enums: []stableEnumSpec{
+				{exact: true, values: []manifestStableEnumValue{enumValue("SnapshotContractV1", "helianthus.eebus.runtime.raw-snapshot.v1")}},
+				{exact: true, typeName: "ObservedRuntimeStateV1", values: []manifestStableEnumValue{
+					enumValue("ObservedRuntimeStateV1Unknown", "unknown"),
+					enumValue("ObservedRuntimeStateV1Stopped", "stopped"),
+					enumValue("ObservedRuntimeStateV1Starting", "starting"),
+					enumValue("ObservedRuntimeStateV1Ready", "ready"),
+					enumValue("ObservedRuntimeStateV1Degraded", "degraded"),
+					enumValue("ObservedRuntimeStateV1Shutdown", "shutdown"),
+				}},
+				{exact: true, typeName: "DegradationReasonV1", values: []manifestStableEnumValue{
+					enumValue("DegradationReasonV1MissingDiscovery", "missing-discovery"),
+					enumValue("DegradationReasonV1DeniedTrust", "denied-trust"),
+					enumValue("DegradationReasonV1RemoteDisconnect", "remote-disconnect"),
+					enumValue("DegradationReasonV1CertificateUnavailable", "certificate-unavailable"),
+					enumValue("DegradationReasonV1NoVisibleServices", "no-visible-services"),
+					enumValue("DegradationReasonV1NoData", "no-data"),
+				}},
+				{exact: true, typeName: "ServiceKindV1", values: []manifestStableEnumValue{
+					enumValue("ServiceKindV1Local", "local"),
+					enumValue("ServiceKindV1Remote", "remote"),
+				}},
+				{exact: true, typeName: "ObservedSessionStateV1", values: []manifestStableEnumValue{
+					enumValue("ObservedSessionStateV1Unknown", "unknown"),
+					enumValue("ObservedSessionStateV1Connecting", "connecting"),
+					enumValue("ObservedSessionStateV1Connected", "connected"),
+					enumValue("ObservedSessionStateV1Disconnected", "disconnected"),
+					enumValue("ObservedSessionStateV1Degraded", "degraded"),
+				}},
+				{exact: true, typeName: "FeatureRoleV1", values: []manifestStableEnumValue{
+					enumValue("FeatureRoleV1Unspecified", ""),
+					enumValue("FeatureRoleV1Client", "client"),
+					enumValue("FeatureRoleV1Server", "server"),
+				}},
+			},
+		},
 		{
 			importPath: rawPath,
 			root:       "IdentityDocumentV1",
