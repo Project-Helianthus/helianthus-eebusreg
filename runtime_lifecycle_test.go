@@ -3,6 +3,7 @@ package eebusruntime
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusevidence"
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 )
 
 func TestRuntimeDisabledNeverAcquiresBackend(t *testing.T) {
@@ -101,9 +103,6 @@ func TestRuntimeConcurrentLifecycleAcquiresOnceCancelsJoinsAndClosesOnce(t *test
 	if got := backend.closeCalls.Load(); got != 1 {
 		t.Fatalf("backend Close calls = %d, want 1", got)
 	}
-	if backend.closedBeforeRunExit.Load() {
-		t.Fatal("backend was closed before its worker joined")
-	}
 	if err := instance.Start(context.Background()); !errors.Is(err, ErrRuntimeShutdown) {
 		t.Fatalf("Start after shutdown error = %v, want ErrRuntimeShutdown", err)
 	}
@@ -115,6 +114,148 @@ func TestRuntimeConcurrentLifecycleAcquiresOnceCancelsJoinsAndClosesOnce(t *test
 		t.Fatalf("terminal state = %q, want shutdown", terminal.Status.State)
 	}
 	assertRuntimeFeatureGraphCounts(t, terminal)
+}
+
+func TestRuntimeConcurrentStartWaiterCanCancelIndependently(t *testing.T) {
+	backend := newFakeRuntimeBackend()
+	factoryEntered := make(chan struct{})
+	releaseFactory := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFactory) }) }
+	t.Cleanup(release)
+
+	factory := runtimeBackendFactory(func(context.Context, Config) (runtimeBackend, error) {
+		close(factoryEntered)
+		<-releaseFactory
+		return backend, nil
+	})
+	instance, err := newRuntime(validRuntimeConfig(t.TempDir()), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstResult := make(chan error, 1)
+	go func() { firstResult <- instance.Start(context.Background()) }()
+	waitRuntimeSignal(t, factoryEntered, "first backend acquisition")
+
+	waiterCtx, cancelWaiter := context.WithCancel(context.Background())
+	waiterResult := make(chan error, 1)
+	go func() { waiterResult <- instance.Start(waiterCtx) }()
+	cancelWaiter()
+	if err := waitRuntimeResult(t, waiterResult, "canceled Start waiter"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("concurrent Start waiter error = %v, want context.Canceled", err)
+	}
+	select {
+	case err := <-firstResult:
+		t.Fatalf("first Start returned before acquisition completed: %v", err)
+	default:
+	}
+
+	release()
+	if err := waitRuntimeResult(t, firstResult, "first Start"); err != nil {
+		t.Fatalf("first Start error = %v", err)
+	}
+	waitRuntimeSignal(t, backend.runStarted, "backend Run")
+	if err := instance.Shutdown(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRuntimeRunErrorStopsLiveSuccessAndIsReturnedByShutdown(t *testing.T) {
+	backend := newFakeRuntimeBackend()
+	instance, err := newRuntime(validRuntimeConfig(t.TempDir()), func(context.Context, Config) (runtimeBackend, error) {
+		return backend, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeSignal(t, backend.runStarted, "backend Run")
+	backend.publish(t, lifecycleRuntimeSnapshot(t, "before-worker-failure"))
+
+	runErr := errors.New("fixture backend Run failed")
+	backend.fail(t, runErr)
+	waitRuntimeWorkerExit(t, instance)
+
+	if _, err := instance.Snapshot(); !errors.Is(err, runErr) {
+		t.Fatalf("Snapshot() after Run failure error = %v, want backend failure", err)
+	}
+	if err := instance.Start(context.Background()); !errors.Is(err, runErr) {
+		t.Fatalf("Start() after Run failure error = %v, want backend failure", err)
+	}
+	if err := instance.Shutdown(); !errors.Is(err, runErr) {
+		t.Fatalf("Shutdown() after Run failure error = %v, want backend failure", err)
+	}
+	if got := backend.closeCalls.Load(); got != 1 {
+		t.Fatalf("backend Close calls = %d, want 1", got)
+	}
+}
+
+func TestRuntimeInvalidPublicationBecomesWorkerError(t *testing.T) {
+	backend := newFakeRuntimeBackend()
+	instance, err := newRuntime(validRuntimeConfig(t.TempDir()), func(context.Context, Config) (runtimeBackend, error) {
+		return backend, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeSignal(t, backend.runStarted, "backend Run")
+	backend.publish(t, lifecycleRuntimeSnapshot(t, "before-invalid-publication"))
+
+	invalid := lifecycleRuntimeSnapshot(t, "invalid-publication")
+	invalid.Meta.Contract = ""
+	backend.publish(t, invalid)
+	waitRuntimeWorkerExit(t, instance)
+
+	if _, err := instance.Snapshot(); err == nil || !strings.Contains(err.Error(), "publish runtime snapshot") {
+		t.Fatalf("Snapshot() after invalid publication error = %v, want publication error", err)
+	}
+	if err := instance.Shutdown(); err == nil || !strings.Contains(err.Error(), "publish runtime snapshot") {
+		t.Fatalf("Shutdown() after invalid publication error = %v, want publication error", err)
+	}
+	if got := backend.closeCalls.Load(); got != 1 {
+		t.Fatalf("backend Close calls = %d, want 1", got)
+	}
+}
+
+func TestFacadeRuntimeBackendRejectsMalformedInternalPayload(t *testing.T) {
+	backend := &facadeRuntimeBackend{backend: malformedFacadeBackend{}}
+	err := backend.Run(context.Background(), func(SnapshotV1) {
+		t.Fatal("malformed payload reached the public snapshot callback")
+	})
+	if err == nil || !strings.Contains(err.Error(), "decode internal runtime snapshot") {
+		t.Fatalf("facade Run() error = %v", err)
+	}
+}
+
+func TestRuntimeShutdownClosesBackendBeforeJoiningCancellationIgnoringRun(t *testing.T) {
+	backend := newCloseReleasedRuntimeBackend()
+	instance, err := newRuntime(validRuntimeConfig(t.TempDir()), func(context.Context, Config) (runtimeBackend, error) {
+		return backend, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeSignal(t, backend.runStarted, "cancellation-ignoring backend Run")
+
+	shutdownErrors := callRuntimeConcurrently(t, 16, "cancellation-ignoring Shutdown", instance.Shutdown)
+	for err := range shutdownErrors {
+		if err != nil {
+			t.Fatalf("Shutdown() error = %v", err)
+		}
+	}
+	waitRuntimeSignal(t, backend.runExited, "backend exit after Close")
+	if got := backend.closeCalls.Load(); got != 1 {
+		t.Fatalf("backend Close calls = %d, want 1", got)
+	}
 }
 
 func TestRuntimeStartPretrustDenialDoesNotLaunchOrLatchStarted(t *testing.T) {
@@ -234,21 +375,34 @@ type fakeRuntimeUpdate struct {
 }
 
 type fakeRuntimeBackend struct {
-	updates             chan fakeRuntimeUpdate
-	runStarted          chan struct{}
-	cancelled           chan struct{}
-	runExited           chan struct{}
-	runStartedOnce      sync.Once
-	cancelledOnce       sync.Once
-	runExitedOnce       sync.Once
-	runCalls            atomic.Int32
-	closeCalls          atomic.Int32
-	closedBeforeRunExit atomic.Bool
+	updates        chan fakeRuntimeUpdate
+	failures       chan error
+	runStarted     chan struct{}
+	cancelled      chan struct{}
+	runExited      chan struct{}
+	runStartedOnce sync.Once
+	cancelledOnce  sync.Once
+	runExitedOnce  sync.Once
+	runCalls       atomic.Int32
+	closeCalls     atomic.Int32
 }
+
+type malformedFacadeBackend struct{}
+
+func (malformedFacadeBackend) Run(ctx context.Context, publish func([]byte)) error {
+	publish([]byte("{"))
+	<-ctx.Done()
+	return nil
+}
+
+func (malformedFacadeBackend) Close() error { return nil }
+
+var _ eebusfacade.Backend = malformedFacadeBackend{}
 
 func newFakeRuntimeBackend() *fakeRuntimeBackend {
 	return &fakeRuntimeBackend{
 		updates:    make(chan fakeRuntimeUpdate),
+		failures:   make(chan error),
 		runStarted: make(chan struct{}),
 		cancelled:  make(chan struct{}),
 		runExited:  make(chan struct{}),
@@ -264,6 +418,8 @@ func (backend *fakeRuntimeBackend) Run(ctx context.Context, publish func(Snapsho
 		case <-ctx.Done():
 			backend.cancelledOnce.Do(func() { close(backend.cancelled) })
 			return ctx.Err()
+		case err := <-backend.failures:
+			return err
 		case update := <-backend.updates:
 			publish(update.snapshot)
 			close(update.applied)
@@ -272,11 +428,6 @@ func (backend *fakeRuntimeBackend) Run(ctx context.Context, publish func(Snapsho
 }
 
 func (backend *fakeRuntimeBackend) Close() error {
-	select {
-	case <-backend.runExited:
-	default:
-		backend.closedBeforeRunExit.Store(true)
-	}
 	backend.closeCalls.Add(1)
 	return nil
 }
@@ -290,6 +441,44 @@ func (backend *fakeRuntimeBackend) publish(t *testing.T, snapshot SnapshotV1) {
 		t.Fatal("timed out sending backend snapshot")
 	}
 	waitRuntimeSignal(t, update.applied, "snapshot publication")
+}
+
+func (backend *fakeRuntimeBackend) fail(t *testing.T, err error) {
+	t.Helper()
+	select {
+	case backend.failures <- err:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out sending backend failure")
+	}
+}
+
+type closeReleasedRuntimeBackend struct {
+	runStarted chan struct{}
+	closed     chan struct{}
+	runExited  chan struct{}
+	closeOnce  sync.Once
+	closeCalls atomic.Int32
+}
+
+func newCloseReleasedRuntimeBackend() *closeReleasedRuntimeBackend {
+	return &closeReleasedRuntimeBackend{
+		runStarted: make(chan struct{}),
+		closed:     make(chan struct{}),
+		runExited:  make(chan struct{}),
+	}
+}
+
+func (backend *closeReleasedRuntimeBackend) Run(context.Context, func(SnapshotV1)) error {
+	close(backend.runStarted)
+	<-backend.closed
+	close(backend.runExited)
+	return nil
+}
+
+func (backend *closeReleasedRuntimeBackend) Close() error {
+	backend.closeCalls.Add(1)
+	backend.closeOnce.Do(func() { close(backend.closed) })
+	return nil
 }
 
 func lifecycleRuntimeSnapshot(t *testing.T, sessionName string) SnapshotV1 {
@@ -406,4 +595,30 @@ func waitRuntimeSignal(t *testing.T, signal <-chan struct{}, label string) {
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for %s", label)
 	}
+}
+
+func waitRuntimeResult(t *testing.T, result <-chan error, label string) error {
+	t.Helper()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+		return nil
+	}
+}
+
+func waitRuntimeWorkerExit(t *testing.T, instance Runtime) {
+	t.Helper()
+	implementation, ok := instance.(*runtimeImplementation)
+	if !ok {
+		t.Fatal("runtime implementation has unexpected concrete type")
+	}
+	implementation.mu.Lock()
+	done := implementation.done
+	implementation.mu.Unlock()
+	if done == nil {
+		t.Fatal("runtime worker was not started")
+	}
+	waitRuntimeSignal(t, done, "runtime worker exit")
 }

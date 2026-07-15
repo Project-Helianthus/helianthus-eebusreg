@@ -49,7 +49,7 @@ func TestRuntimePublicLifecycleContractIsExact(t *testing.T) {
 }
 
 func TestRuntimeConfigurationUsesOnlyPlainTypes(t *testing.T) {
-	for _, value := range []any{Config{}, Remote{}, Endpoint{}} {
+	for _, value := range []any{Config{}, Remote{}} {
 		assertRuntimePlainType(t, reflect.TypeOf(value), map[reflect.Type]bool{})
 	}
 	assertRuntimePlainType(t, reflect.TypeOf((*Runtime)(nil)).Elem(), map[reflect.Type]bool{})
@@ -78,10 +78,7 @@ func TestRuntimeDisabledDefaultAndMixedConfigRemainInert(t *testing.T) {
 					Enabled:   false,
 					StateRoot: stateRoot,
 					Interface: "",
-					Remotes: []Remote{{
-						SKI:      "not-a-valid-ski",
-						Endpoint: Endpoint{Host: "0.0.0.0"},
-					}},
+					Remotes:   []Remote{{SKI: "not-a-valid-ski"}},
 				}
 			},
 		},
@@ -137,11 +134,10 @@ func TestRuntimeEnabledNewValidatesWithoutIO(t *testing.T) {
 	}{
 		{name: "missing state root", mutate: func(config *Config) { config.StateRoot = "" }},
 		{name: "missing interface", mutate: func(config *Config) { config.Interface = "" }},
+		{name: "missing listen port", mutate: func(config *Config) { config.ListenPort = 0 }},
+		{name: "invalid listen port", mutate: func(config *Config) { config.ListenPort = 65536 }},
 		{name: "missing remote", mutate: func(config *Config) { config.Remotes = nil }},
 		{name: "missing remote ski", mutate: func(config *Config) { config.Remotes[0].SKI = "" }},
-		{name: "missing endpoint", mutate: func(config *Config) { config.Remotes[0].Endpoint.Host = "" }},
-		{name: "wildcard ipv4 endpoint", mutate: func(config *Config) { config.Remotes[0].Endpoint.Host = "0.0.0.0" }},
-		{name: "wildcard ipv6 endpoint", mutate: func(config *Config) { config.Remotes[0].Endpoint.Host = "::" }},
 		{name: "duplicate remote", mutate: func(config *Config) { config.Remotes = append(config.Remotes, config.Remotes[0]) }},
 	}
 	for _, test := range invalid {
@@ -172,17 +168,11 @@ func TestRuntimeEnabledNewValidatesWithoutIO(t *testing.T) {
 
 func validRuntimeConfig(stateRoot string) Config {
 	return Config{
-		Enabled:   true,
-		StateRoot: stateRoot,
-		Interface: "test-interface",
-		Remotes: []Remote{{
-			SKI: "0000000000000000000000000000000000000001",
-			Endpoint: Endpoint{
-				Host: "192.0.2.21",
-				Port: 4712,
-				Path: "/ship/",
-			},
-		}},
+		Enabled:    true,
+		StateRoot:  stateRoot,
+		Interface:  "test-interface",
+		ListenPort: 4711,
+		Remotes:    []Remote{{SKI: "0000000000000000000000000000000000000001"}},
 	}
 }
 

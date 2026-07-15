@@ -130,7 +130,6 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "type", Name: "DegradationReasonV1"}:                        {},
 	{Kind: "type", Name: "DegradationV1"}:                              {},
 	{Kind: "type", Name: "DeviceV1"}:                                   {},
-	{Kind: "type", Name: "Endpoint"}:                                   {},
 	{Kind: "type", Name: "EntityV1"}:                                   {},
 	{Kind: "type", Name: "FeatureRoleV1"}:                              {},
 	{Kind: "type", Name: "FeatureV1"}:                                  {},
@@ -155,7 +154,6 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 var msp055RuntimeExports = map[manifestExport]struct{}{
 	{Kind: "func", Name: "New"}:               {},
 	{Kind: "type", Name: "Config"}:            {},
-	{Kind: "type", Name: "Endpoint"}:          {},
 	{Kind: "type", Name: "Remote"}:            {},
 	{Kind: "type", Name: "Runtime"}:           {},
 	{Kind: "var", Name: "ErrRuntimeDisabled"}: {},

@@ -48,7 +48,6 @@ func msp055LifecycleExports() []manifestExport {
 	return []manifestExport{
 		{Kind: "func", Name: "New"},
 		{Kind: "type", Name: "Config"},
-		{Kind: "type", Name: "Endpoint"},
 		{Kind: "type", Name: "Remote"},
 		{Kind: "type", Name: "Runtime"},
 		{Kind: "var", Name: "ErrRuntimeDisabled"},
@@ -94,7 +93,6 @@ type Config
 type DegradationReasonV1
 type DegradationV1
 type DeviceV1
-type Endpoint
 type EntityV1
 type FeatureRoleV1
 type FeatureV1

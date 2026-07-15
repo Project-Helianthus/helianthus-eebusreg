@@ -28,21 +28,15 @@ type Runtime interface {
 }
 
 type Config struct {
-	Enabled   bool
-	StateRoot string
-	Interface string
-	Remotes   []Remote
+	Enabled    bool
+	StateRoot  string
+	Interface  string
+	ListenPort int
+	Remotes    []Remote
 }
 
 type Remote struct {
-	SKI      string
-	Endpoint Endpoint
-}
-
-type Endpoint struct {
-	Host string
-	Port int
-	Path string
+	SKI string
 }
 
 type runtimeBackend interface {
@@ -68,9 +62,10 @@ type runtimeImplementation struct {
 	started  bool
 	shutdown bool
 
-	backend runtimeBackend
-	cancel  context.CancelFunc
-	done    chan struct{}
+	backend   runtimeBackend
+	cancel    context.CancelFunc
+	done      chan struct{}
+	workerErr error
 
 	snapshot    SnapshotV1
 	hasSnapshot bool
@@ -111,15 +106,28 @@ func (runtime *runtimeImplementation) Start(ctx context.Context) error {
 		runtime.mu.Unlock()
 		return ErrRuntimeShutdown
 	}
-	if !runtime.config.Enabled || runtime.started {
+	if !runtime.config.Enabled {
+		runtime.mu.Unlock()
+		return nil
+	}
+	if runtime.workerErr != nil {
+		err := runtime.workerErr
+		runtime.mu.Unlock()
+		return err
+	}
+	if runtime.started {
 		runtime.mu.Unlock()
 		return nil
 	}
 	if attempt := runtime.starting; attempt != nil {
 		done := attempt.done
 		runtime.mu.Unlock()
-		<-done
-		return attempt.err
+		select {
+		case <-done:
+			return attempt.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		runtime.mu.Unlock()
@@ -221,19 +229,20 @@ func (runtime *runtimeImplementation) Shutdown() error {
 	backend := runtime.backend
 	runtime.mu.Unlock()
 
+	var closeErr error
+	if backend != nil {
+		closeErr = backend.Close()
+	}
 	if done != nil {
 		<-done
 	}
 
 	runtime.mu.Lock()
 	terminalErr := runtime.freezeTerminalSnapshotLocked()
+	workerErr := runtime.workerErr
 	runtime.mu.Unlock()
 
-	var closeErr error
-	if backend != nil {
-		closeErr = backend.Close()
-	}
-	result := errors.Join(terminalErr, closeErr)
+	result := errors.Join(workerErr, terminalErr, closeErr)
 
 	runtime.mu.Lock()
 	runtime.shutdownErr = result
@@ -247,6 +256,9 @@ func (runtime *runtimeImplementation) Snapshot() (SnapshotV1, error) {
 	defer runtime.mu.Unlock()
 	if !runtime.config.Enabled {
 		return SnapshotV1{}, ErrRuntimeDisabled
+	}
+	if runtime.workerErr != nil {
+		return SnapshotV1{}, runtime.workerErr
 	}
 	if !runtime.hasSnapshot {
 		return SnapshotV1{}, errRuntimeSnapshotUnavailable
@@ -269,22 +281,52 @@ func (runtime *runtimeImplementation) finishStartAttemptLocked(attempt *runtimeS
 }
 
 func (runtime *runtimeImplementation) runBackend(ctx context.Context, backend runtimeBackend, done chan struct{}) {
-	defer close(done)
-	_ = backend.Run(ctx, runtime.publishSnapshot)
+	runErr := backend.Run(ctx, runtime.publishSnapshot)
+	runtime.mu.Lock()
+	runtime.started = false
+	switch {
+	case runErr == nil:
+		if !runtime.shutdown && ctx.Err() == nil && runtime.workerErr == nil {
+			runtime.retainWorkerErrorLocked(errors.New("runtime backend Run stopped unexpectedly"))
+		}
+	case ctx.Err() == nil || !errors.Is(runErr, ctx.Err()):
+		runtime.retainWorkerErrorLocked(fmt.Errorf("runtime backend Run: %w", runErr))
+	}
+	runtime.mu.Unlock()
+	close(done)
 }
 
 func (runtime *runtimeImplementation) publishSnapshot(source SnapshotV1) {
 	snapshot, err := NewSnapshotV1(source)
 	if err != nil {
+		runtime.mu.Lock()
+		if runtime.shutdown {
+			runtime.mu.Unlock()
+			return
+		}
+		runtime.retainWorkerErrorLocked(fmt.Errorf("publish runtime snapshot: %w", err))
+		cancel := runtime.cancel
+		runtime.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
 		return
 	}
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	if runtime.shutdown {
+	if runtime.shutdown || runtime.workerErr != nil {
 		return
 	}
 	runtime.snapshot = snapshot.Clone()
 	runtime.hasSnapshot = true
+}
+
+func (runtime *runtimeImplementation) retainWorkerErrorLocked(err error) {
+	if err == nil {
+		return
+	}
+	runtime.workerErr = errors.Join(runtime.workerErr, err)
+	runtime.started = false
 }
 
 func (runtime *runtimeImplementation) freezeTerminalSnapshotLocked() error {
@@ -306,18 +348,15 @@ func newFacadeRuntimeBackend(ctx context.Context, config Config) (runtimeBackend
 	remotes := make([]eebusfacade.RuntimeRemote, len(config.Remotes))
 	for index, remote := range config.Remotes {
 		remotes[index] = eebusfacade.RuntimeRemote{
-			SKI: remote.SKI,
-			Endpoint: eebusfacade.RuntimeEndpoint{
-				Host: remote.Endpoint.Host,
-				Port: remote.Endpoint.Port,
-				Path: remote.Endpoint.Path,
-			},
+			SKI:         remote.SKI,
+			Allowlisted: true,
 		}
 	}
 	backend, err := eebusfacade.Acquire(ctx, eebusfacade.RuntimeConfig{
-		StateRoot: config.StateRoot,
-		Interface: config.Interface,
-		Remotes:   remotes,
+		StateRoot:  config.StateRoot,
+		Interface:  config.Interface,
+		ListenPort: config.ListenPort,
+		Remotes:    remotes,
 	})
 	if err != nil {
 		return nil, err
@@ -326,12 +365,26 @@ func newFacadeRuntimeBackend(ctx context.Context, config Config) (runtimeBackend
 }
 
 func (backend *facadeRuntimeBackend) Run(ctx context.Context, publish func(SnapshotV1)) error {
-	return backend.backend.Run(ctx, func(payload []byte) {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var parseMu sync.Mutex
+	var parseErr error
+	runErr := backend.backend.Run(runCtx, func(payload []byte) {
 		var snapshot SnapshotV1
-		if err := json.Unmarshal(payload, &snapshot); err == nil {
-			publish(snapshot)
+		if err := json.Unmarshal(payload, &snapshot); err != nil {
+			parseMu.Lock()
+			if parseErr == nil {
+				parseErr = fmt.Errorf("decode internal runtime snapshot: %w", err)
+				cancel()
+			}
+			parseMu.Unlock()
+			return
 		}
+		publish(snapshot)
 	})
+	parseMu.Lock()
+	defer parseMu.Unlock()
+	return errors.Join(runErr, parseErr)
 }
 
 func (backend *facadeRuntimeBackend) Close() error {
@@ -358,6 +411,9 @@ func normalizeRuntimeConfig(config Config) (Config, error) {
 	config.Interface = strings.TrimSpace(config.Interface)
 	if runtimeWildcard(config.Interface) {
 		return Config{}, errors.New("runtime interface must be explicit")
+	}
+	if config.ListenPort < 1 || config.ListenPort > 65535 {
+		return Config{}, errors.New("runtime listen port must be between 1 and 65535")
 	}
 	if len(config.Remotes) == 0 {
 		return Config{}, errors.New("at least one runtime remote is required")
@@ -389,20 +445,6 @@ func normalizeRuntimeRemote(remote Remote) (Remote, error) {
 		return Remote{}, errors.New("remote SKI must contain 40 hexadecimal characters")
 	}
 
-	remote.Endpoint.Host = strings.TrimSpace(remote.Endpoint.Host)
-	remote.Endpoint.Path = strings.TrimSpace(remote.Endpoint.Path)
-	if runtimeWildcard(remote.Endpoint.Host) {
-		return Remote{}, errors.New("remote endpoint host must be explicit")
-	}
-	if strings.Contains(remote.Endpoint.Host, "://") {
-		return Remote{}, errors.New("remote endpoint host must not include a URL scheme")
-	}
-	if remote.Endpoint.Port < 1 || remote.Endpoint.Port > 65535 {
-		return Remote{}, errors.New("remote endpoint port must be between 1 and 65535")
-	}
-	if remote.Endpoint.Path == "" || !strings.HasPrefix(remote.Endpoint.Path, "/") {
-		return Remote{}, errors.New("remote endpoint path must be an absolute URL path")
-	}
 	return remote, nil
 }
 

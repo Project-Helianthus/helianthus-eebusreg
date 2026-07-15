@@ -4,17 +4,17 @@ import (
 	"go/ast"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestMSP055RuntimeImplementationIsOwnedByInternalFacade(t *testing.T) {
+func TestMSP055RuntimeDoesNotImportUnscopedEEBusService(t *testing.T) {
 	for _, file := range parseImplementationFiles(t) {
 		for _, imported := range file.Imports {
 			if strings.Trim(imported.Path.Value, `"`) == "github.com/enbility/eebus-go/service" {
-				return
+				t.Fatal("internal runtime imports eebus-go service with a wildcard SHIP listener")
 			}
 		}
 	}
-	t.Fatal("internal facade does not own the eebus-go runtime service")
 }
 
 func TestMSP055RuntimeWiresScopeAdmissionAndGraphReduction(t *testing.T) {
@@ -45,30 +45,26 @@ func TestMSP055RuntimeWiresScopeAdmissionAndGraphReduction(t *testing.T) {
 	}
 }
 
-func TestRuntimeScopeRequiresExplicitInterfaceAndManualEndpoint(t *testing.T) {
-	if err := validateRuntimeScope("fixture-interface", "192.0.2.21", 4712); err != nil {
+func TestRuntimeScopeRequiresExplicitInterfaceAndListener(t *testing.T) {
+	if err := validateRuntimeScope("fixture-interface", 4711); err != nil {
 		t.Fatalf("explicit runtime scope rejected: %v", err)
 	}
 
 	tests := []struct {
 		name          string
 		interfaceName string
-		host          string
 		port          int
 	}{
-		{name: "missing interface", host: "192.0.2.21", port: 4712},
-		{name: "star interface", interfaceName: "*", host: "192.0.2.21", port: 4712},
-		{name: "ipv4 wildcard interface", interfaceName: "0.0.0.0", host: "192.0.2.21", port: 4712},
-		{name: "ipv6 wildcard interface", interfaceName: "::", host: "192.0.2.21", port: 4712},
-		{name: "missing endpoint", interfaceName: "fixture-interface", port: 4712},
-		{name: "ipv4 wildcard endpoint", interfaceName: "fixture-interface", host: "0.0.0.0", port: 4712},
-		{name: "ipv6 wildcard endpoint", interfaceName: "fixture-interface", host: "::", port: 4712},
-		{name: "missing endpoint port", interfaceName: "fixture-interface", host: "192.0.2.21"},
+		{name: "missing interface", port: 4711},
+		{name: "star interface", interfaceName: "*", port: 4711},
+		{name: "ipv4 wildcard interface", interfaceName: "0.0.0.0", port: 4711},
+		{name: "ipv6 wildcard interface", interfaceName: "::", port: 4711},
+		{name: "missing listener port", interfaceName: "fixture-interface"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if err := validateRuntimeScope(test.interfaceName, test.host, test.port); err == nil {
-				t.Fatal("runtime scope accepted an implicit or wildcard endpoint")
+			if err := validateRuntimeScope(test.interfaceName, test.port); err == nil {
+				t.Fatal("runtime scope accepted an implicit or wildcard listener")
 			}
 		})
 	}
@@ -97,12 +93,18 @@ func TestRuntimeAdmissionRequiresPretrustOrExplicitAllowlist(t *testing.T) {
 
 func TestRuntimeReducerReconnectReplacesSessionAndDeduplicatesFeatureGraph(t *testing.T) {
 	reducer := newRuntimeObservationReducer()
+	observedAt := time.Unix(1_700_000_000, 0).UTC()
 	first := runtimeGraphObservation{
-		RuntimeID:  "fixture-runtime",
-		LocalSKI:   "fixture-local",
-		RemoteSKI:  "fixture-remote",
-		SessionID:  "fixture-session-old",
-		ServiceIDs: []string{"fixture-service"},
+		RuntimeID:    "fixture-runtime",
+		LocalSKI:     "0000000000000000000000000000000000000001",
+		RemoteSKI:    "0000000000000000000000000000000000000002",
+		SessionID:    "fixture-session-old",
+		SessionState: "connected",
+		PairingState: "paired",
+		Visible:      true,
+		Paired:       true,
+		Since:        observedAt,
+		ServiceIDs:   []string{"fixture-service"},
 		Devices: []runtimeDeviceObservation{{
 			ID: "fixture-device",
 			Entities: []runtimeEntityObservation{{
@@ -140,12 +142,17 @@ func TestRuntimeReducerReconnectReplacesSessionAndDeduplicatesFeatureGraph(t *te
 		UseCaseIDs: []string{"fixture-usecase-a", "fixture-usecase-a", "fixture-usecase-b"},
 	}
 	reconnect := runtimeGraphObservation{
-		RuntimeID:  first.RuntimeID,
-		LocalSKI:   first.LocalSKI,
-		RemoteSKI:  first.RemoteSKI,
-		SessionID:  "fixture-session-new",
-		ServiceIDs: []string{"fixture-service", "fixture-service"},
-		Devices:    []runtimeDeviceObservation{device, device},
+		RuntimeID:    first.RuntimeID,
+		LocalSKI:     first.LocalSKI,
+		RemoteSKI:    first.RemoteSKI,
+		SessionID:    "fixture-session-new",
+		SessionState: "connected",
+		PairingState: "paired",
+		Visible:      true,
+		Paired:       true,
+		Since:        observedAt.Add(time.Minute),
+		ServiceIDs:   []string{"fixture-service", "fixture-service"},
+		Devices:      []runtimeDeviceObservation{device, device},
 	}
 	if err := reducer.Replace(reconnect); err != nil {
 		t.Fatal(err)
@@ -170,7 +177,7 @@ func TestRuntimeReducerReconnectReplacesSessionAndDeduplicatesFeatureGraph(t *te
 	}
 
 	mismatched := reconnect
-	mismatched.LocalSKI = "fixture-local-mismatch"
+	mismatched.LocalSKI = "0000000000000000000000000000000000000003"
 	if err := reducer.Replace(mismatched); err == nil {
 		t.Fatal("reducer accepted a reconnect with a different persisted local identity")
 	}
