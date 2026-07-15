@@ -60,8 +60,9 @@ const (
 type FeatureRoleV1 string
 
 const (
-	FeatureRoleV1Client FeatureRoleV1 = "client"
-	FeatureRoleV1Server FeatureRoleV1 = "server"
+	FeatureRoleV1Unspecified FeatureRoleV1 = ""
+	FeatureRoleV1Client      FeatureRoleV1 = "client"
+	FeatureRoleV1Server      FeatureRoleV1 = "server"
 )
 
 type SnapshotV1 struct {
@@ -176,7 +177,7 @@ func (s SnapshotV1) validate(checkHash bool) error {
 	if s.Meta.Contract != SnapshotContractV1 {
 		return fmt.Errorf("contract must be %q", SnapshotContractV1)
 	}
-	if err := validateSnapshotIDV1(s.Meta.Runtime, eebusraw.IDKindPeer); err != nil {
+	if err := validateSnapshotIDV1(s.Meta.Runtime, eebusraw.IDKindPeer, eebusraw.IDKindLocalSKI); err != nil {
 		return fmt.Errorf("runtime: %w", err)
 	}
 	if err := validateSnapshotIDV1(s.Meta.LocalSKI, eebusraw.IDKindLocalSKI); err != nil {
@@ -334,11 +335,13 @@ func validateRuntimeObservationV1(observation RuntimeObservationV1) error {
 func validatePairingV1(values []PairingObservationV1) error {
 	seen := make(map[string]int, len(values))
 	for i, value := range values {
-		if err := validateSnapshotIDV1(value.Remote, eebusraw.IDKindPeer); err != nil {
+		if err := validateSnapshotIDV1(value.Remote, eebusraw.IDKindRemoteSKI, eebusraw.IDKindPeer); err != nil {
 			return fmt.Errorf("pairing %d remote: %w", i, err)
 		}
-		if err := (eebusraw.PairingObservation{State: value.State}).Validate(); err != nil {
-			return fmt.Errorf("pairing %d state: %w", i, err)
+		switch value.State {
+		case eebusraw.PairingStateUnknown, eebusraw.PairingStateUnpaired, eebusraw.PairingStatePaired, eebusraw.PairingStateDenied:
+		default:
+			return fmt.Errorf("pairing %d state: unsupported pairing state", i)
 		}
 		if err := validateSnapshotTimestampV1(value.Since, false); err != nil {
 			return fmt.Errorf("pairing %d since: %w", i, err)
@@ -384,7 +387,7 @@ func validateSessionsV1(values []SessionV1) error {
 		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindSession); err != nil {
 			return fmt.Errorf("session %d id: %w", i, err)
 		}
-		if err := validateSnapshotIDV1(value.Remote, eebusraw.IDKindPeer); err != nil {
+		if err := validateSnapshotIDV1(value.Remote, eebusraw.IDKindRemoteSKI, eebusraw.IDKindPeer); err != nil {
 			return fmt.Errorf("session %d remote: %w", i, err)
 		}
 		switch value.State {
@@ -462,7 +465,7 @@ func validateFeaturesV1(values []FeatureV1) error {
 		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindPeer); err != nil {
 			return fmt.Errorf("feature %d id: %w", i, err)
 		}
-		if value.Role != FeatureRoleV1("") && value.Role != FeatureRoleV1Client && value.Role != FeatureRoleV1Server {
+		if value.Role != FeatureRoleV1Unspecified && value.Role != FeatureRoleV1Client && value.Role != FeatureRoleV1Server {
 			return fmt.Errorf("feature %d: unsupported role", i)
 		}
 		if err := validateSnapshotRawV1(value.Raw); err != nil {
@@ -497,29 +500,48 @@ func validateUseCaseClaimsV1(values []UseCaseClaimV1) error {
 	return nil
 }
 
-func validateSnapshotIDV1(id eebusraw.RedactedID, kind eebusraw.IDKind) error {
+func validateSnapshotIDV1(id eebusraw.RedactedID, kinds ...eebusraw.IDKind) error {
 	if err := id.Validate(); err != nil {
 		return err
 	}
-	if id.Kind != kind {
-		return fmt.Errorf("id kind must be %q", kind)
+	for _, kind := range kinds {
+		if id.Kind == kind {
+			if !validSnapshotDigestV1(id.Digest) {
+				return errors.New("id digest must use lowercase sha256:<64 hex chars>")
+			}
+			return nil
+		}
 	}
-	if !validSnapshotDigestV1(id.Digest) {
-		return errors.New("id digest must use lowercase sha256:<64 hex chars>")
+	if len(kinds) == 1 {
+		return fmt.Errorf("id kind must be %q", kinds[0])
 	}
-	return nil
+	values := make([]string, len(kinds))
+	for i, kind := range kinds {
+		values[i] = strconv.Quote(string(kind))
+	}
+	return fmt.Errorf("id kind must be one of %s", strings.Join(values, ", "))
 }
 
 func validateSnapshotRawV1(objects []eebusevidence.ObjectV1) error {
+	seen := make(map[string]int, len(objects))
 	for i, object := range objects {
 		if err := object.Validate(); err != nil {
 			return fmt.Errorf("object %d: %w", i, err)
 		}
+		if err := validateSnapshotUnknownV1(object.Unknown); err != nil {
+			return fmt.Errorf("object %d unknown: %w", i, err)
+		}
+		key := snapshotRawKeyV1(object)
+		if prior, ok := seen[key]; ok {
+			return fmt.Errorf("object %d duplicates raw evidence object from item %d", i, prior)
+		}
+		seen[key] = i
 	}
 	return nil
 }
 
 func validateSnapshotUnknownV1(fields []eebusraw.UnknownField) error {
+	seen := make(map[string]int, len(fields))
 	for i, field := range fields {
 		if err := field.Validate(); err != nil {
 			return fmt.Errorf("field %d: %w", i, err)
@@ -527,6 +549,11 @@ func validateSnapshotUnknownV1(fields []eebusraw.UnknownField) error {
 		if field.Value.Digest != "" && !validSnapshotDigestV1(field.Value.Digest) {
 			return fmt.Errorf("field %d digest must use lowercase sha256:<64 hex chars>", i)
 		}
+		key := snapshotUnknownFieldsKeyV1([]eebusraw.UnknownField{field})
+		if prior, ok := seen[key]; ok {
+			return fmt.Errorf("field %d duplicates unknown field from item %d", i, prior)
+		}
+		seen[key] = i
 	}
 	return nil
 }
@@ -635,8 +662,26 @@ func canonicalSnapshotRawV1(source []eebusevidence.ObjectV1) []eebusevidence.Obj
 		result[i].DataTimestamp = result[i].DataTimestamp.UTC()
 		result[i].Unknown = canonicalSnapshotUnknownV1(result[i].Unknown)
 	}
-	sort.Slice(result, func(i, j int) bool { return snapshotRawKeyV1(result[i]) < snapshotRawKeyV1(result[j]) })
+	sort.SliceStable(result, func(i, j int) bool { return snapshotRawLessV1(result[i], result[j]) })
 	return result
+}
+
+func snapshotRawLessV1(left, right eebusevidence.ObjectV1) bool {
+	if left.Kind != right.Kind {
+		return left.Kind < right.Kind
+	}
+	if left.Digest != right.Digest {
+		return left.Digest < right.Digest
+	}
+	leftTime := left.DataTimestamp.UTC().Format(time.RFC3339Nano)
+	rightTime := right.DataTimestamp.UTC().Format(time.RFC3339Nano)
+	if leftTime != rightTime {
+		return leftTime < rightTime
+	}
+	if left.Size != right.Size {
+		return left.Size < right.Size
+	}
+	return snapshotUnknownFieldsKeyV1(left.Unknown) < snapshotUnknownFieldsKeyV1(right.Unknown)
 }
 
 func snapshotRawKeyV1(object eebusevidence.ObjectV1) string {
@@ -648,16 +693,8 @@ func snapshotRawKeyV1(object eebusevidence.ObjectV1) string {
 	b.WriteString(object.DataTimestamp.UTC().Format(time.RFC3339Nano))
 	b.WriteByte(0)
 	b.WriteString(strconv.Itoa(object.Size))
-	for _, field := range canonicalSnapshotUnknownV1(object.Unknown) {
-		b.WriteByte(0)
-		b.WriteString(string(field.Path))
-		b.WriteByte(0)
-		b.WriteString(field.Value.Digest)
-		b.WriteByte(0)
-		b.WriteString(field.Value.Masked)
-		b.WriteByte(0)
-		b.WriteString(strconv.Itoa(field.Value.Size))
-	}
+	b.WriteByte(0)
+	b.WriteString(snapshotUnknownFieldsKeyV1(object.Unknown))
 	return b.String()
 }
 
@@ -677,6 +714,42 @@ func canonicalSnapshotUnknownV1(source []eebusraw.UnknownField) []eebusraw.Unkno
 		return left.Value.Size < right.Value.Size
 	})
 	return result
+}
+
+func snapshotUnknownFieldsKeyV1(source []eebusraw.UnknownField) string {
+	fields := canonicalSnapshotUnknownV1(source)
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, field := range fields {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"path":`)
+		snapshotWriteJSONStringV1(&b, field.Path.String())
+		b.WriteString(`,"value":{`)
+		if field.Value.Digest != "" {
+			b.WriteString(`"digest":`)
+			snapshotWriteJSONStringV1(&b, field.Value.Digest)
+			b.WriteByte(',')
+		}
+		b.WriteString(`"masked":`)
+		snapshotWriteJSONStringV1(&b, field.Value.Masked)
+		if field.Value.Size != 0 {
+			b.WriteString(`,"size":`)
+			b.WriteString(strconv.Itoa(field.Value.Size))
+		}
+		b.WriteString(`}}`)
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
+func snapshotWriteJSONStringV1(b *strings.Builder, value string) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	b.Write(encoded)
 }
 
 func copySnapshotRawV1(source []eebusevidence.ObjectV1) []eebusevidence.ObjectV1 {

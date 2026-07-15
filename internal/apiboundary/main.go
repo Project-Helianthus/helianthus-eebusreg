@@ -115,6 +115,7 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "const", Name: "ObservedSessionStateV1Connected"}:           {},
 	{Kind: "const", Name: "ObservedSessionStateV1Disconnected"}:        {},
 	{Kind: "const", Name: "ObservedSessionStateV1Degraded"}:            {},
+	{Kind: "const", Name: "FeatureRoleV1Unspecified"}:                  {},
 	{Kind: "const", Name: "FeatureRoleV1Client"}:                       {},
 	{Kind: "const", Name: "FeatureRoleV1Server"}:                       {},
 	{Kind: "func", Name: "NewSnapshotV1"}:                              {},
@@ -143,6 +144,234 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "type", Name: "TopologyV1"}:                                 {},
 	{Kind: "type", Name: "UseCaseClaimV1"}:                             {},
 }
+
+var allowedMSP035RawExports = frozenExportInventory(`
+const EndpointRoleLocal
+const EndpointRoleRemote
+const EndpointRoleV1Local
+const EndpointRoleV1Remote
+const IDKindCertificateFingerprint
+const IDKindLocalSKI
+const IDKindPeer
+const IDKindRemoteSKI
+const IDKindSession
+const IdentityContractV1
+const IdentityContractV1Alpha1
+const MaskTierRedacted
+const PairingStateDenied
+const PairingStatePaired
+const PairingStateUnknown
+const PairingStateUnpaired
+const SessionStateDegraded
+const SessionStateDisconnected
+const SessionStateObserved
+const SessionStateUnknown
+const UnknownPathDevice
+const UnknownPathDocument
+const UnknownPathLocal
+const UnknownPathRemote
+const UnknownPathSession
+func EndpointIdentity.Validate
+func EndpointIdentityV1.Format
+func EndpointIdentityV1.GoString
+func EndpointIdentityV1.MarshalJSON
+func EndpointIdentityV1.String
+func EndpointIdentityV1.Validate
+func EndpointRoleV1.Format
+func EndpointRoleV1.GoString
+func EndpointRoleV1.MarshalJSON
+func EndpointRoleV1.String
+func EndpointRoleV1.Validate
+func IDKind.Format
+func IDKind.GoString
+func IDKind.MarshalJSON
+func IDKind.String
+func IDKind.Validate
+func IdentityDocument.Format
+func IdentityDocument.GoString
+func IdentityDocument.MarshalJSON
+func IdentityDocument.String
+func IdentityDocument.Validate
+func IdentityDocumentV1.Format
+func IdentityDocumentV1.GoString
+func IdentityDocumentV1.MarshalJSON
+func IdentityDocumentV1.String
+func IdentityDocumentV1.Validate
+func NewIdentityDocument
+func NewIdentityDocumentV1
+func OpaqueBytes
+func OpaqueValue.Format
+func OpaqueValue.GoString
+func OpaqueValue.MarshalJSON
+func OpaqueValue.String
+func OpaqueValue.Validate
+func PairingObservation.Validate
+func RedactID
+func RedactedID.Format
+func RedactedID.GoString
+func RedactedID.MarshalJSON
+func RedactedID.String
+func RedactedID.Validate
+func SessionIdentity.Validate
+func SessionIdentityV1.Format
+func SessionIdentityV1.GoString
+func SessionIdentityV1.MarshalJSON
+func SessionIdentityV1.String
+func SessionIdentityV1.Validate
+func UnknownField.Format
+func UnknownField.GoString
+func UnknownField.MarshalJSON
+func UnknownField.String
+func UnknownField.Validate
+func UnknownPath.Format
+func UnknownPath.GoString
+func UnknownPath.MarshalJSON
+func UnknownPath.String
+func UnknownPath.Validate
+type ContractVersion
+type EndpointIdentity
+type EndpointIdentityV1
+type EndpointRole
+type EndpointRoleV1
+type IDKind
+type IdentityDocument
+type IdentityDocumentV1
+type MaskTier
+type OpaqueValue
+type PairingObservation
+type PairingState
+type RedactedID
+type SessionIdentity
+type SessionIdentityV1
+type SessionState
+type UnknownField
+type UnknownPath
+`)
+
+var allowedMSP035EvidenceExports = frozenExportInventory(`
+const AuthScopeReadRaw
+const CaptureProvenanceRuntimeObservation
+const EnvelopeContractV1
+const EnvelopeContractV1Alpha1
+const ObjectKindIdentity
+const ObjectKindService
+const ObjectKindSession
+const ObjectKindTopology
+const ObjectKindUnknown
+const RawSnapshotScopeIdentity
+const RawSnapshotScopeRoot
+const RawSnapshotScopeServices
+const RawSnapshotScopeSessions
+const RawSnapshotScopeTopology
+const RawSnapshotScopeUnknown
+const ScopePairingStatus
+const ScopeRuntimeStatus
+const ScopeService
+const ScopeServices
+const ScopeSession
+const ScopeSessions
+const ScopeTopology
+const ScopeWholeRoot
+const ToolCapture
+const ToolPairingStatus
+const ToolRuntimeStatus
+const ToolServicesGet
+const ToolServicesList
+const ToolSessionsGet
+const ToolSessionsList
+const ToolTopologyGet
+func AuthScope.Format
+func AuthScope.GoString
+func AuthScope.MarshalJSON
+func AuthScope.String
+func AuthScope.Validate
+func CaptureProvenanceV1.Format
+func CaptureProvenanceV1.GoString
+func CaptureProvenanceV1.MarshalJSON
+func CaptureProvenanceV1.String
+func CaptureProvenanceV1.Validate
+func ContractVersion.Format
+func ContractVersion.GoString
+func ContractVersion.MarshalJSON
+func ContractVersion.String
+func ContractVersion.Validate
+func DigestBytes
+func Envelope.ComputeDataHash
+func Envelope.Format
+func Envelope.GoString
+func Envelope.MarshalJSON
+func Envelope.String
+func Envelope.Validate
+func Envelope.WithDataHash
+func EnvelopeV1.ComputeDataHash
+func EnvelopeV1.Format
+func EnvelopeV1.GoString
+func EnvelopeV1.MarshalJSON
+func EnvelopeV1.String
+func EnvelopeV1.Validate
+func EnvelopeV1.WithDataHash
+func NewEnvelope
+func NewEnvelopeV1
+func NewObject
+func NewObjectV1
+func NewReference
+func NewReferenceV1
+func Object.Format
+func Object.GoString
+func Object.MarshalJSON
+func Object.String
+func Object.Validate
+func ObjectKind.Format
+func ObjectKind.GoString
+func ObjectKind.MarshalJSON
+func ObjectKind.String
+func ObjectKind.Validate
+func ObjectV1.Format
+func ObjectV1.GoString
+func ObjectV1.MarshalJSON
+func ObjectV1.String
+func ObjectV1.Validate
+func RawSnapshotScopeV1.Format
+func RawSnapshotScopeV1.GoString
+func RawSnapshotScopeV1.MarshalJSON
+func RawSnapshotScopeV1.String
+func RawSnapshotScopeV1.Validate
+func Reference.Format
+func Reference.GoString
+func Reference.MarshalJSON
+func Reference.Matches
+func Reference.String
+func Reference.Validate
+func ReferenceV1.Format
+func ReferenceV1.GoString
+func ReferenceV1.MarshalJSON
+func ReferenceV1.Matches
+func ReferenceV1.String
+func ReferenceV1.Validate
+func Scope.Format
+func Scope.GoString
+func Scope.MarshalJSON
+func Scope.String
+func Scope.Validate
+func ToolID.Format
+func ToolID.GoString
+func ToolID.MarshalJSON
+func ToolID.String
+func ToolID.Validate
+type AuthScope
+type CaptureProvenanceV1
+type ContractVersion
+type Envelope
+type EnvelopeV1
+type Object
+type ObjectKind
+type ObjectV1
+type RawSnapshotScopeV1
+type Reference
+type ReferenceV1
+type Scope
+type ToolID
+`)
 
 var documentationExtensions = map[string]struct{}{
 	".adoc":     {},
@@ -193,6 +422,18 @@ type manifestPackage struct {
 type manifestExport struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
+}
+
+func frozenExportInventory(entries string) map[manifestExport]struct{} {
+	inventory := make(map[manifestExport]struct{})
+	for _, line := range strings.Split(strings.TrimSpace(entries), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			panic("invalid frozen public export inventory entry")
+		}
+		inventory[manifestExport{Kind: fields[0], Name: fields[1]}] = struct{}{}
+	}
+	return inventory
 }
 
 type manifestStableContract struct {
@@ -568,6 +809,7 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 	stableContracts, stableViolations := inspectStableContracts(root, modulePath, fset, packages)
 	violations = append(violations, stableViolations...)
 	violations = append(violations, inspectRuntimeExports(modulePath, packages)...)
+	violations = append(violations, inspectMSP035DependencyExports(modulePath, packages)...)
 	manifest := apiManifest{
 		Module:          modulePath,
 		Packages:        make([]manifestPackage, 0, len(packages)),
@@ -622,6 +864,40 @@ func inspectRuntimeExports(modulePath string, packages map[string]*packageInvent
 			violations = append(violations, fmt.Sprintf("root eebusruntime export required by MSP-036 is missing: %s %s", expected.Kind, expected.Name))
 		}
 	}
+	return violations
+}
+
+func inspectMSP035DependencyExports(modulePath string, packages map[string]*packageInventory) []string {
+	if modulePath != canonicalModulePath {
+		return nil
+	}
+	dependencies := []struct {
+		name    string
+		path    string
+		exports map[manifestExport]struct{}
+	}{
+		{name: "eebusraw", path: modulePath + "/eebusraw", exports: allowedMSP035RawExports},
+		{name: "eebusevidence", path: modulePath + "/eebusevidence", exports: allowedMSP035EvidenceExports},
+	}
+	var violations []string
+	for _, dependency := range dependencies {
+		inventory := packages[dependency.path]
+		if inventory == nil {
+			violations = append(violations, fmt.Sprintf("MSP-035 dependency %s public package is missing", dependency.name))
+			continue
+		}
+		for actual := range inventory.exports {
+			if _, allowed := dependency.exports[actual]; !allowed {
+				violations = append(violations, fmt.Sprintf("MSP-035 dependency %s public export is outside the frozen inventory: %s %s", dependency.name, actual.Kind, actual.Name))
+			}
+		}
+		for expected := range dependency.exports {
+			if _, present := inventory.exports[expected]; !present {
+				violations = append(violations, fmt.Sprintf("MSP-035 dependency %s frozen public export is missing: %s %s", dependency.name, expected.Kind, expected.Name))
+			}
+		}
+	}
+	sort.Strings(violations)
 	return violations
 }
 
@@ -1295,6 +1571,7 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 					enumValue("ObservedSessionStateV1Degraded", "degraded"),
 				}},
 				{exact: true, typeName: "FeatureRoleV1", values: []manifestStableEnumValue{
+					enumValue("FeatureRoleV1Unspecified", ""),
 					enumValue("FeatureRoleV1Client", "client"),
 					enumValue("FeatureRoleV1Server", "server"),
 				}},

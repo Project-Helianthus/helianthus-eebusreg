@@ -61,7 +61,7 @@ func TestRawSnapshotV1PublicContract(t *testing.T) {
 		{string(ObservedSessionStateV1Connected), "connected"},
 		{string(ObservedSessionStateV1Disconnected), "disconnected"},
 		{string(ObservedSessionStateV1Degraded), "degraded"},
-		{string(FeatureRoleV1("")), ""},
+		{string(FeatureRoleV1Unspecified), ""},
 		{string(FeatureRoleV1Client), "client"},
 		{string(FeatureRoleV1Server), "server"},
 	} {
@@ -69,6 +69,247 @@ func TestRawSnapshotV1PublicContract(t *testing.T) {
 			t.Fatalf("enum value = %q, want %q", check.got, check.want)
 		}
 	}
+}
+
+func TestRawSnapshotV1IdentityKinds(t *testing.T) {
+	valid := []struct {
+		name   string
+		mutate func(*SnapshotV1)
+	}{
+		{"runtime peer", func(snapshot *SnapshotV1) {
+			snapshot.Meta.Runtime = rawSnapshotID(t, eebusraw.IDKindPeer, "runtime-peer")
+		}},
+		{"runtime local ski", func(snapshot *SnapshotV1) {
+			snapshot.Meta.Runtime = rawSnapshotID(t, eebusraw.IDKindLocalSKI, "runtime-local-ski")
+		}},
+		{"pairing remote ski", func(snapshot *SnapshotV1) {
+			snapshot.Pairing[0].Remote = rawSnapshotID(t, eebusraw.IDKindRemoteSKI, "pairing-remote-ski")
+		}},
+		{"session remote ski", func(snapshot *SnapshotV1) {
+			snapshot.Sessions[0].Remote = rawSnapshotID(t, eebusraw.IDKindRemoteSKI, "session-remote-ski")
+		}},
+		{"generic peer ids", func(snapshot *SnapshotV1) {
+			snapshot.Services[0].ID = rawSnapshotID(t, eebusraw.IDKindPeer, "service-peer")
+			snapshot.Topology.Devices[1].ID = rawSnapshotID(t, eebusraw.IDKindPeer, "device-peer")
+			snapshot.Topology.Devices[1].Entities[0].ID = rawSnapshotID(t, eebusraw.IDKindPeer, "entity-peer")
+			snapshot.Topology.Devices[1].Entities[0].Features[0].ID = rawSnapshotID(t, eebusraw.IDKindPeer, "feature-peer")
+			snapshot.Topology.Devices[1].UseCaseClaims[0].ID = rawSnapshotID(t, eebusraw.IDKindPeer, "usecase-peer")
+		}},
+	}
+	for _, test := range valid {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := rawSnapshotV1(t, false)
+			test.mutate(&snapshot)
+			if _, err := NewSnapshotV1(snapshot); err != nil {
+				t.Fatalf("NewSnapshotV1() error = %v", err)
+			}
+		})
+	}
+
+	invalid := []struct {
+		name   string
+		mutate func(*SnapshotV1)
+	}{
+		{"runtime remote ski", func(snapshot *SnapshotV1) {
+			snapshot.Meta.Runtime = rawSnapshotID(t, eebusraw.IDKindRemoteSKI, "runtime-remote-ski")
+		}},
+		{"local ski peer", func(snapshot *SnapshotV1) {
+			snapshot.Meta.LocalSKI = rawSnapshotID(t, eebusraw.IDKindPeer, "local-peer")
+		}},
+		{"session id peer", func(snapshot *SnapshotV1) {
+			snapshot.Sessions[0].ID = rawSnapshotID(t, eebusraw.IDKindPeer, "session-peer")
+		}},
+		{"pairing local ski", func(snapshot *SnapshotV1) {
+			snapshot.Pairing[0].Remote = rawSnapshotID(t, eebusraw.IDKindLocalSKI, "pairing-local-ski")
+		}},
+		{"session remote local ski", func(snapshot *SnapshotV1) {
+			snapshot.Sessions[0].Remote = rawSnapshotID(t, eebusraw.IDKindLocalSKI, "session-local-ski")
+		}},
+		{"service remote ski", func(snapshot *SnapshotV1) {
+			snapshot.Services[0].ID = rawSnapshotID(t, eebusraw.IDKindRemoteSKI, "service-remote-ski")
+		}},
+		{"device remote ski", func(snapshot *SnapshotV1) {
+			snapshot.Topology.Devices[1].ID = rawSnapshotID(t, eebusraw.IDKindRemoteSKI, "device-remote-ski")
+		}},
+		{"entity remote ski", func(snapshot *SnapshotV1) {
+			snapshot.Topology.Devices[1].Entities[0].ID = rawSnapshotID(t, eebusraw.IDKindRemoteSKI, "entity-remote-ski")
+		}},
+		{"feature remote ski", func(snapshot *SnapshotV1) {
+			snapshot.Topology.Devices[1].Entities[0].Features[0].ID = rawSnapshotID(t, eebusraw.IDKindRemoteSKI, "feature-remote-ski")
+		}},
+		{"usecase remote ski", func(snapshot *SnapshotV1) {
+			snapshot.Topology.Devices[1].UseCaseClaims[0].ID = rawSnapshotID(t, eebusraw.IDKindRemoteSKI, "usecase-remote-ski")
+		}},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := rawSnapshotV1(t, false)
+			test.mutate(&snapshot)
+			if _, err := NewSnapshotV1(snapshot); err == nil {
+				t.Fatal("NewSnapshotV1() accepted an invalid identity kind")
+			}
+		})
+	}
+}
+
+func TestRawSnapshotV1FeatureRoleUnspecified(t *testing.T) {
+	snapshot := rawSnapshotV1(t, false)
+	snapshot.Topology.Devices[1].Entities[0].Features[0].Role = FeatureRoleV1Unspecified
+	if _, err := NewSnapshotV1(snapshot); err != nil {
+		t.Fatalf("NewSnapshotV1() error = %v", err)
+	}
+}
+
+func TestRawSnapshotV1PairingStateIsClosed(t *testing.T) {
+	for _, state := range []eebusraw.PairingState{
+		eebusraw.PairingStateUnknown,
+		eebusraw.PairingStateUnpaired,
+		eebusraw.PairingStatePaired,
+		eebusraw.PairingStateDenied,
+	} {
+		snapshot := rawSnapshotV1(t, false)
+		snapshot.Pairing[0].State = state
+		if _, err := NewSnapshotV1(snapshot); err != nil {
+			t.Fatalf("NewSnapshotV1(%q) error = %v", state, err)
+		}
+	}
+	for _, state := range []eebusraw.PairingState{"", "future"} {
+		snapshot := rawSnapshotV1(t, false)
+		snapshot.Pairing[0].State = state
+		if _, err := NewSnapshotV1(snapshot); err == nil {
+			t.Fatalf("NewSnapshotV1(%q) accepted unsupported pairing state", state)
+		}
+	}
+}
+
+func TestRawSnapshotV1RejectsExactDuplicateEvidence(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	object := eebusevidence.NewObjectV1(eebusevidence.ObjectKindIdentity, rawSnapshotDigest("c"), 3, now)
+	duplicateRaw := []struct {
+		name   string
+		mutate func(*SnapshotV1)
+	}{
+		{"root", func(snapshot *SnapshotV1) { snapshot.Raw = []eebusevidence.ObjectV1{object, object} }},
+		{"pairing", func(snapshot *SnapshotV1) { snapshot.Pairing[0].Raw = []eebusevidence.ObjectV1{object, object} }},
+		{"service", func(snapshot *SnapshotV1) { snapshot.Services[0].Raw = []eebusevidence.ObjectV1{object, object} }},
+		{"session", func(snapshot *SnapshotV1) { snapshot.Sessions[0].Raw = []eebusevidence.ObjectV1{object, object} }},
+		{"device", func(snapshot *SnapshotV1) {
+			snapshot.Topology.Devices[1].Raw = []eebusevidence.ObjectV1{object, object}
+		}},
+		{"entity", func(snapshot *SnapshotV1) {
+			snapshot.Topology.Devices[1].Entities[0].Raw = []eebusevidence.ObjectV1{object, object}
+		}},
+		{"feature", func(snapshot *SnapshotV1) {
+			snapshot.Topology.Devices[1].Entities[0].Features[0].Raw = []eebusevidence.ObjectV1{object, object}
+		}},
+		{"usecase", func(snapshot *SnapshotV1) {
+			snapshot.Topology.Devices[1].UseCaseClaims[0].Raw = []eebusevidence.ObjectV1{object, object}
+		}},
+	}
+	for _, test := range duplicateRaw {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := rawSnapshotV1(t, false)
+			test.mutate(&snapshot)
+			if _, err := NewSnapshotV1(snapshot); err == nil || !strings.Contains(err.Error(), "duplicates raw evidence object") {
+				t.Fatalf("NewSnapshotV1() error = %v, want duplicate raw evidence rejection", err)
+			}
+		})
+	}
+
+	field := rawSnapshotUnknown("duplicate")
+	duplicateUnknown := []struct {
+		name   string
+		mutate func(*SnapshotV1)
+	}{
+		{"raw object", func(snapshot *SnapshotV1) {
+			snapshot.Raw = []eebusevidence.ObjectV1{{Kind: eebusevidence.ObjectKindIdentity, Digest: rawSnapshotDigest("d"), Size: 4, DataTimestamp: now, Unknown: []eebusraw.UnknownField{field, field}}}
+		}},
+		{"pairing", func(snapshot *SnapshotV1) { snapshot.Pairing[0].Unknown = []eebusraw.UnknownField{field, field} }},
+		{"service", func(snapshot *SnapshotV1) { snapshot.Services[0].Unknown = []eebusraw.UnknownField{field, field} }},
+		{"session", func(snapshot *SnapshotV1) { snapshot.Sessions[0].Unknown = []eebusraw.UnknownField{field, field} }},
+		{"device", func(snapshot *SnapshotV1) {
+			snapshot.Topology.Devices[1].Unknown = []eebusraw.UnknownField{field, field}
+		}},
+		{"entity", func(snapshot *SnapshotV1) {
+			snapshot.Topology.Devices[1].Entities[0].Unknown = []eebusraw.UnknownField{field, field}
+		}},
+		{"feature", func(snapshot *SnapshotV1) {
+			snapshot.Topology.Devices[1].Entities[0].Features[0].Unknown = []eebusraw.UnknownField{field, field}
+		}},
+		{"usecase", func(snapshot *SnapshotV1) {
+			snapshot.Topology.Devices[1].UseCaseClaims[0].Unknown = []eebusraw.UnknownField{field, field}
+		}},
+	}
+	for _, test := range duplicateUnknown {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := rawSnapshotV1(t, false)
+			test.mutate(&snapshot)
+			if _, err := NewSnapshotV1(snapshot); err == nil || !strings.Contains(err.Error(), "duplicates unknown field") {
+				t.Fatalf("NewSnapshotV1() error = %v, want duplicate unknown rejection", err)
+			}
+		})
+	}
+}
+
+func TestRawSnapshotV1RawEvidenceOrderingMatchesV1(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	sizeTen := eebusevidence.NewObjectV1(eebusevidence.ObjectKindIdentity, rawSnapshotDigest("e"), 10, now)
+	sizeTwo := eebusevidence.NewObjectV1(eebusevidence.ObjectKindIdentity, rawSnapshotDigest("e"), 2, now)
+	snapshot := rawSnapshotV1(t, false)
+	snapshot.Raw = []eebusevidence.ObjectV1{sizeTen, sizeTwo}
+	result, err := NewSnapshotV1(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Raw[0].Size != 2 || result.Raw[1].Size != 10 {
+		t.Fatalf("raw evidence order sizes = %d, %d; want 2, 10", result.Raw[0].Size, result.Raw[1].Size)
+	}
+}
+
+func TestRawSnapshotV1FormatRedactsEveryVerb(t *testing.T) {
+	snapshot, err := NewSnapshotV1(rawSnapshotV1(t, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []string{
+		"%v", "%+v", "%#v", "%b", "%c", "%d", "%o", "%O", "%q", "%x", "%X", "%U",
+		"%e", "%E", "%f", "%F", "%g", "%G", "%s",
+	} {
+		t.Run(format, func(t *testing.T) {
+			if got := fmt.Sprintf(format, snapshot); got != snapshot.String() {
+				t.Fatalf("fmt.Sprintf(%q, SnapshotV1) = %q, want %q", format, got, snapshot.String())
+			}
+		})
+	}
+	for _, verb := range []rune{'v', 'b', 'c', 'd', 'o', 'O', 'q', 'x', 'X', 'U', 'e', 'E', 'f', 'F', 'g', 'G', 's', 'p'} {
+		state := &snapshotFormatStateV1{}
+		snapshot.Format(state, verb)
+		if got := state.String(); got != snapshot.String() {
+			t.Fatalf("SnapshotV1.Format(%q) = %q, want %q", verb, got, snapshot.String())
+		}
+	}
+	if got := fmt.Sprintf("%p", &snapshot); strings.Contains(got, "{") {
+		t.Fatalf("fmt.Sprintf(%%p, *SnapshotV1) dumped the snapshot: %q", got)
+	}
+	if got := fmt.Sprintf("%T", snapshot); got != "eebusruntime.SnapshotV1" {
+		t.Fatalf("fmt.Sprintf(%%T, SnapshotV1) = %q", got)
+	}
+}
+
+type snapshotFormatStateV1 struct {
+	bytes.Buffer
+}
+
+func (snapshotFormatStateV1) Flag(int) bool {
+	return false
+}
+
+func (snapshotFormatStateV1) Precision() (int, bool) {
+	return 0, false
+}
+
+func (snapshotFormatStateV1) Width() (int, bool) {
+	return 0, false
 }
 
 func TestRawSnapshotV1CanonicalHashAndDetachment(t *testing.T) {
