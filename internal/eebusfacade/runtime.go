@@ -45,17 +45,20 @@ type RuntimeRemote struct {
 }
 
 type serviceBackend struct {
-	mu      sync.Mutex
-	service runtimeService
-	handler *runtimeServiceHandler
-	started bool
-	closed  bool
+	mu         sync.Mutex
+	service    runtimeService
+	handler    *runtimeServiceHandler
+	firstTrust *runtimeFirstTrustResources
+	started    bool
+	closed     bool
+	closeErr   error
 }
 
 type runtimeMaterial struct {
 	certificate tls.Certificate
 	localSKI    string
 	pretrusted  map[string]bool
+	firstTrust  *runtimeFirstTrustAuthorization
 }
 
 type runtimeMaterialLoader func(context.Context, string) (runtimeMaterial, error)
@@ -72,9 +75,11 @@ type runtimeService interface {
 type runtimeServiceFactory func(RuntimeConfig, runtimeMaterial, eebusapi.ServiceReaderInterface) (runtimeService, error)
 
 type runtimeDependencies struct {
-	loadMaterial runtimeMaterialLoader
-	newService   runtimeServiceFactory
-	now          func() time.Time
+	loadMaterial          runtimeMaterialLoader
+	newService            runtimeServiceFactory
+	now                   func() time.Time
+	openAssociationBridge runtimeAssociationBridgeFactory
+	startFirstTrustAdmin  runtimeFirstTrustAdminFactory
 }
 
 type runtimeFeatureObservation struct {
@@ -121,9 +126,11 @@ type runtimeObservationReducer struct {
 var _ Backend = (*serviceBackend)(nil)
 
 var defaultRuntimeDependencies = runtimeDependencies{
-	loadMaterial: loadProtectedRuntimeMaterial,
-	newService:   newEEBusService,
-	now:          time.Now,
+	loadMaterial:          loadProtectedRuntimeMaterial,
+	newService:            newEEBusService,
+	now:                   time.Now,
+	openAssociationBridge: openRuntimeAssociationBridge,
+	startFirstTrustAdmin:  startFirstTrustAdmin,
 }
 
 func Acquire(ctx context.Context, config RuntimeConfig) (Backend, error) {
@@ -190,7 +197,8 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if err != nil {
 		return nil, err
 	}
-	service, err := dependencies.newService(config, material, handler)
+	reader := newRuntimeServiceReader(handler)
+	service, err := dependencies.newService(config, material, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -198,12 +206,18 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		return nil, errors.New("runtime service factory returned nil")
 	}
 	if err := service.Setup(); err != nil {
+		service.Shutdown()
 		return nil, fmt.Errorf("setup eebus runtime service: %w", err)
+	}
+	firstTrust, err := acquireRuntimeFirstTrust(ctx, config, material, service, reader, dependencies)
+	if err != nil {
+		service.Shutdown()
+		return nil, err
 	}
 	for _, remote := range config.Remotes {
 		service.RegisterRemoteSKI(remote.SKI)
 	}
-	return &serviceBackend{service: service, handler: handler}, nil
+	return &serviceBackend{service: service, handler: handler, firstTrust: firstTrust}, nil
 }
 
 func (backend *serviceBackend) Run(ctx context.Context, publish func([]byte)) error {
@@ -244,13 +258,16 @@ func (backend *serviceBackend) Close() error {
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
 	if backend.closed {
-		return nil
+		return backend.closeErr
 	}
 	backend.closed = true
+	if backend.firstTrust != nil {
+		backend.closeErr = backend.firstTrust.Close()
+	}
 	if backend.service != nil {
 		backend.service.Shutdown()
 	}
-	return nil
+	return backend.closeErr
 }
 
 func loadProtectedRuntimeMaterial(context.Context, string) (runtimeMaterial, error) {

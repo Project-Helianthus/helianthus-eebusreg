@@ -16,6 +16,7 @@ const (
 	firstTrustMaximumCandidate     = 2 * time.Minute
 	firstTrustCommitWait           = 10 * time.Second
 	firstTrustReplayTTL            = 5 * time.Minute
+	firstTrustRetiredTTL           = 5 * time.Minute
 	firstTrustMaximumReplayEntries = 128
 	firstTrustMaximumIdempotency   = 256
 	firstTrustMaximumRetiredKeys   = firstTrustMaximumIdempotency
@@ -90,8 +91,8 @@ type firstTrustReplay struct {
 }
 
 type firstTrustRetired struct {
-	request  firstTrustRequest
-	sequence uint64
+	expiresAt time.Time
+	sequence  uint64
 }
 
 type firstTrustInflight struct {
@@ -123,6 +124,8 @@ type firstTrustCoordinator struct {
 	reopening        bool
 	timer            *time.Timer
 	timerToken       uint64
+	retentionTimer   *time.Timer
+	retentionToken   uint64
 }
 
 func newFirstTrustCoordinator(now func() time.Time, random io.Reader, store firstTrustPersistence, effects firstTrustEffects) *firstTrustCoordinator {
@@ -177,6 +180,7 @@ func (coordinator *firstTrustCoordinator) reopen(ctx context.Context) string {
 	coordinator.replays = make(map[string]firstTrustReplay)
 	coordinator.retired = make(map[string]firstTrustRetired)
 	coordinator.stopTimerLocked()
+	coordinator.stopRetentionTimerLocked()
 	coordinator.setWaitingLocked(false)
 	coordinator.mu.Unlock()
 
@@ -597,6 +601,30 @@ func (coordinator *firstTrustCoordinator) trusted(remote []byte) bool {
 	return ok
 }
 
+func (coordinator *firstTrustCoordinator) shutdown() {
+	if coordinator == nil {
+		return
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	coordinator.stopTimerLocked()
+	coordinator.stopRetentionTimerLocked()
+	if coordinator.currentCandidate != nil {
+		coordinator.cancelRemoteLocked(coordinator.currentCandidate.remote, coordinator.currentCandidate.connection)
+	}
+	coordinator.setWaitingLocked(false)
+	coordinator.phase = firstTrustDisabled
+	coordinator.window = nil
+	coordinator.currentCandidate = nil
+	coordinator.trustedRemotes = make(map[string]string)
+	coordinator.storeGeneration = 0
+	coordinator.replays = make(map[string]firstTrustReplay)
+	coordinator.retired = make(map[string]firstTrustRetired)
+	coordinator.inflight = nil
+	coordinator.commitFence = nil
+	coordinator.reopening = false
+}
+
 func (coordinator *firstTrustCoordinator) finishCommit(token uint64, inflight *firstTrustInflight, remote []byte, connection uint64, storeOutcome string) string {
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
@@ -676,10 +704,7 @@ func (coordinator *firstTrustCoordinator) idempotencyCapacityLocked(key string, 
 	if _, ok := coordinator.replays[key]; ok {
 		return false
 	}
-	if _, ok := coordinator.retired[key]; ok {
-		return false
-	}
-	count := len(coordinator.replays) + len(coordinator.retired)
+	count := len(coordinator.replays)
 	if coordinator.window != nil {
 		if coordinator.window.key == key {
 			return false
@@ -704,12 +729,8 @@ func (coordinator *firstTrustCoordinator) replayLocked(key string, request first
 		}
 		return entry.result, true
 	}
-	retired, ok := coordinator.retired[key]
-	if !ok {
+	if _, ok := coordinator.retired[key]; !ok {
 		return "", false
-	}
-	if !retired.request.equal(request) {
-		return "idempotency_conflict", true
 	}
 	return "stale_request", true
 }
@@ -730,22 +751,33 @@ func (coordinator *firstTrustCoordinator) recordReplayLocked(key string, request
 				oldestSequence = entry.sequence
 			}
 		}
-		coordinator.retireReplayLocked(oldestKey, coordinator.replays[oldestKey])
+		coordinator.retireReplayLocked(oldestKey, coordinator.replays[oldestKey], now)
 		delete(coordinator.replays, oldestKey)
 	}
+	coordinator.scheduleRetentionExpiryLocked()
 }
 
 func (coordinator *firstTrustCoordinator) pruneReplaysLocked(now time.Time) {
 	for key, entry := range coordinator.replays {
 		if !now.Before(entry.expiresAt) {
-			coordinator.retireReplayLocked(key, entry)
+			coordinator.retireReplayLocked(key, entry, now)
 			delete(coordinator.replays, key)
 		}
 	}
+	for key, entry := range coordinator.retired {
+		if !now.Before(entry.expiresAt) {
+			delete(coordinator.retired, key)
+		}
+	}
+	coordinator.scheduleRetentionExpiryLocked()
 }
 
-func (coordinator *firstTrustCoordinator) retireReplayLocked(key string, replay firstTrustReplay) {
-	coordinator.retired[key] = firstTrustRetired{request: replay.request, sequence: replay.sequence}
+func (coordinator *firstTrustCoordinator) retireReplayLocked(key string, replay firstTrustReplay, now time.Time) {
+	expiresAt := replay.expiresAt.Add(firstTrustRetiredTTL)
+	if !now.Before(expiresAt) {
+		return
+	}
+	coordinator.retired[key] = firstTrustRetired{expiresAt: expiresAt, sequence: replay.sequence}
 	for len(coordinator.retired) > firstTrustMaximumRetiredKeys {
 		var oldestKey string
 		var oldestSequence uint64
@@ -756,6 +788,47 @@ func (coordinator *firstTrustCoordinator) retireReplayLocked(key string, replay 
 			}
 		}
 		delete(coordinator.retired, oldestKey)
+	}
+}
+
+func (coordinator *firstTrustCoordinator) scheduleRetentionExpiryLocked() {
+	coordinator.stopRetentionTimerLocked()
+	var deadline time.Time
+	for _, entry := range coordinator.replays {
+		if deadline.IsZero() || entry.expiresAt.Before(deadline) {
+			deadline = entry.expiresAt
+		}
+	}
+	for _, entry := range coordinator.retired {
+		if deadline.IsZero() || entry.expiresAt.Before(deadline) {
+			deadline = entry.expiresAt
+		}
+	}
+	if deadline.IsZero() {
+		return
+	}
+	coordinator.retentionToken++
+	token := coordinator.retentionToken
+	delay := deadline.Sub(coordinator.now())
+	if delay < 0 {
+		delay = 0
+	}
+	coordinator.retentionTimer = time.AfterFunc(delay, func() {
+		coordinator.mu.Lock()
+		defer coordinator.mu.Unlock()
+		if coordinator.retentionToken != token {
+			return
+		}
+		coordinator.retentionTimer = nil
+		coordinator.pruneReplaysLocked(coordinator.now())
+	})
+}
+
+func (coordinator *firstTrustCoordinator) stopRetentionTimerLocked() {
+	coordinator.retentionToken++
+	if coordinator.retentionTimer != nil {
+		coordinator.retentionTimer.Stop()
+		coordinator.retentionTimer = nil
 	}
 }
 

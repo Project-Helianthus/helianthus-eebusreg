@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -123,8 +124,12 @@ func TestFirstTrustConfirmCancelLinearizationAndDisconnectFence(t *testing.T) {
 	})
 }
 
-func TestFirstTrustIdempotencyCapacityNeverForgetsRetiredKeys(t *testing.T) {
+func TestFirstTrustTerminalRetentionExpiresAndRecoversCapacity(t *testing.T) {
 	fixture := newMSP04BFixture(t, "commit_durable")
+	coordinator, ok := fixture.coordinator.(*firstTrustCoordinator)
+	if !ok {
+		t.Fatal("fixture coordinator type changed")
+	}
 	var firstOpenKey string
 	for index := 0; index < firstTrustMaximumIdempotency/2; index++ {
 		openKey := msp04bLabel(t)
@@ -138,15 +143,31 @@ func TestFirstTrustIdempotencyCapacityNeverForgetsRetiredKeys(t *testing.T) {
 			t.Fatalf("close at capacity index %d = %q", index, got)
 		}
 	}
+	coordinator.mu.Lock()
+	if len(coordinator.replays) > firstTrustMaximumReplayEntries || len(coordinator.retired) > firstTrustMaximumRetiredKeys {
+		coordinator.mu.Unlock()
+		t.Fatal("terminal retention exceeded its entry bounds")
+	}
+	coordinator.mu.Unlock()
+	retiredType := reflect.TypeOf(firstTrustRetired{})
+	if retiredType.NumField() != 2 || retiredType.Field(0).Name != "expiresAt" || retiredType.Field(0).Type != reflect.TypeOf(time.Time{}) || retiredType.Field(1).Name != "sequence" || retiredType.Field(1).Type.Kind() != reflect.Uint64 {
+		t.Fatal("expired terminal key retains more than expiry and eviction metadata")
+	}
+
 	advanceMSP04BClock(fixture.clock, firstTrustReplayTTL+time.Nanosecond)
 	if got := fixture.coordinator.openPairingWindow(context.Background(), firstOpenKey, time.Minute); got != "stale_request" {
 		t.Fatalf("oldest retired replay = %q", got)
 	}
-	if got := fixture.coordinator.openPairingWindow(context.Background(), msp04bLabel(t), time.Minute); got != "idempotency_capacity" {
-		t.Fatalf("new request after bounded capacity = %q", got)
+	if got := fixture.coordinator.openPairingWindow(context.Background(), msp04bLabel(t), time.Minute); got != "open_empty" {
+		t.Fatalf("new request after terminal expiry = %q", got)
 	}
-	if got := fixture.coordinator.state(); got != "PAIRING_CLOSED" {
-		t.Fatalf("capacity rejection changed state to %q", got)
+	if got := fixture.coordinator.closePairingWindow(context.Background(), msp04bLabel(t)); got != "pairing_closed" {
+		t.Fatalf("close after capacity recovery = %q", got)
+	}
+
+	advanceMSP04BClock(fixture.clock, firstTrustRetiredTTL+time.Nanosecond)
+	if got := fixture.coordinator.openPairingWindow(context.Background(), firstOpenKey, time.Minute); got != "open_empty" {
+		t.Fatalf("fully expired key remained locked out with outcome %q", got)
 	}
 }
 
@@ -253,6 +274,68 @@ func TestFirstTrustFacadeKeepsWinnerOnDuplicateCallbackDuringCommit(t *testing.T
 	service.mu.Unlock()
 	if registers != 1 {
 		t.Fatalf("RegisterRemoteSKI calls = %d, want 1", registers)
+	}
+}
+
+func TestFirstTrustFacadeSameSKIOverlapAndDelayedCallbacksFailClosed(t *testing.T) {
+	tests := []struct {
+		name    string
+		delayed func(*firstTrustFacade, string)
+	}{
+		{name: "reconnect"},
+		{
+			name: "delayed old SHIP ID",
+			delayed: func(adapter *firstTrustFacade, ski string) {
+				adapter.ServiceShipIDUpdate(ski, "delayed-old-ship-id")
+			},
+		},
+		{
+			name: "delayed old disconnect",
+			delayed: func(adapter *firstTrustFacade, ski string) {
+				adapter.RemoteSKIDisconnected(nil, ski)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newMSP04BFixture(t, "commit_durable")
+			service := &msp04bServiceSpy{}
+			adapter := newFirstTrustFacade(service, fixture.coordinator)
+			coordinator, ok := fixture.coordinator.(*firstTrustCoordinator)
+			if !ok {
+				t.Fatal("fixture coordinator type changed")
+			}
+			coordinator.effects = adapter
+			remote := msp04bRemote(t)
+			ski := hex.EncodeToString(remote)
+			detail := shipapi.NewConnectionStateDetail(shipapi.ConnectionStateReceivedPairingRequest, nil)
+
+			if got := fixture.coordinator.openPairingWindow(context.Background(), msp04bLabel(t), time.Minute); got != "open_empty" {
+				t.Fatalf("open outcome = %q", got)
+			}
+			adapter.RemoteSKIConnected(nil, ski)
+			adapter.ServicePairingDetailUpdate(ski, detail)
+			_, _, _, firstGeneration, _, _, candidate := fixture.coordinator.candidate()
+			if !candidate || firstGeneration == 0 {
+				t.Fatal("initial unambiguous connection did not create a candidate")
+			}
+
+			adapter.RemoteSKIConnected(nil, ski)
+			assertMSP04BNoCandidate(t, fixture.coordinator)
+			if got := fixture.coordinator.state(); got != "OPEN_EMPTY" {
+				t.Fatalf("same-SKI overlap state = %q, want OPEN_EMPTY", got)
+			}
+			if test.delayed != nil {
+				test.delayed(adapter, ski)
+			}
+			adapter.ServicePairingDetailUpdate(ski, detail)
+			assertMSP04BNoCandidate(t, fixture.coordinator)
+			assertMSP04BCommitCount(t, fixture.store, 0)
+			if service.cancelCount() < 2 {
+				t.Fatalf("ambiguous lifecycle cancellation count = %d, want at least 2", service.cancelCount())
+			}
+		})
 	}
 }
 

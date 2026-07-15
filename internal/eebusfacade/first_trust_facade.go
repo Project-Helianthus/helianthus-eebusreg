@@ -1,7 +1,6 @@
 package eebusfacade
 
 import (
-	"bytes"
 	"encoding/hex"
 	"sync"
 
@@ -25,11 +24,12 @@ type firstTrustEventSink interface {
 }
 
 type firstTrustConnection struct {
-	remote     []byte
 	generation uint64
 	shipID     string
 	active     bool
+	connected  bool
 	cancelled  bool
+	blocked    bool
 	registered bool
 }
 
@@ -62,15 +62,34 @@ func (facade *firstTrustFacade) RemoteSKIConnected(_ eebusapi.ServiceInterface, 
 	if !ok {
 		return
 	}
+	var stale *firstTrustConnection
+	cancel := false
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
-	if connection == nil || connection.cancelled {
-		connection = facade.newConnectionLocked(normalized, remote)
-	}
-	if connection != nil {
+	switch {
+	case connection == nil:
+		connection = facade.newConnectionLocked(normalized, true)
+		cancel = connection == nil
+	case connection.blocked || connection.cancelled:
+		cancel = true
+	case connection.connected:
+		connection.active = false
+		connection.cancelled = true
+		connection.blocked = true
+		connection.shipID = ""
+		stale = connection
+		cancel = true
+	default:
+		connection.connected = true
 		connection.active = true
 	}
 	facade.mu.Unlock()
+	if stale != nil && facade.coordinator != nil {
+		facade.coordinator.connectionClosed(remote, stale.generation)
+	}
+	if cancel {
+		facade.cancelBySKI(normalized)
+	}
 }
 
 func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterface, ski string) {
@@ -80,8 +99,13 @@ func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterfac
 	}
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
-	if connection != nil {
-		delete(facade.connections, normalized)
+	if connection != nil && !connection.blocked {
+		connection.active = false
+		connection.cancelled = true
+		connection.blocked = true
+		connection.shipID = ""
+	} else {
+		connection = nil
 	}
 	facade.mu.Unlock()
 	if connection != nil && facade.coordinator != nil {
@@ -100,9 +124,9 @@ func (facade *firstTrustFacade) ServiceShipIDUpdate(ski string, shipID string) {
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
 	if connection == nil {
-		connection = facade.newConnectionLocked(normalized, remote)
+		connection = facade.newConnectionLocked(normalized, false)
 	}
-	if connection == nil || connection.cancelled {
+	if connection == nil || connection.cancelled || connection.blocked {
 		facade.mu.Unlock()
 		return
 	}
@@ -121,10 +145,10 @@ func (facade *firstTrustFacade) ServicePairingDetailUpdate(ski string, detail *s
 	}
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
-	if connection == nil || connection.cancelled {
-		connection = facade.newConnectionLocked(normalized, remote)
-	}
 	if connection == nil {
+		connection = facade.newConnectionLocked(normalized, false)
+	}
+	if connection == nil || connection.cancelled || connection.blocked {
 		facade.mu.Unlock()
 		facade.cancelBySKI(normalized)
 		return
@@ -163,14 +187,14 @@ func (facade *firstTrustFacade) connectionAlive(remote []byte, generation uint64
 	facade.mu.Lock()
 	defer facade.mu.Unlock()
 	connection := facade.connections[normalized]
-	return connection != nil && connection.generation == generation && connection.active && !connection.cancelled
+	return connection != nil && connection.generation == generation && connection.active && !connection.cancelled && !connection.blocked
 }
 
 func (facade *firstTrustFacade) registerRemoteSKI(remote []byte, generation uint64) {
 	normalized := hex.EncodeToString(remote)
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
-	if connection == nil || connection.generation != generation || !connection.active || connection.cancelled || connection.registered {
+	if connection == nil || connection.generation != generation || !connection.active || connection.cancelled || connection.blocked || connection.registered {
 		facade.mu.Unlock()
 		return
 	}
@@ -191,6 +215,8 @@ func (facade *firstTrustFacade) cancelGeneration(remote []byte, generation uint6
 	}
 	connection.cancelled = true
 	connection.active = false
+	connection.blocked = true
+	connection.shipID = ""
 	facade.mu.Unlock()
 	facade.cancelBySKI(normalized)
 }
@@ -201,7 +227,7 @@ func (facade *firstTrustFacade) cancelBySKI(normalized string) {
 	}
 }
 
-func (facade *firstTrustFacade) newConnectionLocked(normalized string, remote []byte) *firstTrustConnection {
+func (facade *firstTrustFacade) newConnectionLocked(normalized string, connected bool) *firstTrustConnection {
 	if len(facade.connections) >= firstTrustMaximumConnections {
 		return nil
 	}
@@ -210,9 +236,9 @@ func (facade *firstTrustFacade) newConnectionLocked(normalized string, remote []
 		facade.next++
 	}
 	connection := &firstTrustConnection{
-		remote:     bytes.Clone(remote),
 		generation: facade.next,
 		active:     true,
+		connected:  connected,
 	}
 	facade.connections[normalized] = connection
 	return connection

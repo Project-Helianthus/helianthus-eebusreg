@@ -243,7 +243,7 @@ func TestMSP04BRestartDropsVolatileStateAndReloadsOnlyDurableTrust(t *testing.T)
 	assertMSP04BCommitCount(t, fixture.store, 1)
 }
 
-func TestMSP04BFacadeAssignsGenerationWithoutChangingUpstreamCallbacks(t *testing.T) {
+func TestMSP04BFacadeAssignsOnlyAnUnambiguousInitialGeneration(t *testing.T) {
 	fixture := newMSP04BFixture(t, "commit_durable")
 	service := &msp04bServiceSpy{}
 	adapter := newFirstTrustFacade(service, fixture.coordinator)
@@ -268,9 +268,11 @@ func TestMSP04BFacadeAssignsGenerationWithoutChangingUpstreamCallbacks(t *testin
 	}
 	adapter.RemoteSKIDisconnected(nil, ski)
 	adapter.ServicePairingDetailUpdate(ski, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateReceivedPairingRequest, nil))
-	_, _, _, secondGeneration, _, complete, ok := fixture.coordinator.candidate()
-	if !ok || complete || secondGeneration == firstGeneration {
-		t.Fatal("disconnect did not clear stale association data and advance lifecycle generation")
+	if _, _, _, _, _, _, ok := fixture.coordinator.candidate(); ok {
+		t.Fatal("same-SKI reconnect created a replacement generation from tokenless callbacks")
+	}
+	if service.cancelCount() != 2 {
+		t.Fatalf("facade cancellation count = %d, want busy peer and ambiguous reconnect", service.cancelCount())
 	}
 }
 

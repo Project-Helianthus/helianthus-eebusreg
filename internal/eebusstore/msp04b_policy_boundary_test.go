@@ -5,6 +5,8 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -64,4 +66,122 @@ func TestMSP04BStoreRemainsMechanicalAndPolicyFree(t *testing.T) {
 			return true
 		})
 	}
+}
+
+func TestMSP04BAssociationBridgeExportedSurfaceIsExactlyFrozen(t *testing.T) {
+	wantDeclarations := []string{
+		"func OpenAssociationBridge",
+		"type AssociationBridge",
+		"type KeyProvider",
+		"type KeyProviderBinding",
+	}
+	if got := exportedStoreDeclarations(t); !slices.Equal(got, wantDeclarations) {
+		t.Fatalf("exported store declarations = %v, want %v", got, wantDeclarations)
+	}
+
+	wantProviderMethods := map[string]string{
+		"Probe":    "func(string, uint64) error",
+		"Unseal":   "func([]uint8) (crypto.Signer, error)",
+		"Validate": "func([]uint8, []uint8) error",
+	}
+	provider := reflect.TypeOf((*KeyProvider)(nil)).Elem()
+	if got := exportedMethodSignatures(provider); !reflect.DeepEqual(got, wantProviderMethods) {
+		t.Fatalf("KeyProvider methods = %#v, want %#v", got, wantProviderMethods)
+	}
+
+	binding := reflect.TypeOf(KeyProviderBinding{})
+	wantBindingFields := []string{
+		"ID string",
+		"Version uint64",
+		"Provider eebusstore.KeyProvider",
+	}
+	gotBindingFields := make([]string, 0, binding.NumField())
+	for index := 0; index < binding.NumField(); index++ {
+		field := binding.Field(index)
+		if field.PkgPath != "" || field.Anonymous {
+			t.Fatalf("KeyProviderBinding field %q is not an exported named field", field.Name)
+		}
+		gotBindingFields = append(gotBindingFields, field.Name+" "+field.Type.String())
+	}
+	if !slices.Equal(gotBindingFields, wantBindingFields) {
+		t.Fatalf("KeyProviderBinding fields = %v, want %v", gotBindingFields, wantBindingFields)
+	}
+
+	bridge := reflect.TypeOf(AssociationBridge{})
+	for index := 0; index < bridge.NumField(); index++ {
+		if field := bridge.Field(index); field.PkgPath == "" {
+			t.Fatalf("AssociationBridge gained exported field %q", field.Name)
+		}
+	}
+	wantBridgeMethods := map[string]string{
+		"Close":              "func(*eebusstore.AssociationBridge) error",
+		"Commit":             "func(*eebusstore.AssociationBridge, context.Context, uint64, []uint8, string) string",
+		"Reload":             "func(*eebusstore.AssociationBridge, context.Context) (uint64, map[string]string, string)",
+		"SelectedGeneration": "func(*eebusstore.AssociationBridge) uint64",
+	}
+	if got := exportedMethodSignatures(reflect.TypeOf((*AssociationBridge)(nil))); !reflect.DeepEqual(got, wantBridgeMethods) {
+		t.Fatalf("AssociationBridge methods = %#v, want %#v", got, wantBridgeMethods)
+	}
+
+	wantOpen := "func(string, []eebusstore.KeyProviderBinding) (*eebusstore.AssociationBridge, string)"
+	if got := reflect.TypeOf(OpenAssociationBridge).String(); got != wantOpen {
+		t.Fatalf("OpenAssociationBridge signature = %q, want %q", got, wantOpen)
+	}
+}
+
+func exportedStoreDeclarations(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	declarations := make(map[string]struct{})
+	files := token.NewFileSet()
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		parsed, err := parser.ParseFile(files, entry.Name(), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, declaration := range parsed.Decls {
+			switch typed := declaration.(type) {
+			case *ast.FuncDecl:
+				if typed.Recv == nil && ast.IsExported(typed.Name.Name) {
+					declarations["func "+typed.Name.Name] = struct{}{}
+				}
+			case *ast.GenDecl:
+				for _, specification := range typed.Specs {
+					switch value := specification.(type) {
+					case *ast.TypeSpec:
+						if ast.IsExported(value.Name.Name) {
+							declarations["type "+value.Name.Name] = struct{}{}
+						}
+					case *ast.ValueSpec:
+						for _, name := range value.Names {
+							if ast.IsExported(name.Name) {
+								declarations[strings.ToLower(typed.Tok.String())+" "+name.Name] = struct{}{}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	result := make([]string, 0, len(declarations))
+	for declaration := range declarations {
+		result = append(result, declaration)
+	}
+	slices.Sort(result)
+	return result
+}
+
+func exportedMethodSignatures(value reflect.Type) map[string]string {
+	methods := make(map[string]string, value.NumMethod())
+	for index := 0; index < value.NumMethod(); index++ {
+		method := value.Method(index)
+		methods[method.Name] = method.Type.String()
+	}
+	return methods
 }
