@@ -308,7 +308,7 @@ func openMSP04BCandidate(t *testing.T, fixture msp04bFixture, remote []byte, gen
 		fixture.coordinator.serviceShipIDUpdate(remote, generation, msp04bLabel(t))
 	}
 	fingerprint, nonce, expiresAt, connection, storeGeneration, _, ok := fixture.coordinator.candidate()
-	if !ok || fingerprint != hex.EncodeToString(remote) || nonce == "" || !expiresAt.After(fixture.clock.Now()) || connection != generation || storeGeneration != fixture.store.selectedGeneration() {
+	if !ok || fingerprint != hex.EncodeToString(remote) || nonce == "" || !expiresAt.After(fixture.clock.Now()) || connection != generation || storeGeneration != fixture.store.SelectedGeneration() {
 		t.Fatal("candidate bindings were incomplete or not exact")
 	}
 	return msp04bBindings{fingerprint: fingerprint, nonce: nonce, expiresAt: expiresAt, connection: connection, store: storeGeneration}
@@ -393,7 +393,7 @@ type msp04bStoreSpy struct {
 	release        chan struct{}
 }
 
-func (store *msp04bStoreSpy) reload(context.Context) (uint64, map[string]string, string) {
+func (store *msp04bStoreSpy) Reload(context.Context) (uint64, map[string]string, string) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	associations := make(map[string]string, len(store.associations))
@@ -403,13 +403,13 @@ func (store *msp04bStoreSpy) reload(context.Context) (uint64, map[string]string,
 	return store.generation, associations, "opened_current"
 }
 
-func (store *msp04bStoreSpy) selectedGeneration() uint64 {
+func (store *msp04bStoreSpy) SelectedGeneration() uint64 {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	return store.generation
 }
 
-func (store *msp04bStoreSpy) commit(ctx context.Context, expected uint64, remote []byte, shipID string) string {
+func (store *msp04bStoreSpy) Commit(ctx context.Context, expected uint64, remote []byte, shipID string) string {
 	store.mu.Lock()
 	store.commitCalls++
 	store.commitExpected = expected
@@ -542,6 +542,7 @@ type msp04bServiceSpy struct {
 	cancels   int
 	registers int
 	waiting   []bool
+	auto      []bool
 }
 
 func (*msp04bServiceSpy) Setup() error                               { return nil }
@@ -549,6 +550,12 @@ func (*msp04bServiceSpy) Start()                                     {}
 func (*msp04bServiceSpy) Shutdown()                                  {}
 func (*msp04bServiceSpy) LocalService() *shipapi.ServiceDetails      { return nil }
 func (*msp04bServiceSpy) LocalDevice() spineapi.DeviceLocalInterface { return nil }
+
+func (service *msp04bServiceSpy) SetAutoAccept(value bool) {
+	service.mu.Lock()
+	service.auto = append(service.auto, value)
+	service.mu.Unlock()
+}
 
 func (service *msp04bServiceSpy) RegisterRemoteSKI(string) {
 	service.mu.Lock()

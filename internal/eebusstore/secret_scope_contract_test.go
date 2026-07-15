@@ -111,6 +111,14 @@ func TestGeneratedNamesHooksEnvironmentAndArgvContainNoSecrets(t *testing.T) {
 }
 
 func TestPackageStaysInternalUnexportedAndFreeOfRuntimeOrPolicyBehavior(t *testing.T) {
+	allowedBridgeTypes := map[string]struct{}{
+		"AssociationBridge":  {},
+		"KeyProvider":        {},
+		"KeyProviderBinding": {},
+	}
+	allowedBridgeFunctions := map[string]struct{}{
+		"OpenAssociationBridge": {},
+	}
 	workingDirectory, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -145,14 +153,18 @@ func TestPackageStaysInternalUnexportedAndFreeOfRuntimeOrPolicyBehavior(t *testi
 			switch declaration := declaration.(type) {
 			case *ast.FuncDecl:
 				if declaration.Recv == nil && declaration.Name.IsExported() {
-					t.Fatalf("%s exports package-level function %s", name, declaration.Name.Name)
+					if _, allowed := allowedBridgeFunctions[declaration.Name.Name]; !allowed {
+						t.Fatalf("%s exports package-level function %s", name, declaration.Name.Name)
+					}
 				}
 			case *ast.GenDecl:
 				for _, spec := range declaration.Specs {
 					switch spec := spec.(type) {
 					case *ast.TypeSpec:
 						if spec.Name.IsExported() {
-							t.Fatalf("%s exports type %s", name, spec.Name.Name)
+							if _, allowed := allowedBridgeTypes[spec.Name.Name]; !allowed {
+								t.Fatalf("%s exports type %s", name, spec.Name.Name)
+							}
 						}
 					case *ast.ValueSpec:
 						for _, identifier := range spec.Names {

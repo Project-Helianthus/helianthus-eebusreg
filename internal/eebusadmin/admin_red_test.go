@@ -19,7 +19,7 @@ func TestMSP04BAdminUsesOwnerOnlyAFUNIXAndNativeSameUID(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("native peer-credential proof is defined for Linux and Darwin")
 	}
-	runtimeDir := filepath.Join(t.TempDir(), "admin")
+	runtimeDir := msp04bCanonicalRuntimeDir(t)
 	handled := make(chan struct{}, 1)
 	transport, err := startAdminTransport(
 		context.Background(),
@@ -86,7 +86,7 @@ func TestMSP04BAdminRejectsWrongOrMissingCredentialsBeforeBodyRead(t *testing.T)
 			var handled atomic.Int32
 			transport, err := startAdminTransport(
 				context.Background(),
-				filepath.Join(t.TempDir(), "admin"),
+				msp04bCanonicalRuntimeDir(t),
 				os.Geteuid(),
 				test.peer,
 				func(context.Context, []byte) []byte {
@@ -205,4 +205,22 @@ func assertMSP04BMode(t *testing.T, path string, want os.FileMode) {
 	if got := info.Mode().Perm(); got != want {
 		t.Fatalf("mode = %04o, want %04o", got, want)
 	}
+}
+
+func msp04bCanonicalRuntimeDir(t *testing.T) string {
+	t.Helper()
+	base, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.MkdirTemp(base, "eebusadmin-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("remove admin test directory: %v", err)
+		}
+	})
+	return filepath.Join(root, "admin")
 }
