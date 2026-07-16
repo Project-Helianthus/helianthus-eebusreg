@@ -68,15 +68,24 @@ func TestMSP04BStoreRemainsMechanicalAndPolicyFree(t *testing.T) {
 	}
 }
 
-func TestMSP04BAssociationBridgeExportedSurfaceIsExactlyFrozen(t *testing.T) {
-	wantDeclarations := []string{
+func TestMSP04CAssociationBridgePreservesFrozenSurfaceAndAddsMechanicalControl(t *testing.T) {
+	requiredDeclarations := []string{
 		"func OpenAssociationBridge",
 		"type AssociationBridge",
 		"type KeyProvider",
 		"type KeyProviderBinding",
 	}
-	if got := exportedStoreDeclarations(t); !slices.Equal(got, wantDeclarations) {
-		t.Fatalf("exported store declarations = %v, want %v", got, wantDeclarations)
+	declarations := exportedStoreDeclarations(t)
+	for _, required := range requiredDeclarations {
+		if !slices.Contains(declarations, required) {
+			t.Fatalf("exported store declarations %v lack frozen declaration %q", declarations, required)
+		}
+	}
+	for _, declaration := range declarations {
+		if slices.Contains(requiredDeclarations, declaration) || strings.HasPrefix(declaration, "type Control") || strings.HasPrefix(declaration, "type PreparedControl") {
+			continue
+		}
+		t.Fatalf("unexpected exported store declaration %q", declaration)
 	}
 
 	wantProviderMethods := map[string]string{
@@ -113,14 +122,29 @@ func TestMSP04BAssociationBridgeExportedSurfaceIsExactlyFrozen(t *testing.T) {
 			t.Fatalf("AssociationBridge gained exported field %q", field.Name)
 		}
 	}
-	wantBridgeMethods := map[string]string{
+	frozenBridgeMethods := map[string]string{
 		"Close":              "func(*eebusstore.AssociationBridge) error",
 		"Commit":             "func(*eebusstore.AssociationBridge, context.Context, uint64, []uint8, string) string",
 		"Reload":             "func(*eebusstore.AssociationBridge, context.Context) (uint64, map[string]string, string)",
 		"SelectedGeneration": "func(*eebusstore.AssociationBridge) uint64",
 	}
-	if got := exportedMethodSignatures(reflect.TypeOf((*AssociationBridge)(nil))); !reflect.DeepEqual(got, wantBridgeMethods) {
-		t.Fatalf("AssociationBridge methods = %#v, want %#v", got, wantBridgeMethods)
+	methods := exportedMethodSignatures(reflect.TypeOf((*AssociationBridge)(nil)))
+	for name, want := range frozenBridgeMethods {
+		if got := methods[name]; got != want {
+			t.Fatalf("AssociationBridge.%s signature = %q, want frozen %q", name, got, want)
+		}
+	}
+	mechanicalControlMethods := []string{"CommitControl", "ObserveControlPublication", "PrepareControl", "ReloadControl"}
+	for _, name := range mechanicalControlMethods {
+		if _, ok := methods[name]; !ok {
+			t.Fatalf("AssociationBridge lacks mechanical method %s", name)
+		}
+	}
+	for name := range methods {
+		if _, frozen := frozenBridgeMethods[name]; frozen || slices.Contains(mechanicalControlMethods, name) {
+			continue
+		}
+		t.Fatalf("AssociationBridge gained non-mechanical method %s", name)
 	}
 
 	wantOpen := "func(string, []eebusstore.KeyProviderBinding) (*eebusstore.AssociationBridge, string)"
