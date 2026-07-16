@@ -97,14 +97,14 @@ func TestMSP04CG16ArtifactRequiresExactlyG10G11G16(t *testing.T) {
 			}
 		})
 	}
-	if len(msp04cRequiredSubcases) != 25 {
+	if len(msp04cRequiredSubcases) != 24 {
 		t.Fatalf("required execution inventory changed without an exhaustive contract update: %d", len(msp04cRequiredSubcases))
 	}
 	seenGates := map[string]int{}
 	for _, expected := range msp04cRequiredSubcases {
 		seenGates[expected.gate]++
 	}
-	if seenGates["EEBUS-G10"] != 9 || seenGates["EEBUS-G11"] != 13 || seenGates["EEBUS-G16"] != 3 {
+	if seenGates["EEBUS-G10"] != 9 || seenGates["EEBUS-G11"] != 12 || seenGates["EEBUS-G16"] != 3 {
 		t.Fatalf("required subcase inventory = %#v", seenGates)
 	}
 }

@@ -37,7 +37,6 @@ const (
 	msp04cG11Vector2
 	msp04cG11Vector3
 	msp04cG11Vector4
-	msp04cG11Vector5
 	msp04cG11CheckpointSix
 	msp04cG11CheckpointFour
 	msp04cG11RestartFour
@@ -130,8 +129,7 @@ var msp04cRequiredSubcases = map[msp04cSubcase]msp04cExpectedSubcase{
 	msp04cG11Vector1:                  {gate: "EEBUS-G11", state: "BACKOFF_ACTIVE", outcome: "RETRY_DENIED", count: 1, delaySeconds: 3},
 	msp04cG11Vector2:                  {gate: "EEBUS-G11", state: "BACKOFF_ACTIVE", outcome: "RETRY_DENIED", count: 2, delaySeconds: 6},
 	msp04cG11Vector3:                  {gate: "EEBUS-G11", state: "BACKOFF_ACTIVE", outcome: "RETRY_DENIED", count: 3, delaySeconds: 10},
-	msp04cG11Vector4:                  {gate: "EEBUS-G11", state: "BACKOFF_ACTIVE", outcome: "RETRY_DENIED", count: 4, delaySeconds: 10},
-	msp04cG11Vector5:                  {gate: "EEBUS-G11", state: "BACKOFF_ACTIVE", outcome: "RETRY_DENIED", count: 4, delaySeconds: 10},
+	msp04cG11Vector4:                  {gate: "EEBUS-G11", state: "ADMIN_HOLD", reason: "HANDSHAKE_ATTEMPT_LIMIT", outcome: "RETRY_DENIED", count: 4},
 	msp04cG11CheckpointSix:            {gate: "EEBUS-G11", state: "BACKOFF_ACTIVE", outcome: "RETRY_DENIED", count: 2, delaySeconds: 6},
 	msp04cG11CheckpointFour:           {gate: "EEBUS-G11", state: "BACKOFF_ACTIVE", outcome: "RETRY_DENIED", count: 2, delaySeconds: 4},
 	msp04cG11RestartFour:              {gate: "EEBUS-G11", state: "BACKOFF_ACTIVE", outcome: "RETRY_DENIED", count: 2, delaySeconds: 4},
@@ -181,7 +179,7 @@ func newMSP04CArtifact(input msp04cArtifactInput) (msp04cArtifact, error) {
 	}
 	cases := []msp04cArtifactCase{
 		{ID: "EEBUS-G10", Status: msp04cPassStatus(gatePass["EEBUS-G10"]), State: "QUARANTINED", Reason: "CLONE_DETECTED", Outcome: "TRUST_DENIED"},
-		{ID: "EEBUS-G11", Status: msp04cPassStatus(gatePass["EEBUS-G11"]), State: "BACKOFF_ACTIVE", Outcome: "RETRY_DENIED", Count: 4, DelaySeconds: 10},
+		{ID: "EEBUS-G11", Status: msp04cPassStatus(gatePass["EEBUS-G11"]), State: "ADMIN_HOLD", Reason: "HANDSHAKE_ATTEMPT_LIMIT", Outcome: "RETRY_DENIED", Count: 4},
 		{ID: "EEBUS-G16", Status: msp04cPassStatus(gatePass["EEBUS-G16"]), State: "UNPAIRED_LOCKED", Outcome: "PUBLIC_API_FROZEN"},
 	}
 	result := "PASS"
@@ -347,7 +345,7 @@ func msp04cStateAllowed(value string) bool {
 
 func msp04cReasonAllowed(value string) bool {
 	switch value {
-	case "", "CORRUPT_STORE", "DURABILITY_UNKNOWN", "HOST_KEY_UNAVAILABLE", "HOST_BINDING_MISMATCH", "CLONE_DETECTED", "MANIFEST_GENERATION_ROLLBACK", "CONTROL_EPOCH_ROLLBACK", "REVOKED_ASSOCIATION", "ADMIN_HOLD", "RETRYABLE_FAILURE":
+	case "", "CORRUPT_STORE", "DURABILITY_UNKNOWN", "HOST_KEY_UNAVAILABLE", "HOST_BINDING_MISMATCH", "CLONE_DETECTED", "MANIFEST_GENERATION_ROLLBACK", "CONTROL_EPOCH_ROLLBACK", "REVOKED_ASSOCIATION", "ADMIN_HOLD", "RETRYABLE_FAILURE", "HANDSHAKE_ATTEMPT_LIMIT":
 		return true
 	default:
 		return false

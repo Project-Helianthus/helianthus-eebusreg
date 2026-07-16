@@ -41,6 +41,7 @@ type runtimeFirstTrustResources struct {
 	facade      *firstTrustFacade
 	store       runtimeAssociationBridge
 	admin       firstTrustAdminEndpoint
+	adminDir    string
 }
 
 type runtimeServiceReader struct {
@@ -90,11 +91,11 @@ func (reader *runtimeServiceReader) trustFacade() *firstTrustFacade {
 }
 
 func (reader *runtimeServiceReader) RemoteSKIConnected(service eebusapi.ServiceInterface, ski string) {
-	if reader.observation != nil {
-		reader.observation.RemoteSKIConnected(service, ski)
-	}
 	if facade := reader.trustFacade(); facade != nil {
 		facade.RemoteSKIConnected(service, ski)
+	}
+	if reader.observation != nil {
+		reader.observation.RemoteSKIConnected(service, ski)
 	}
 }
 
@@ -126,11 +127,11 @@ func (reader *runtimeServiceReader) ServiceShipIDUpdate(ski string, shipID strin
 }
 
 func (reader *runtimeServiceReader) ServicePairingDetailUpdate(ski string, detail *shipapi.ConnectionStateDetail) {
-	if reader.observation != nil {
-		reader.observation.ServicePairingDetailUpdate(ski, detail)
-	}
 	if facade := reader.trustFacade(); facade != nil {
 		facade.ServicePairingDetailUpdate(ski, detail)
+	}
+	if reader.observation != nil {
+		reader.observation.ServicePairingDetailUpdate(ski, detail)
 	}
 }
 
@@ -150,6 +151,22 @@ func acquireRuntimeFirstTrust(
 	reader *runtimeServiceReader,
 	dependencies runtimeDependencies,
 ) (*runtimeFirstTrustResources, error) {
+	resources, err := classifyRuntimeFirstTrust(ctx, config, material, dependencies)
+	if err != nil || resources == nil {
+		return resources, err
+	}
+	if err := attachRuntimeFirstTrust(ctx, resources, service, reader, dependencies); err != nil {
+		return nil, errors.Join(err, resources.Close())
+	}
+	return resources, nil
+}
+
+func classifyRuntimeFirstTrust(
+	ctx context.Context,
+	config RuntimeConfig,
+	material runtimeMaterial,
+	dependencies runtimeDependencies,
+) (*runtimeFirstTrustResources, error) {
 	authorization := material.firstTrust
 	if authorization == nil {
 		return nil, nil
@@ -164,17 +181,13 @@ func acquireRuntimeFirstTrust(
 	if dependencies.openAssociationBridge == nil || dependencies.startFirstTrustAdmin == nil || authorization.hostAnchor == nil || authorization.identityProvider == nil {
 		return nil, errors.New("first trust runtime dependencies are incomplete")
 	}
-	trustService, ok := service.(firstTrustService)
-	if !ok {
-		return nil, errors.New("runtime service does not support first trust controls")
-	}
 
 	bindings := append([]eebusstore.KeyProviderBinding(nil), authorization.keyProviders...)
 	store, outcome := dependencies.openAssociationBridge(config.StateRoot, bindings)
 	if store == nil {
 		return nil, fmt.Errorf("first trust store unavailable: %s", outcome)
 	}
-	resources := &runtimeFirstTrustResources{reader: reader, store: store}
+	resources := &runtimeFirstTrustResources{store: store, adminDir: adminRuntimeDir}
 	monotonicOrigin := time.Now()
 	coordinator := newFirstTrustCoordinatorWithRecovery(
 		dependencies.now,
@@ -189,10 +202,7 @@ func acquireRuntimeFirstTrust(
 		},
 	)
 	coordinator.identityProvider = authorization.identityProvider
-	facade := newFirstTrustFacade(trustService, coordinator)
-	coordinator.effects = facade
 	resources.coordinator = coordinator
-	resources.facade = facade
 	if outcome := coordinator.reopenWithRecovery(ctx); outcome == "reopen_cancelled" || outcome == "reopen_in_progress" || outcome == "store_unavailable" {
 		startupErr := fmt.Errorf("first trust store reopen failed: %s", outcome)
 		return nil, errors.Join(startupErr, resources.Close())
@@ -201,24 +211,50 @@ func acquireRuntimeFirstTrust(
 		return nil, errors.Join(err, resources.Close())
 	}
 
+	return resources, nil
+}
+
+func attachRuntimeFirstTrust(
+	ctx context.Context,
+	resources *runtimeFirstTrustResources,
+	service runtimeService,
+	reader *runtimeServiceReader,
+	dependencies runtimeDependencies,
+) error {
+	if resources == nil || resources.coordinator == nil || reader == nil {
+		return errors.New("first trust runtime composition is incomplete")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	trustService, ok := service.(firstTrustService)
+	if !ok {
+		return errors.New("runtime service does not support first trust controls")
+	}
+	facade := newFirstTrustFacade(trustService, resources.coordinator)
+	resources.reader = reader
+	resources.facade = facade
+	resources.coordinator.mu.Lock()
+	resources.coordinator.effects = facade
+	resources.coordinator.mu.Unlock()
+
 	lifetime, cancel := context.WithCancel(context.Background())
 	resources.cancel = cancel
-	admin, err := dependencies.startFirstTrustAdmin(lifetime, adminRuntimeDir, coordinator)
+	admin, err := dependencies.startFirstTrustAdmin(lifetime, resources.adminDir, resources.coordinator)
 	resources.admin = admin
 	if err == nil && admin == nil {
 		err = errors.New("first trust admin factory returned nil")
 	}
 	if err != nil {
-		startupErr := fmt.Errorf("first trust admin startup failed: %w", err)
-		return nil, errors.Join(startupErr, resources.Close())
+		return fmt.Errorf("first trust admin startup failed: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, errors.Join(err, resources.Close())
+		return err
 	}
 	if err := reader.attachFirstTrust(facade); err != nil {
-		return nil, errors.Join(err, resources.Close())
+		return err
 	}
-	return resources, nil
+	return nil
 }
 
 func validateRuntimeFirstTrustAuthorization(stateRoot string, authorization *runtimeFirstTrustAuthorization) (string, error) {
@@ -255,6 +291,10 @@ func (resources *runtimeFirstTrustResources) Close() error {
 		if resources.reader != nil {
 			resources.reader.detachFirstTrust(resources.facade)
 		}
+		var checkpointErr error
+		if resources.coordinator != nil {
+			checkpointErr = resources.coordinator.checkpointActiveRetries(context.Background())
+		}
 		if resources.coordinator != nil {
 			resources.coordinator.shutdown()
 		}
@@ -262,7 +302,24 @@ func (resources *runtimeFirstTrustResources) Close() error {
 		if resources.store != nil {
 			storeErr = resources.store.Close()
 		}
-		resources.closeErr = errors.Join(adminErr, storeErr)
+		resources.closeErr = errors.Join(adminErr, checkpointErr, storeErr)
 	})
 	return resources.closeErr
+}
+
+func (coordinator *firstTrustCoordinator) checkpointActiveRetries(ctx context.Context) error {
+	coordinator.mu.Lock()
+	scopes := make([][32]byte, 0, len(coordinator.controlView.control.quarantines))
+	for _, record := range coordinator.controlView.control.quarantines {
+		if record.state == "BACKOFF_ACTIVE" {
+			scopes = append(scopes, record.scope)
+		}
+	}
+	coordinator.mu.Unlock()
+	for _, scope := range scopes {
+		if outcome := coordinator.checkpointRetry(ctx, scope); outcome != "checkpoint_durable" && outcome != "checkpoint_not_applicable" {
+			return fmt.Errorf("first trust retry checkpoint failed: %s", outcome)
+		}
+	}
+	return nil
 }

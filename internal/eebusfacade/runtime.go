@@ -24,6 +24,7 @@ import (
 var (
 	errProtectedRuntimeCredentials   = errors.New("eebus runtime protected credentials are unavailable")
 	errScopedSHIPListenerUnavailable = errors.New("scoped SHIP listener is unavailable")
+	errRuntimeTrustEffectsDenied     = errors.New("eebus runtime trust classification denies transport effects")
 )
 
 type Backend interface {
@@ -192,30 +193,45 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 			return nil, fmt.Errorf("%w: runtime remote %d is not admitted", errProtectedRuntimeCredentials, index)
 		}
 	}
+	firstTrust, err := classifyRuntimeFirstTrust(ctx, config, material, dependencies)
+	if err != nil {
+		return nil, err
+	}
+	closeFirstTrust := func() error {
+		if firstTrust == nil {
+			return nil
+		}
+		return firstTrust.Close()
+	}
 
 	handler, err := newRuntimeServiceHandler(config, material.localSKI, dependencies.now)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, closeFirstTrust())
 	}
 	reader := newRuntimeServiceReader(handler)
 	service, err := dependencies.newService(config, material, reader)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, closeFirstTrust())
 	}
 	if service == nil {
-		return nil, errors.New("runtime service factory returned nil")
+		return nil, errors.Join(errors.New("runtime service factory returned nil"), closeFirstTrust())
+	}
+	if firstTrust != nil {
+		if err := attachRuntimeFirstTrust(ctx, firstTrust, service, reader, dependencies); err != nil {
+			service.Shutdown()
+			return nil, errors.Join(err, closeFirstTrust())
+		}
 	}
 	if err := service.Setup(); err != nil {
 		service.Shutdown()
-		return nil, fmt.Errorf("setup eebus runtime service: %w", err)
-	}
-	firstTrust, err := acquireRuntimeFirstTrust(ctx, config, material, service, reader, dependencies)
-	if err != nil {
-		service.Shutdown()
-		return nil, err
+		return nil, errors.Join(fmt.Errorf("setup eebus runtime service: %w", err), closeFirstTrust())
 	}
 	for _, remote := range config.Remotes {
-		service.RegisterRemoteSKI(remote.SKI)
+		if firstTrust == nil {
+			service.RegisterRemoteSKI(remote.SKI)
+			continue
+		}
+		firstTrust.coordinator.registerConfiguredRemote(remote.SKI, service.RegisterRemoteSKI)
 	}
 	return &serviceBackend{service: service, handler: handler, firstTrust: firstTrust}, nil
 }
@@ -229,6 +245,9 @@ func (backend *serviceBackend) Run(ctx context.Context, publish func([]byte)) er
 	}
 	if backend.service == nil || backend.handler == nil || publish == nil {
 		return errors.New("eebus runtime service backend is incomplete")
+	}
+	if backend.firstTrust != nil && (backend.firstTrust.coordinator == nil || !backend.firstTrust.coordinator.runtimeStartAuthorized()) {
+		return errRuntimeTrustEffectsDenied
 	}
 	backend.handler.setPublisher(publish)
 	if err := backend.handler.publishCurrent(); err != nil {

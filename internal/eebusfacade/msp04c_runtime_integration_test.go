@@ -143,6 +143,7 @@ func TestMSP04CRuntimeRecoveryRevocationAndFreshLineageSurviveRealStoreRestart(t
 func acquireMSP04CRuntimeResources(t *testing.T, stateRoot, adminRoot string, anchor *runtimeStrictAnchor, service *fakeRuntimeService) *runtimeFirstTrustResources {
 	t.Helper()
 	reader := newRuntimeServiceReader(nil)
+	service.disconnected = func(ski string) { reader.RemoteSKIDisconnected(nil, ski) }
 	dependencies := defaultRuntimeDependencies
 	dependencies.now = time.Now
 	resources, err := acquireRuntimeFirstTrust(

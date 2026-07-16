@@ -5,6 +5,12 @@ import (
 	"time"
 )
 
+func (coordinator *firstTrustCoordinator) retryRuntimeEnabled() bool {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	return coordinator.recoveryStore != nil && coordinator.anchor != nil
+}
+
 func (coordinator *firstTrustCoordinator) retryState(scope [32]byte) (string, uint64, time.Duration, bool) {
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
@@ -43,7 +49,7 @@ func (coordinator *firstTrustCoordinator) admitRetry(ctx context.Context, scope 
 		target := cloneFirstTrustControlRecord(coordinator.controlView.control)
 		target.controlEpoch++
 		target.quarantines = append(target.quarantines, record)
-		if !coordinator.publishFirstTrustRetryLocked(ctx, target) {
+		if coordinator.publishFirstTrustRetryLocked(ctx, target) != "durable" {
 			return "retry_state_failed_closed"
 		}
 		coordinator.retryInflight[scope] = true
@@ -74,7 +80,7 @@ func (coordinator *firstTrustCoordinator) admitRetry(ctx context.Context, scope 
 		record.remainingDelay = 0
 		record.lastControlEpoch = target.controlEpoch
 		target.quarantines[index] = record
-		if !coordinator.publishFirstTrustRetryLocked(ctx, target) {
+		if coordinator.publishFirstTrustRetryLocked(ctx, target) != "durable" {
 			return "ready_transition_failed_closed"
 		}
 		delete(coordinator.retryArms, scope)
@@ -115,24 +121,44 @@ func (coordinator *firstTrustCoordinator) recordRetryFailure(ctx context.Context
 	}
 	target.controlEpoch++
 	record.reason = "RETRYABLE_FAILURE"
-	record.state = "BACKOFF_ACTIVE"
 	record.attemptCount = nextCount
+	if nextCount == coordinator.backoffPolicy.attemptMaximum {
+		record.reason = "HANDSHAKE_ATTEMPT_LIMIT"
+		record.state = "ADMIN_HOLD"
+		record.remainingDelay = 0
+	} else {
+		record.state = "BACKOFF_ACTIVE"
+		record.remainingDelay = delay
+	}
 	record.backoffStep = nextCount - 1
 	if record.backoffStep > uint64(coordinator.backoffPolicy.exponentCap) {
 		record.backoffStep = uint64(coordinator.backoffPolicy.exponentCap)
 	}
-	record.remainingDelay = delay
 	record.retentionBudget = firstTrustQuarantineRetention
 	record.lastControlEpoch = target.controlEpoch
 	target.quarantines[index] = record
-	if !coordinator.publishFirstTrustRetryLocked(ctx, target) {
+	publicationOutcome := coordinator.publishFirstTrustRetryLocked(ctx, target)
+	if publicationOutcome != "durable" {
+		if publicationOutcome == "unchanged" {
+			coordinator.stageFirstTrustRetryFailureHoldLocked(ctx, scope)
+		}
 		delete(coordinator.retryInflight, scope)
 		return "failure_state_failed_closed"
 	}
+	delete(coordinator.retryInflight, scope)
+	if record.state == "ADMIN_HOLD" {
+		delete(coordinator.retryArms, scope)
+		return "admin_hold"
+	}
 	now := coordinator.monotonicNow()
 	coordinator.retryArms[scope] = firstTrustRetryArm{armedAt: now, deadline: firstTrustSaturatingDurationAdd(now, delay)}
-	delete(coordinator.retryInflight, scope)
 	return "backoff_active"
+}
+
+func (coordinator *firstTrustCoordinator) completeRetry(scope [32]byte) {
+	coordinator.mu.Lock()
+	delete(coordinator.retryInflight, scope)
+	coordinator.mu.Unlock()
 }
 
 func (coordinator *firstTrustCoordinator) checkpointRetry(ctx context.Context, scope [32]byte) string {
@@ -172,7 +198,7 @@ func (coordinator *firstTrustCoordinator) checkpointRetry(ctx context.Context, s
 	record.remainingDelay = remaining
 	record.lastControlEpoch = target.controlEpoch
 	target.quarantines[index] = record
-	if !coordinator.publishFirstTrustRetryLocked(ctx, target) {
+	if coordinator.publishFirstTrustRetryLocked(ctx, target) != "durable" {
 		return "checkpoint_failed_closed"
 	}
 	if remaining == 0 {
@@ -192,10 +218,10 @@ func (coordinator *firstTrustCoordinator) firstTrustQuarantineLocked(scope [32]b
 	return -1, firstTrustQuarantineRecord{}, false
 }
 
-func (coordinator *firstTrustCoordinator) publishFirstTrustRetryLocked(ctx context.Context, target firstTrustControlRecord) bool {
+func (coordinator *firstTrustCoordinator) publishFirstTrustRetryLocked(ctx context.Context, target firstTrustControlRecord) string {
 	operationID, ok := firstTrustReadOrdinal(coordinator.random)
 	if !ok {
-		return false
+		return "prepare_failed"
 	}
 	working := cloneFirstTrustControlView(coordinator.controlView)
 	publication, outcome, anchor := coordinator.publishFirstTrustControl(
@@ -205,7 +231,7 @@ func (coordinator *firstTrustCoordinator) publishFirstTrustRetryLocked(ctx conte
 	if outcome == "durable" {
 		coordinator.controlView = cloneFirstTrustControlView(publication.target)
 		coordinator.storeGeneration = publication.target.manifest.current.sequence
-		return true
+		return "durable"
 	}
 	if outcome == "unknown" {
 		coordinator.phase = firstTrustDisabled
@@ -213,5 +239,44 @@ func (coordinator *firstTrustCoordinator) publishFirstTrustRetryLocked(ctx conte
 		coordinator.recoveryReasonCode = "DURABILITY_UNKNOWN"
 		coordinator.trustedRemotes = make(map[string]string)
 	}
-	return false
+	return outcome
+}
+
+func (coordinator *firstTrustCoordinator) stageFirstTrustRetryFailureHoldLocked(ctx context.Context, scope [32]byte) bool {
+	operationID, ok := firstTrustReadOrdinal(coordinator.random)
+	if !ok || coordinator.controlView.control.controlEpoch == ^uint64(0) {
+		coordinator.enterFirstTrustQuarantineLocked(nil)
+		return false
+	}
+	target := cloneFirstTrustControlRecord(coordinator.controlView.control)
+	target.controlEpoch++
+	index, record, exists := coordinator.firstTrustQuarantineLocked(scope)
+	if !exists {
+		if len(target.quarantines) >= firstTrustMaximumQuarantineRecords {
+			coordinator.enterFirstTrustQuarantineLocked(nil)
+			return false
+		}
+		record = firstTrustQuarantineRecord{scope: scope, retentionBudget: firstTrustQuarantineRetention}
+		target.quarantines = append(target.quarantines, record)
+		index = len(target.quarantines) - 1
+	}
+	record.state = "ADMIN_HOLD"
+	record.reason = "DURABILITY_UNKNOWN"
+	record.remainingDelay = 0
+	record.lastControlEpoch = target.controlEpoch
+	target.quarantines[index] = record
+	selected := cloneFirstTrustControlView(coordinator.controlView)
+	publication, outcome := coordinator.recoveryStore.PrepareControl(ctx, selected, target, operationID, "first_trust")
+	if outcome != "prepared" || !firstTrustPreparedPublicationValid(publication, selected, operationID, "first_trust") {
+		coordinator.enterFirstTrustQuarantineLocked(nil)
+		return false
+	}
+	pending := firstTrustPendingFromPrepared(publication)
+	stageOutcome := coordinator.anchor.CompareAndStage(ctx, cloneFirstTrustAnchorRecord(coordinator.anchorRecord), pending)
+	if stageOutcome != "anchor_durable" {
+		coordinator.enterFirstTrustQuarantineLocked(nil)
+		return false
+	}
+	coordinator.enterFirstTrustQuarantineLocked(&pending)
+	return true
 }
