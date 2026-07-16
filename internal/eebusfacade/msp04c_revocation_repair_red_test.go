@@ -330,7 +330,7 @@ func TestMSP04CRepairIdempotencySurvivesRestartAndCompaction(t *testing.T) {
 	}
 
 	changed := request
-	changed.scope = msp04cOrdinal(503)
+	changed.scope = msp04cOrdinal(504)
 	if got := coordinator.repair(context.Background(), changed); got != "idempotency_conflict" {
 		t.Fatalf("changed-binding replay outcome = %q", got)
 	}

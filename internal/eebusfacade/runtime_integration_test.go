@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusstore"
 	eebusapi "github.com/enbility/eebus-go/api"
 	eebusmocks "github.com/enbility/eebus-go/mocks"
 	shipapi "github.com/enbility/ship-go/api"
@@ -213,6 +214,7 @@ func TestAcquireRuntimeComposesAndOwnsAuthorizedFirstTrustResources(t *testing.T
 	stateRoot := filepath.Join(root, "state")
 	adminRuntimeDir := filepath.Join(root, "admin-runtime")
 	service := &fakeRuntimeService{started: make(chan struct{})}
+	anchor := &runtimeStrictAnchor{}
 	var reader eebusapi.ServiceReaderInterface
 	acquireContext, cancelAcquire := context.WithCancel(context.Background())
 	defer cancelAcquire()
@@ -223,7 +225,10 @@ func TestAcquireRuntimeComposesAndOwnsAuthorizedFirstTrustResources(t *testing.T
 			localSKI:    localSKI,
 			pretrusted:  map[string]bool{remoteSKI: true},
 			firstTrust: &runtimeFirstTrustAuthorization{
-				adminRuntimeDir: adminRuntimeDir,
+				adminRuntimeDir:  adminRuntimeDir,
+				hostAnchor:       anchor,
+				identityProvider: anchor,
+				keyProviders:     []eebusstore.KeyProviderBinding{anchor.keyBinding()},
 			},
 		}, nil
 	}
@@ -247,8 +252,25 @@ func TestAcquireRuntimeComposesAndOwnsAuthorizedFirstTrustResources(t *testing.T
 		t.Fatal("authorized runtime did not compose first trust resources")
 	}
 	resources := implementation.firstTrust
-	if resources.coordinator.state() != "PAIRING_CLOSED" || resources.store.SelectedGeneration() == 0 {
+	if resources.coordinator.recoveryState() != "NO_LOCAL_IDENTITY" || resources.store.SelectedGeneration() == 0 {
 		t.Fatal("authorized first trust did not reopen the selected durable generation")
+	}
+	resources.coordinator.mu.Lock()
+	repairRequest := firstTrustRepairRequest{
+		operationID: msp04cOrdinal(900), kind: "recover_unavailable_host_key", scope: msp04cOrdinal(901),
+		expectedState: "NO_LOCAL_IDENTITY", expectedReason: "HOST_KEY_UNAVAILABLE",
+		expectedManifest: resources.coordinator.controlView.manifest, expectedControlEpoch: resources.coordinator.controlView.control.controlEpoch,
+		expectedAnchorVersion:     resources.coordinator.anchorRecord.version,
+		expectedManifestHighWater: resources.coordinator.anchorRecord.manifestGenerationHighWater,
+		expectedControlHighWater:  resources.coordinator.anchorRecord.controlEpochHighWater,
+		nextRepairSequence:        resources.coordinator.controlView.control.repairSequence + 1,
+	}
+	resources.coordinator.mu.Unlock()
+	if got := resources.coordinator.repair(context.Background(), repairRequest); got != "repaired_unpaired" {
+		t.Fatalf("legacy runtime host-key recovery = %q", got)
+	}
+	if resources.coordinator.state() != "PAIRING_CLOSED" || resources.coordinator.recoveryState() != "UNPAIRED_LOCKED" {
+		t.Fatal("runtime host-key recovery did not land unpaired and locked")
 	}
 	if reader == nil {
 		t.Fatal("runtime service reader was not composed")
@@ -318,6 +340,7 @@ func TestAcquireRuntimeFailsClosedAndReleasesStoreWhenAdminStartFails(t *testing
 		t.Fatal(err)
 	}
 	service := &fakeRuntimeService{started: make(chan struct{})}
+	anchor := &runtimeStrictAnchor{}
 	dependencies := defaultRuntimeDependencies
 	dependencies.loadMaterial = func(context.Context, string) (runtimeMaterial, error) {
 		return runtimeMaterial{
@@ -325,7 +348,10 @@ func TestAcquireRuntimeFailsClosedAndReleasesStoreWhenAdminStartFails(t *testing
 			localSKI:    localSKI,
 			pretrusted:  map[string]bool{remoteSKI: true},
 			firstTrust: &runtimeFirstTrustAuthorization{
-				adminRuntimeDir: adminRuntimeDir,
+				adminRuntimeDir:  adminRuntimeDir,
+				hostAnchor:       anchor,
+				identityProvider: anchor,
+				keyProviders:     []eebusstore.KeyProviderBinding{anchor.keyBinding()},
 			},
 		}, nil
 	}

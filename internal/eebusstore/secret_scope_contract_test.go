@@ -14,6 +14,36 @@ import (
 	"testing"
 )
 
+var allowedStoreBridgeTypes = map[string]struct{}{
+	"AssociationBridge":          {},
+	"ControlAssociation":         {},
+	"ControlGenerationBinding":   {},
+	"ControlManifestBinding":     {},
+	"ControlPendingPublication":  {},
+	"ControlPublication":         {},
+	"ControlQuarantine":          {},
+	"ControlReceipt":             {},
+	"ControlRecord":              {},
+	"ControlTombstone":           {},
+	"ControlView":                {},
+	"KeyProvider":                {},
+	"KeyProviderBinding":         {},
+	"PreparedControlPublication": {},
+}
+
+func storeBridgeTypeAllowed(name string) bool {
+	_, allowed := allowedStoreBridgeTypes[name]
+	return allowed
+}
+
+func TestStoreBridgeRejectsUnlistedControlPrefixedExports(t *testing.T) {
+	for _, name := range []string{"ControlPolicy", "ControlMutation", "PreparedControlRepair"} {
+		if storeBridgeTypeAllowed(name) {
+			t.Fatalf("unlisted bridge type %s was allowed", name)
+		}
+	}
+}
+
 func TestRecordAndErrorFormattingRedactsEverySensitiveRepresentation(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "private-store-root")
 	secrets := syntheticSecrets(root)
@@ -111,11 +141,6 @@ func TestGeneratedNamesHooksEnvironmentAndArgvContainNoSecrets(t *testing.T) {
 }
 
 func TestPackageStaysInternalUnexportedAndFreeOfRuntimeOrPolicyBehavior(t *testing.T) {
-	allowedBridgeTypes := map[string]struct{}{
-		"AssociationBridge":  {},
-		"KeyProvider":        {},
-		"KeyProviderBinding": {},
-	}
 	allowedBridgeFunctions := map[string]struct{}{
 		"OpenAssociationBridge": {},
 	}
@@ -162,7 +187,7 @@ func TestPackageStaysInternalUnexportedAndFreeOfRuntimeOrPolicyBehavior(t *testi
 					switch spec := spec.(type) {
 					case *ast.TypeSpec:
 						if spec.Name.IsExported() {
-							if _, allowed := allowedBridgeTypes[spec.Name.Name]; !allowed {
+							if !storeBridgeTypeAllowed(spec.Name.Name) {
 								t.Fatalf("%s exports type %s", name, spec.Name.Name)
 							}
 						}

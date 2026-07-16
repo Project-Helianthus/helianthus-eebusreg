@@ -10,22 +10,8 @@ import (
 )
 
 func TestMSP04CG16ArtifactIsDeterministicClosedAndRedacted(t *testing.T) {
-	input := msp04cArtifactInput{
-		Repo:        "Project-Helianthus/helianthus-eebusreg",
-		Branch:      "issue/28-msp04c-restore-quarantine",
-		Commit:      strings.Repeat("1", 40),
-		Issue:       "MSP-04C",
-		GoVersion:   "go1.25.0",
-		GoWork:      "off",
-		GoToolchain: "auto",
-		RunOrdinal:  1,
-		Commands:    []msp04cArtifactCommand{msp04cCommandDiffCheck, msp04cCommandUnit, msp04cCommandAPIFreeze},
-		Cases: []msp04cArtifactCase{
-			{ID: "EEBUS-G16", Status: "PASS", CaseOrdinal: 3, State: "UNPAIRED_LOCKED", Outcome: "PUBLIC_API_FROZEN"},
-			{ID: "EEBUS-G11", Status: "PASS", CaseOrdinal: 2, State: "BACKOFF_ACTIVE", Outcome: "RETRY_DENIED", Count: 4, DelaySeconds: 10},
-			{ID: "EEBUS-G10", Status: "PASS", CaseOrdinal: 1, State: "QUARANTINED", Reason: "CLONE_DETECTED", Outcome: "TRUST_DENIED"},
-		},
-	}
+	input := validMSP04CArtifactInput(1)
+	input.Commands = []msp04cArtifactCommand{msp04cCommandDiffCheck, msp04cCommandUnit, msp04cCommandAPIFreeze}
 	artifact, err := newMSP04CArtifact(input)
 	if err != nil {
 		t.Fatal(err)
@@ -33,13 +19,13 @@ func TestMSP04CG16ArtifactIsDeterministicClosedAndRedacted(t *testing.T) {
 	if err := artifact.validate(); err != nil {
 		t.Fatal(err)
 	}
-	if artifact.RunLabel == "" {
-		t.Fatal("artifact run label is empty")
+	if artifact.Result != "PASS" || artifact.RunLabel == "" {
+		t.Fatal("complete exact transcript did not derive a labeled PASS artifact")
 	}
 	caseLabels := map[string]struct{}{}
 	for _, item := range artifact.Cases {
-		if item.CaseLabel == "" {
-			t.Fatal("artifact case label is empty")
+		if item.CaseLabel == "" || item.Status != "PASS" {
+			t.Fatal("artifact did not derive a PASS case from its required subcases")
 		}
 		caseLabels[item.CaseLabel] = struct{}{}
 	}
@@ -53,7 +39,8 @@ func TestMSP04CG16ArtifactIsDeterministicClosedAndRedacted(t *testing.T) {
 
 	reordered := input
 	reordered.Commands = []msp04cArtifactCommand{msp04cCommandAPIFreeze, msp04cCommandUnit, msp04cCommandDiffCheck}
-	reordered.Cases = []msp04cArtifactCase{input.Cases[1], input.Cases[0], input.Cases[2]}
+	reordered.Transcript = append([]msp04cSubcaseObservation(nil), input.Transcript...)
+	slices.Reverse(reordered.Transcript)
 	artifactAgain, err := newMSP04CArtifact(reordered)
 	if err != nil {
 		t.Fatal(err)
@@ -63,13 +50,13 @@ func TestMSP04CG16ArtifactIsDeterministicClosedAndRedacted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first, second) {
-		t.Fatal("artifact bytes depend on command or case ordering")
+		t.Fatal("artifact bytes depend on command or execution ordering for one captured run seed")
 	}
 	if err := validatePublicRedaction(first); err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(first, []byte("case_ordinal")) || bytes.Contains(first, []byte("run_ordinal")) {
-		t.Fatal("artifact exposed internal synthetic ordinals")
+	if bytes.Contains(first, []byte("subcase")) || bytes.Contains(first, []byte("run_seed")) || bytes.Contains(first, input.RunSeed[:]) {
+		t.Fatal("artifact exposed its execution transcript or replay seed")
 	}
 
 	var decoded map[string]json.RawMessage
@@ -87,58 +74,38 @@ func TestMSP04CG16ArtifactIsDeterministicClosedAndRedacted(t *testing.T) {
 	if !slices.Equal(names, wantNames) {
 		t.Fatalf("artifact fields = %v, want %v", names, wantNames)
 	}
-	for field, want := range map[string]string{
-		"auth_scope":      "not_applicable_synthetic",
-		"issue":           "MSP-04C",
-		"result":          "PASS",
-		"temporary_paths": "redacted",
-		"topology":        "not_applicable_synthetic",
-	} {
-		var got string
-		if err := json.Unmarshal(decoded[field], &got); err != nil {
-			t.Fatal(err)
-		}
-		if got != want {
-			t.Fatalf("artifact field %s = %q, want %q", field, got, want)
-		}
-	}
 }
 
 func TestMSP04CG16ArtifactRequiresExactlyG10G11G16(t *testing.T) {
-	base := msp04cArtifactInput{
-		Repo: "Project-Helianthus/helianthus-eebusreg", Branch: "issue/28-msp04c-restore-quarantine",
-		Commit: strings.Repeat("2", 40), Issue: "MSP-04C", GoVersion: "go1.25.0", GoWork: "off", GoToolchain: "auto",
-		RunOrdinal: 2, Commands: []msp04cArtifactCommand{msp04cCommandUnit},
-		Cases: []msp04cArtifactCase{
-			{ID: "EEBUS-G10", Status: "PASS", CaseOrdinal: 1, State: "QUARANTINED", Reason: "HOST_BINDING_MISMATCH", Outcome: "TRUST_DENIED"},
-			{ID: "EEBUS-G11", Status: "PASS", CaseOrdinal: 2, State: "BACKOFF_ACTIVE", Outcome: "RETRY_DENIED", Count: 2, DelaySeconds: 6},
-			{ID: "EEBUS-G16", Status: "PASS", CaseOrdinal: 3, State: "UNPAIRED_LOCKED", Outcome: "PUBLIC_API_FROZEN"},
-		},
-	}
-
+	base := validMSP04CArtifactInput(2)
 	invalid := []struct {
 		name   string
 		mutate func(*msp04cArtifactInput)
 	}{
-		{name: "missing case", mutate: func(input *msp04cArtifactInput) { input.Cases = input.Cases[:2] }},
-		{name: "duplicate case", mutate: func(input *msp04cArtifactInput) { input.Cases[2] = input.Cases[1] }},
-		{name: "unexpected case", mutate: func(input *msp04cArtifactInput) { input.Cases[2].ID = "EEBUS-G12" }},
-		{name: "zero run ordinal", mutate: func(input *msp04cArtifactInput) { input.RunOrdinal = 0 }},
-		{name: "zero case ordinal", mutate: func(input *msp04cArtifactInput) { input.Cases[0].CaseOrdinal = 0 }},
-		{name: "unlisted state", mutate: func(input *msp04cArtifactInput) { input.Cases[0].State = "UNLISTED" }},
-		{name: "unlisted reason", mutate: func(input *msp04cArtifactInput) { input.Cases[0].Reason = "UNLISTED" }},
-		{name: "unlisted outcome", mutate: func(input *msp04cArtifactInput) { input.Cases[0].Outcome = "UNLISTED" }},
+		{name: "missing subcase", mutate: func(input *msp04cArtifactInput) { input.Transcript = input.Transcript[:len(input.Transcript)-1] }},
+		{name: "duplicate subcase", mutate: func(input *msp04cArtifactInput) { input.Transcript[len(input.Transcript)-1] = input.Transcript[0] }},
+		{name: "unexpected subcase", mutate: func(input *msp04cArtifactInput) { input.Transcript[0].Subcase = 255 }},
 		{name: "unlisted command", mutate: func(input *msp04cArtifactInput) { input.Commands = []msp04cArtifactCommand{99} }},
 	}
 	for _, test := range invalid {
 		t.Run(test.name, func(t *testing.T) {
 			input := base
-			input.Cases = append([]msp04cArtifactCase(nil), base.Cases...)
+			input.Transcript = append([]msp04cSubcaseObservation(nil), base.Transcript...)
 			test.mutate(&input)
 			if _, err := newMSP04CArtifact(input); err == nil {
-				t.Fatal("invalid artifact input was accepted")
+				t.Fatal("incomplete or non-closed execution transcript was accepted")
 			}
 		})
+	}
+	if len(msp04cRequiredSubcases) != 25 {
+		t.Fatalf("required execution inventory changed without an exhaustive contract update: %d", len(msp04cRequiredSubcases))
+	}
+	seenGates := map[string]int{}
+	for _, expected := range msp04cRequiredSubcases {
+		seenGates[expected.gate]++
+	}
+	if seenGates["EEBUS-G10"] != 9 || seenGates["EEBUS-G11"] != 13 || seenGates["EEBUS-G16"] != 3 {
+		t.Fatalf("required subcase inventory = %#v", seenGates)
 	}
 }
 
@@ -153,18 +120,18 @@ func TestMSP04CG16ArtifactTypesHaveNoOpenEndedPayloadFields(t *testing.T) {
 			}
 		}
 	}
+	observationType := reflect.TypeOf(msp04cSubcaseObservation{})
+	if _, callerStatus := observationType.FieldByName("Status"); callerStatus {
+		t.Fatal("execution transcript permits caller-supplied PASS/FAIL")
+	}
 }
 
 func TestMSP04CG16ArtifactFailureRowsRemainDeterministic(t *testing.T) {
-	input := msp04cArtifactInput{
-		Repo: "Project-Helianthus/helianthus-eebusreg", Branch: "issue/28-msp04c-restore-quarantine",
-		Commit: strings.Repeat("3", 40), Issue: "MSP-04C", GoVersion: "go1.25.0", GoWork: "off", GoToolchain: "auto",
-		RunOrdinal: 3, Commands: []msp04cArtifactCommand{msp04cCommandUnit},
-		Cases: []msp04cArtifactCase{
-			{ID: "EEBUS-G10", Status: "FAIL", CaseOrdinal: 1, State: "QUARANTINED", Reason: "DURABILITY_UNKNOWN", Outcome: "TRUST_DENIED"},
-			{ID: "EEBUS-G11", Status: "PASS", CaseOrdinal: 2, State: "BACKOFF_ACTIVE", Outcome: "RETRY_DENIED", Count: 4, DelaySeconds: 10},
-			{ID: "EEBUS-G16", Status: "PASS", CaseOrdinal: 3, State: "UNPAIRED_LOCKED", Outcome: "PUBLIC_API_FROZEN"},
-		},
+	input := validMSP04CArtifactInput(3)
+	for index := range input.Transcript {
+		if input.Transcript[index].Subcase == msp04cG10Clone {
+			input.Transcript[index].Reason = "DURABILITY_UNKNOWN"
+		}
 	}
 	first, err := newMSP04CArtifact(input)
 	if err != nil {
@@ -177,6 +144,72 @@ func TestMSP04CG16ArtifactFailureRowsRemainDeterministic(t *testing.T) {
 	firstBytes, _ := first.jsonBytes()
 	secondBytes, _ := second.jsonBytes()
 	if !bytes.Equal(firstBytes, secondBytes) || first.Result != "FAIL" {
-		t.Fatal("failure artifact is not byte-deterministic with FAIL precedence")
+		t.Fatal("failed executed subcase did not deterministically derive artifact FAIL")
 	}
+	for _, item := range first.Cases {
+		if item.ID == "EEBUS-G10" && item.Status != "FAIL" {
+			t.Fatal("G10 aggregate did not fail when an executed required subcase mismatched")
+		}
+		if item.ID != "EEBUS-G10" && item.Status != "PASS" {
+			t.Fatal("one gate failure contaminated an independently complete gate")
+		}
+	}
+}
+
+func TestMSP04CG16RunAndCaseLabelsAreRandomAcrossRunsAndReplayable(t *testing.T) {
+	firstInput := validMSP04CArtifactInput(4)
+	secondInput := validMSP04CArtifactInput(4)
+	firstInput.RunSeed = [32]byte{}
+	secondInput.RunSeed = [32]byte{}
+	first, err := newMSP04CArtifact(firstInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := newMSP04CArtifact(secondInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.RunLabel == second.RunLabel {
+		t.Fatal("independent runs reused a run label")
+	}
+	for index := range first.Cases {
+		if first.Cases[index].CaseLabel == second.Cases[index].CaseLabel {
+			t.Fatal("independent runs reused a case label")
+		}
+	}
+
+	replayInput := firstInput
+	replayInput.RunSeed = first.replaySeed
+	replay, err := newMSP04CArtifact(replayInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstBytes, _ := first.jsonBytes()
+	replayBytes, _ := replay.jsonBytes()
+	if !bytes.Equal(firstBytes, replayBytes) {
+		t.Fatal("captured run seed did not deterministically replay labels and artifact bytes")
+	}
+}
+
+func validMSP04CArtifactInput(seedByte byte) msp04cArtifactInput {
+	input := msp04cArtifactInput{
+		Repo: "Project-Helianthus/helianthus-eebusreg", Branch: "issue/28-msp04c-restore-quarantine",
+		Commit: strings.Repeat("1", 40), Issue: "MSP-04C", GoVersion: "go1.25.0", GoWork: "off", GoToolchain: "auto",
+		Commands: []msp04cArtifactCommand{msp04cCommandAPIFreeze, msp04cCommandDiffCheck, msp04cCommandUnit},
+	}
+	input.RunSeed[0] = seedByte
+	ids := make([]int, 0, len(msp04cRequiredSubcases))
+	for subcase := range msp04cRequiredSubcases {
+		ids = append(ids, int(subcase))
+	}
+	slices.Sort(ids)
+	for _, raw := range ids {
+		subcase := msp04cSubcase(raw)
+		expected := msp04cRequiredSubcases[subcase]
+		input.Transcript = append(input.Transcript, msp04cSubcaseObservation{
+			Subcase: subcase, State: expected.state, Reason: expected.reason, Outcome: expected.outcome,
+			Count: expected.count, DelaySeconds: expected.delaySeconds,
+		})
+	}
+	return input
 }

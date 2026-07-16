@@ -558,6 +558,23 @@ func TestMSP04CReconciliationRequiresExactCompleteBranch(t *testing.T) {
 			if got := fixture.anchor.record.pending != nil; got != test.wantPending {
 				t.Fatalf("pending retained = %t, want %t", got, test.wantPending)
 			}
+			if test.wantAction != "" {
+				receipt, found := coordinator.durableReceiptLocked(request.operationID)
+				if !found || !receipt.terminal || receipt.operationClass != request.kind || receipt.bindingSHA256 != firstTrustHashRepair(request) || receipt.result != test.wantOutcome {
+					t.Fatal("reconciliation did not durably publish its exact terminal receipt")
+				}
+				if fixture.store.view.control.repairSequence != request.nextRepairSequence {
+					t.Fatal("reconciliation did not durably advance the repair sequence")
+				}
+				restarted := fixture.newCoordinator()
+				_ = restarted.reopen(context.Background())
+				if got := restarted.repair(context.Background(), request); got != test.wantOutcome {
+					t.Fatalf("reconciliation replay after restart = %q, want %q", got, test.wantOutcome)
+				}
+				if fixture.store.calls() != 1 {
+					t.Fatal("reconciliation replay performed a second store publication")
+				}
+			}
 		})
 	}
 }
@@ -892,6 +909,11 @@ func (store *msp04cStoreSpy) PrepareControl(_ context.Context, previous firstTru
 	}
 	publication.target.control = cloneFirstTrustControlRecord(target)
 	publication.target.manifest = msp04cManifest(previous.manifest.current.sequence+1, previous.manifest.epoch+1)
+	for index := range publication.target.control.tombstones {
+		if publication.target.control.tombstones[index].operationID == operationID && publication.target.control.tombstones[index].effectiveGeneration.sequence == 0 {
+			publication.target.control.tombstones[index].effectiveGeneration = publication.target.manifest.current
+		}
+	}
 	store.prepared = publication
 	return publication, store.prepareOutcome
 }

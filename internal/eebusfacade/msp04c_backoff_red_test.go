@@ -155,6 +155,29 @@ func TestMSP04CG11CheckpointFailureNeverShortensPersistedRemainder(t *testing.T)
 	assertMSP04CRetryTuple(t, restarted, scope, "BACKOFF_ACTIVE", 2, 6*time.Second)
 }
 
+func TestMSP04CG11CheckpointAtDeadlinePersistsRetryReady(t *testing.T) {
+	fixture := newMSP04CFixture(t)
+	scope := msp04cOrdinal(176)
+	fixture.store.view.control.quarantines = []firstTrustQuarantineRecord{{
+		scope: scope, reason: "RETRYABLE_FAILURE", state: "BACKOFF_ACTIVE", attemptCount: 2,
+		backoffStep: 1, remainingDelay: 4 * time.Second, retentionBudget: 30 * time.Second,
+		lastControlEpoch: fixture.store.view.control.controlEpoch,
+	}}
+	coordinator := fixture.newCoordinator()
+	_ = coordinator.reopen(context.Background())
+	fixture.clock.advanceMonotonic(4 * time.Second)
+	if got := coordinator.checkpointRetry(context.Background(), scope); got != "checkpoint_durable" {
+		t.Fatalf("deadline checkpoint = %q", got)
+	}
+	assertMSP04CRetryTuple(t, coordinator, scope, "RETRY_READY", 2, 0)
+	if fixture.store.view.control.quarantines[0].state != "RETRY_READY" || fixture.store.view.control.quarantines[0].remainingDelay != 0 {
+		t.Fatal("deadline checkpoint persisted BACKOFF_ACTIVE with a zero remainder")
+	}
+	restarted := fixture.newCoordinator()
+	_ = restarted.reopen(context.Background())
+	assertMSP04CRetryTuple(t, restarted, scope, "RETRY_READY", 2, 0)
+}
+
 func TestMSP04CG11ReadyTransitionMustBeDurableBeforeAdmission(t *testing.T) {
 	fixture := newMSP04CFixture(t)
 	scope := msp04cOrdinal(181)

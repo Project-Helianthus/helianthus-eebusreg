@@ -126,6 +126,19 @@ type firstTrustCoordinator struct {
 	timerToken       uint64
 	retentionTimer   *time.Timer
 	retentionToken   uint64
+
+	monotonicNow       func() time.Duration
+	recoveryStore      firstTrustControlPersistence
+	anchor             firstTrustAnchorProvider
+	identityProvider   firstTrustIdentityProvider
+	backoffPolicy      firstTrustBackoffPolicy
+	recovery           string
+	recoveryReasonCode string
+	controlView        firstTrustControlView
+	anchorRecord       firstTrustAnchorRecord
+	retryArms          map[[32]byte]firstTrustRetryArm
+	retryInflight      map[[32]byte]bool
+	recoveryOperation  *firstTrustRecoveryOperation
 }
 
 func newFirstTrustCoordinator(now func() time.Time, random io.Reader, store firstTrustPersistence, effects firstTrustEffects) *firstTrustCoordinator {
@@ -149,6 +162,9 @@ func newFirstTrustCoordinator(now func() time.Time, random io.Reader, store firs
 }
 
 func (coordinator *firstTrustCoordinator) reopen(ctx context.Context) string {
+	if coordinator.recoveryStore != nil {
+		return coordinator.reopenWithRecovery(ctx)
+	}
 	ctx = firstTrustContext(ctx)
 	coordinator.mu.Lock()
 	if coordinator.reopening {
@@ -230,6 +246,14 @@ func (coordinator *firstTrustCoordinator) openPairingWindow(ctx context.Context,
 	if coordinator.activeKeyConflictLocked(key, request) {
 		return "idempotency_conflict"
 	}
+	if coordinator.recoveryStore != nil {
+		if coordinator.recoveryOperation != nil {
+			return "operation_in_progress"
+		}
+		if coordinator.reconciliationRequiredLocked() {
+			return "reconciliation_required"
+		}
+	}
 	if coordinator.phase == firstTrustDisabled || coordinator.reopening {
 		return "mutation_disabled"
 	}
@@ -293,6 +317,20 @@ func (coordinator *firstTrustCoordinator) admit(remote []byte, connection uint64
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 	coordinator.expireLocked(coordinator.now())
+	if coordinator.recoveryStore != nil {
+		if coordinator.recoveryOperation != nil {
+			coordinator.cancelRemoteLocked(remote, connection)
+			return "operation_in_progress"
+		}
+		if coordinator.reconciliationRequiredLocked() {
+			coordinator.cancelRemoteLocked(remote, connection)
+			return "reconciliation_required"
+		}
+		if coordinator.recovery != "REVOKED" && firstTrustSubjectTombstoned(coordinator.controlView, remote) {
+			coordinator.cancelRemoteLocked(remote, connection)
+			return "association_revoked"
+		}
+	}
 	if len(remote) != 20 || connection == 0 {
 		coordinator.cancelRemoteLocked(remote, connection)
 		return "candidate_ineligible"
@@ -329,7 +367,7 @@ func (coordinator *firstTrustCoordinator) admit(remote []byte, connection uint64
 	if expiresAt.After(coordinator.window.deadline) {
 		expiresAt = coordinator.window.deadline
 	}
-	selectedGeneration := coordinator.store.SelectedGeneration()
+	selectedGeneration := coordinator.selectedFirstTrustGenerationLocked()
 	if selectedGeneration == 0 {
 		coordinator.cancelRemoteLocked(remote, connection)
 		return "candidate_unavailable"
@@ -461,7 +499,7 @@ func (coordinator *firstTrustCoordinator) confirm(ctx context.Context, key, fing
 		coordinator.mu.Unlock()
 		return "association_incomplete"
 	}
-	if coordinator.store.SelectedGeneration() != candidate.storeGeneration {
+	if coordinator.selectedFirstTrustGenerationLocked() != candidate.storeGeneration {
 		coordinator.mu.Unlock()
 		return "store_generation_conflict"
 	}
@@ -475,6 +513,9 @@ func (coordinator *firstTrustCoordinator) confirm(ctx context.Context, key, fing
 	coordinator.inflight = inflight
 	remote := bytes.Clone(candidate.remote)
 	shipID := candidate.shipID
+	if coordinator.recoveryStore != nil {
+		return coordinator.confirmWithRecoveryLocked(ctx, token, inflight, remote, shipID, connection)
+	}
 	coordinator.mu.Unlock()
 
 	commitContext, cancelCommit := context.WithTimeout(ctx, coordinator.commitWait)
@@ -623,6 +664,19 @@ func (coordinator *firstTrustCoordinator) shutdown() {
 	coordinator.inflight = nil
 	coordinator.commitFence = nil
 	coordinator.reopening = false
+	coordinator.recoveryOperation = nil
+	coordinator.retryArms = nil
+	coordinator.retryInflight = nil
+}
+
+func (coordinator *firstTrustCoordinator) selectedFirstTrustGenerationLocked() uint64 {
+	if coordinator.recoveryStore != nil {
+		return coordinator.recoveryStore.SelectedGeneration()
+	}
+	if coordinator.store == nil {
+		return 0
+	}
+	return coordinator.store.SelectedGeneration()
 }
 
 func (coordinator *firstTrustCoordinator) finishCommit(token uint64, inflight *firstTrustInflight, remote []byte, connection uint64, storeOutcome string) string {

@@ -100,7 +100,20 @@ func cloneStateV1(source stateV1) stateV1 {
 		cloned.remoteIdentities[index].recordID = append([]byte(nil), identity.recordID...)
 		cloned.remoteIdentities[index].remoteSKI = append([]byte(nil), identity.remoteSKI...)
 	}
+	cloned.controlEnvelope = append([]byte(nil), source.controlEnvelope...)
 	return cloned
+}
+
+func migrateMSP04BStateToMSP04C(source stateV1) (stateV1, error) {
+	return cloneStateV1(source), nil
+}
+
+func currentMigrationGraph() (migrationGraph, error) {
+	return newMigrationGraph(currentSchemaVersion, []migrationEdge{{
+		from:  1,
+		to:    2,
+		apply: migrateMSP04BStateToMSP04C,
+	}})
 }
 
 func migrationGraphError(reason string) *storeError {

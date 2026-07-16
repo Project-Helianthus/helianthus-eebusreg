@@ -47,7 +47,11 @@ func (opened *store) commit(state stateV1) commitResult {
 		metadata.parentSequence = &parentSequence
 		metadata.parentSHA256 = &parentSHA
 	}
-	generation := generationV1{metadata: metadata, state: cloneStateV1(state)}
+	schemaVersion := opened.migrations.current
+	if schemaVersion == 0 {
+		schemaVersion = currentSchemaVersion
+	}
+	generation := generationV1{metadata: metadata, state: cloneStateV1(state), schemaVersion: schemaVersion}
 	generationBytes, err := encodeGenerationV1(generation)
 	if err != nil {
 		return commitFailure(outcomeCommitNotPublished, "commit_validate", err)
@@ -56,7 +60,7 @@ func (opened *store) commit(state stateV1) commitResult {
 		generation:       sequence,
 		generationFile:   generationFilename(sequence),
 		generationSHA256: sha256Hex(generationBytes),
-		schemaVersion:    currentSchemaVersion,
+		schemaVersion:    schemaVersion,
 	}
 	if result := opened.publishGeneration(generationReference, generationBytes); result.err != nil {
 		return result
