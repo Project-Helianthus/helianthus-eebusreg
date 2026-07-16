@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	currentSchemaVersion   uint64 = 1
+	currentSchemaVersion   uint64 = 2
 	currentManifestVersion uint64 = 1
 	currentSlotVersion     uint64 = 1
 )
@@ -41,11 +41,13 @@ type remoteIdentityV1 struct {
 type stateV1 struct {
 	localIdentity    *localIdentityV1
 	remoteIdentities []remoteIdentityV1
+	controlEnvelope  []byte
 }
 
 type generationV1 struct {
-	metadata generationMetadata
-	state    stateV1
+	metadata      generationMetadata
+	state         stateV1
+	schemaVersion uint64
 }
 
 type generationReference struct {

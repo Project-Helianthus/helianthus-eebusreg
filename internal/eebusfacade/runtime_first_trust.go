@@ -2,11 +2,13 @@ package eebusfacade
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusstore"
 	eebusapi "github.com/enbility/eebus-go/api"
@@ -14,12 +16,15 @@ import (
 )
 
 type runtimeFirstTrustAuthorization struct {
-	adminRuntimeDir string
-	keyProviders    []eebusstore.KeyProviderBinding
+	adminRuntimeDir  string
+	keyProviders     []eebusstore.KeyProviderBinding
+	hostAnchor       firstTrustAnchorProvider
+	identityProvider firstTrustIdentityProvider
 }
 
 type runtimeAssociationBridge interface {
 	firstTrustPersistence
+	firstTrustControlPersistence
 	Close() error
 }
 
@@ -134,7 +139,7 @@ func openRuntimeAssociationBridge(root string, bindings []eebusstore.KeyProvider
 	if bridge == nil {
 		return nil, outcome
 	}
-	return bridge, outcome
+	return &runtimeControlBridge{bridge: bridge}, outcome
 }
 
 func acquireRuntimeFirstTrust(
@@ -156,7 +161,7 @@ func acquireRuntimeFirstTrust(
 	if err != nil {
 		return nil, err
 	}
-	if dependencies.openAssociationBridge == nil || dependencies.startFirstTrustAdmin == nil {
+	if dependencies.openAssociationBridge == nil || dependencies.startFirstTrustAdmin == nil || authorization.hostAnchor == nil || authorization.identityProvider == nil {
 		return nil, errors.New("first trust runtime dependencies are incomplete")
 	}
 	trustService, ok := service.(firstTrustService)
@@ -170,12 +175,25 @@ func acquireRuntimeFirstTrust(
 		return nil, fmt.Errorf("first trust store unavailable: %s", outcome)
 	}
 	resources := &runtimeFirstTrustResources{reader: reader, store: store}
-	coordinator := newFirstTrustCoordinator(dependencies.now, nil, store, nil)
+	monotonicOrigin := time.Now()
+	coordinator := newFirstTrustCoordinatorWithRecovery(
+		dependencies.now,
+		func() time.Duration { return time.Since(monotonicOrigin) },
+		rand.Reader,
+		store,
+		authorization.hostAnchor,
+		nil,
+		firstTrustBackoffPolicy{
+			base: firstTrustBackoffBase, exponentCap: firstTrustBackoffExponentCap,
+			maximum: firstTrustBackoffMaximum, attemptMaximum: firstTrustAttemptMaximum,
+		},
+	)
+	coordinator.identityProvider = authorization.identityProvider
 	facade := newFirstTrustFacade(trustService, coordinator)
 	coordinator.effects = facade
 	resources.coordinator = coordinator
 	resources.facade = facade
-	if outcome := coordinator.reopen(ctx); outcome != "pairing_closed" {
+	if outcome := coordinator.reopenWithRecovery(ctx); outcome == "reopen_cancelled" || outcome == "reopen_in_progress" || outcome == "store_unavailable" {
 		startupErr := fmt.Errorf("first trust store reopen failed: %s", outcome)
 		return nil, errors.Join(startupErr, resources.Close())
 	}

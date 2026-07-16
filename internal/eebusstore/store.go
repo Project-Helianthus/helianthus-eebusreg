@@ -12,10 +12,11 @@ import (
 )
 
 type storeConfig struct {
-	root       string
-	backend    *nativeSyscallBackend
-	providers  map[providerKey]protectedKeyProvider
-	migrations migrationGraph
+	root                            string
+	backend                         *nativeSyscallBackend
+	providers                       map[providerKey]protectedKeyProvider
+	migrations                      migrationGraph
+	retainUnavailableProtectedState bool
 }
 
 type recoveryCandidate struct {
@@ -119,7 +120,7 @@ func openStore(config storeConfig) openResult {
 		}
 	}
 	if opened.migrations.current == 0 {
-		opened.migrations, err = newMigrationGraph(currentSchemaVersion, nil)
+		opened.migrations, err = currentMigrationGraph()
 		if err != nil {
 			opened.abort()
 			return openFailure(err)
@@ -184,6 +185,13 @@ func openStore(config storeConfig) openResult {
 		return opened.classifyRecovery(manifest, err)
 	}
 	if err := validateProtectedKeys(current.state, opened.providers); err != nil {
+		if config.retainUnavailableProtectedState && (outcomeOf(err) == outcomeKeyProviderUnavailable || outcomeOf(err) == outcomeKeyMaterialUnavailable) {
+			opened.selected = &selected
+			opened.manifest = &manifest
+			opened.state = cloneStateV1(current.state)
+			state := cloneStateV1(current.state)
+			return openResult{outcome: outcomeOf(err), err: err, store: opened, state: &state}
+		}
 		opened.abort()
 		return openFailure(err)
 	}
@@ -408,8 +416,8 @@ func publicationGenerationReferences(layout layoutSnapshot, requireSafe bool) (m
 
 func (opened *store) loadCurrentGeneration(manifest manifestPayloadV1) (generationV1, error) {
 	reference := manifest.current
-	if reference.schemaVersion != currentSchemaVersion {
-		return generationV1{}, versionError("generation_version", reference.schemaVersion, currentSchemaVersion)
+	if _, err := opened.migrations.pathFrom(reference.schemaVersion); err != nil {
+		return generationV1{}, err
 	}
 	exists, err := objectExistsAt(opened.generations, reference.generationFile)
 	if err != nil {
@@ -426,7 +434,7 @@ func (opened *store) loadCurrentGeneration(manifest manifestPayloadV1) (generati
 		return generationV1{}, newStoreError(outcomeNoValidCurrent, "read_current", errors.New("current digest mismatch"))
 	}
 	generation, err := decodeGenerationV1(payload)
-	if err != nil || !generationMatchesManifest(generation, manifest) {
+	if err != nil || generationSchemaVersion(payload) != reference.schemaVersion || !generationMatchesManifest(generation, manifest) {
 		return generationV1{}, newStoreError(outcomeNoValidCurrent, "validate_current", err)
 	}
 	return generation, nil
@@ -449,7 +457,7 @@ func (opened *store) classifyRecovery(manifest manifestPayloadV1, currentErr err
 		opened.abort()
 		return openFailure(currentErr)
 	}
-	if !hasDirectParentChronology(manifest) || manifest.parent == nil || manifest.parent.schemaVersion != currentSchemaVersion {
+	if !hasDirectParentChronology(manifest) || manifest.parent == nil || manifest.parent.schemaVersion > opened.migrations.current {
 		opened.abort()
 		return openFailure(newStoreError(outcomeNoValidCurrent, "classify_recovery", currentErr))
 	}

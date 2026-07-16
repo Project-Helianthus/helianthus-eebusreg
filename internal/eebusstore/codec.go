@@ -39,6 +39,14 @@ type generationWire struct {
 	SchemaVersion    uint64                 `json:"schema_version"`
 }
 
+type generationWireV2 struct {
+	Control          json.RawMessage        `json:"control"`
+	Generation       generationMetadataWire `json:"generation"`
+	LocalIdentity    *localIdentityWire     `json:"local_identity"`
+	RemoteIdentities []remoteIdentityWire   `json:"remote_identities"`
+	SchemaVersion    uint64                 `json:"schema_version"`
+}
+
 type generationMetadataWire struct {
 	ParentSequence *uint64 `json:"parent_sequence"`
 	ParentSHA256   *string `json:"parent_sha256"`
@@ -92,22 +100,56 @@ func decodeGenerationV1(payload []byte) (generationV1, error) {
 	if err := validateCanonicalJSON(payload, maxGenerationBytes, maxJSONDepth); err != nil {
 		return result, err
 	}
-	var wire generationWire
-	if err := decodeClosedJSON(payload, &wire); err != nil {
-		return result, malformed("decode_generation", err)
-	}
-	if wire.SchemaVersion != currentSchemaVersion {
+	version := generationSchemaVersion(payload)
+	if version != 1 && version != currentSchemaVersion {
 		return result, malformed("decode_generation", errors.New("schema version"))
 	}
-	metadata, err := decodeGenerationMetadata(wire.Generation)
+	var generation generationMetadataWire
+	var local *localIdentityWire
+	var remotes []remoteIdentityWire
+	var control *controlRecordV2
+	if version == 1 {
+		var wire generationWire
+		if err := decodeClosedJSON(payload, &wire); err != nil {
+			return result, malformed("decode_generation", err)
+		}
+		generation, local, remotes = wire.Generation, wire.LocalIdentity, wire.RemoteIdentities
+	} else {
+		var wire generationWireV2
+		if err := decodeClosedJSON(payload, &wire); err != nil {
+			return result, malformed("decode_generation", err)
+		}
+		generation, local, remotes = wire.Generation, wire.LocalIdentity, wire.RemoteIdentities
+		if len(wire.Control) == 0 {
+			return result, malformed("decode_generation", errors.New("missing control field"))
+		}
+		if !bytes.Equal(wire.Control, []byte("null")) {
+			decoded, err := decodeControlRecordV2(wire.Control)
+			if err != nil {
+				return result, err
+			}
+			control = &decoded
+		}
+	}
+	metadata, err := decodeGenerationMetadata(generation)
 	if err != nil {
 		return result, err
 	}
-	state, err := decodeStateV1(wire.LocalIdentity, wire.RemoteIdentities)
+	state, err := decodeStateV1(local, remotes)
 	if err != nil {
 		return result, err
+	}
+	if control != nil {
+		encoded, err := encodeControlRecordV2(*control)
+		if err != nil {
+			return result, err
+		}
+		state.controlEnvelope = encoded
 	}
 	result = generationV1{metadata: metadata, state: state}
+	if version == currentSchemaVersion && control == nil {
+		result.schemaVersion = currentSchemaVersion
+	}
 	canonical, err := encodeGenerationV1(result)
 	if err != nil {
 		return generationV1{}, err
@@ -271,9 +313,41 @@ func encodeGenerationV1(generation generationV1) ([]byte, error) {
 	if err := validateStateV1(generation.state); err != nil {
 		return nil, err
 	}
+	version := generation.schemaVersion
+	if version == 0 {
+		version = 1
+		if len(generation.state.controlEnvelope) != 0 {
+			version = currentSchemaVersion
+		}
+	}
+	if version != 1 && version != currentSchemaVersion || version == 1 && len(generation.state.controlEnvelope) != 0 {
+		return nil, malformed("encode_generation", errors.New("schema version"))
+	}
+	var control []byte
+	if version == currentSchemaVersion && len(generation.state.controlEnvelope) != 0 {
+		record, ok := controlRecordFromStateV1(generation.state)
+		if !ok {
+			return nil, malformed("encode_generation", errors.New("control record"))
+		}
+		encoded, err := encodeControlRecordV2(record)
+		if err != nil {
+			return nil, err
+		}
+		control = encoded
+	}
 	var out strings.Builder
 	out.Grow(512)
-	out.WriteString(`{"generation":{"parent_sequence":`)
+	out.WriteByte('{')
+	if version == currentSchemaVersion {
+		out.WriteString(`"control":`)
+		if control == nil {
+			out.WriteString("null")
+		} else {
+			out.Write(control)
+		}
+		out.WriteByte(',')
+	}
+	out.WriteString(`"generation":{"parent_sequence":`)
 	if generation.metadata.parentSequence == nil {
 		out.WriteString("null")
 	} else {
@@ -300,12 +374,24 @@ func encodeGenerationV1(generation generationV1) ([]byte, error) {
 		}
 		writeRemoteIdentity(&out, identity)
 	}
-	out.WriteString(`],"schema_version":1}`)
+	out.WriteString(`],"schema_version":`)
+	out.WriteString(strconv.FormatUint(version, 10))
+	out.WriteByte('}')
 	out.WriteByte('\n')
 	if out.Len() > maxGenerationBytes {
 		return nil, malformed("encode_generation", errors.New("document too large"))
 	}
 	return []byte(out.String()), nil
+}
+
+func generationSchemaVersion(payload []byte) uint64 {
+	var header struct {
+		SchemaVersion uint64 `json:"schema_version"`
+	}
+	if err := json.Unmarshal(payload, &header); err != nil {
+		return 0
+	}
+	return header.SchemaVersion
 }
 
 func decodeManifestPayloadV1(payload []byte) (manifestPayloadV1, error) {
@@ -720,6 +806,11 @@ func decodeStateV1(local *localIdentityWire, remotes []remoteIdentityWire) (stat
 func validateStateV1(state stateV1) error {
 	if len(state.remoteIdentities) > maxRemoteIdentityCount {
 		return malformed("validate_state", errors.New("remote count"))
+	}
+	if len(state.controlEnvelope) != 0 {
+		if _, err := decodeControlRecordV2(state.controlEnvelope); err != nil {
+			return err
+		}
 	}
 	if state.localIdentity != nil {
 		identity := state.localIdentity

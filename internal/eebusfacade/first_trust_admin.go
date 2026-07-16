@@ -35,6 +35,8 @@ type firstTrustAdminCommand struct {
 	expiresAt       time.Time
 	connection      uint64
 	storeGeneration uint64
+	revocation      *firstTrustRevocationRequest
+	repair          *firstTrustRepairRequest
 }
 
 type firstTrustAdminHandler struct {
@@ -43,9 +45,11 @@ type firstTrustAdminHandler struct {
 }
 
 type firstTrustAdminReply struct {
-	Correlation string `json:"correlation"`
-	Outcome     string `json:"outcome"`
-	State       string `json:"state"`
+	Correlation    string `json:"correlation"`
+	Outcome        string `json:"outcome"`
+	RecoveryReason string `json:"recovery_reason,omitempty"`
+	RecoveryState  string `json:"recovery_state,omitempty"`
+	State          string `json:"state"`
 }
 
 type firstTrustCandidateReply struct {
@@ -82,6 +86,18 @@ func (handler *firstTrustAdminHandler) handle(ctx context.Context, payload []byt
 		return handler.reply(handler.coordinator.confirm(ctx, command.key, command.fingerprint, command.nonce, command.expiresAt, command.connection, command.storeGeneration))
 	case "cancel":
 		return handler.reply(handler.coordinator.cancel(ctx, command.key, command.nonce, command.connection, command.storeGeneration))
+	case "revoke_association":
+		request, ok := command.revocationRequest()
+		if !ok {
+			return handler.failure("invalid_command")
+		}
+		return handler.reply(handler.coordinator.revoke(ctx, request))
+	case "repair":
+		request, ok := command.repairRequest()
+		if !ok {
+			return handler.failure("invalid_command")
+		}
+		return handler.reply(handler.coordinator.repair(ctx, request))
 	case "status":
 		return handler.reply("status")
 	case "candidate":
@@ -107,11 +123,16 @@ func (handler *firstTrustAdminHandler) reply(outcome string) []byte {
 	if !ok {
 		return handler.failure("internal_error")
 	}
-	return marshalFirstTrustAdmin(firstTrustAdminReply{
+	reply := firstTrustAdminReply{
 		Correlation: correlation,
 		Outcome:     outcome,
 		State:       handler.coordinator.state(),
-	})
+	}
+	if handler.coordinator.recoveryStore != nil {
+		reply.RecoveryState = handler.coordinator.recoveryState()
+		reply.RecoveryReason = handler.coordinator.recoveryReason()
+	}
+	return marshalFirstTrustAdmin(reply)
 }
 
 func (handler *firstTrustAdminHandler) failure(outcome string) []byte {
@@ -175,6 +196,23 @@ func decodeFirstTrustAdminCommand(payload []byte) (firstTrustAdminCommand, error
 		for _, field := range []string{"idempotency_key", "candidate_nonce", "connection_generation", "starting_store_generation"} {
 			required[field] = struct{}{}
 		}
+	case "revoke_association":
+		request, decodeErr := decodeFirstTrustRevocationCommand(fields)
+		err = decodeErr
+		command.revocation = &request
+		for _, field := range []string{
+			"operation_id", "association_ref", "association_lineage", "expected_generation_sequence", "expected_generation_filename",
+			"expected_generation_sha256", "expected_generation_schema", "expected_manifest_epoch", "expected_manifest_sha256", "expected_control_epoch",
+		} {
+			required[field] = struct{}{}
+		}
+	case "repair":
+		request, repairFields, decodeErr := decodeFirstTrustRepairCommand(fields)
+		err = decodeErr
+		command.repair = &request
+		for _, field := range repairFields {
+			required[field] = struct{}{}
+		}
 	case "status", "candidate":
 	default:
 		return firstTrustAdminCommand{}, errAdminCommand
@@ -188,6 +226,189 @@ func decodeFirstTrustAdminCommand(payload []byte) (firstTrustAdminCommand, error
 		}
 	}
 	return command, nil
+}
+
+func (command firstTrustAdminCommand) revocationRequest() (firstTrustRevocationRequest, bool) {
+	if command.revocation == nil {
+		return firstTrustRevocationRequest{}, false
+	}
+	return *command.revocation, true
+}
+
+func (command firstTrustAdminCommand) repairRequest() (firstTrustRepairRequest, bool) {
+	if command.repair == nil {
+		return firstTrustRepairRequest{}, false
+	}
+	return *command.repair, true
+}
+
+func decodeFirstTrustRevocationCommand(fields map[string]json.RawMessage) (firstTrustRevocationRequest, error) {
+	operationID, err := decodeFirstTrustAdminOpaque(fields, "operation_id")
+	if err != nil {
+		return firstTrustRevocationRequest{}, err
+	}
+	associationRef, err := decodeFirstTrustAdminOpaque(fields, "association_ref")
+	if err != nil {
+		return firstTrustRevocationRequest{}, err
+	}
+	lineage, err := decodeFirstTrustAdminOpaque(fields, "association_lineage")
+	if err != nil {
+		return firstTrustRevocationRequest{}, err
+	}
+	generation, err := decodeFirstTrustAdminGeneration(fields, "expected_generation")
+	if err != nil {
+		return firstTrustRevocationRequest{}, err
+	}
+	manifestEpoch, err := decodeFirstTrustAdminUint(fields, "expected_manifest_epoch")
+	if err != nil || manifestEpoch == 0 {
+		return firstTrustRevocationRequest{}, errAdminCommand
+	}
+	manifestDigest, err := decodeFirstTrustAdminOpaque(fields, "expected_manifest_sha256")
+	if err != nil {
+		return firstTrustRevocationRequest{}, err
+	}
+	controlEpoch, err := decodeFirstTrustAdminUint(fields, "expected_control_epoch")
+	if err != nil || controlEpoch == 0 {
+		return firstTrustRevocationRequest{}, errAdminCommand
+	}
+	return firstTrustRevocationRequest{
+		operationID: operationID, associationRef: associationRef, associationLineage: lineage, expectedGeneration: generation,
+		expectedManifestEpoch: manifestEpoch, expectedManifestSHA256: manifestDigest, expectedControlEpoch: controlEpoch,
+	}, nil
+}
+
+func decodeFirstTrustRepairCommand(fields map[string]json.RawMessage) (firstTrustRepairRequest, []string, error) {
+	required := []string{
+		"operation_id", "repair_kind", "scope", "expected_state", "expected_reason", "expected_manifest_epoch", "expected_manifest_sha256",
+		"expected_current_sequence", "expected_current_filename", "expected_current_sha256", "expected_current_schema", "expected_control_epoch",
+		"expected_anchor_version", "expected_manifest_high_water", "expected_control_high_water", "next_repair_sequence",
+	}
+	operationID, err := decodeFirstTrustAdminOpaque(fields, "operation_id")
+	if err != nil {
+		return firstTrustRepairRequest{}, required, err
+	}
+	kind, err := decodeFirstTrustAdminString(fields, "repair_kind", 40)
+	if err != nil || !firstTrustRepairKindAllowed(kind) {
+		return firstTrustRepairRequest{}, required, errAdminCommand
+	}
+	scope, err := decodeFirstTrustAdminOpaque(fields, "scope")
+	if err != nil {
+		return firstTrustRepairRequest{}, required, err
+	}
+	state, err := decodeFirstTrustAdminString(fields, "expected_state", 32)
+	if err != nil {
+		return firstTrustRepairRequest{}, required, err
+	}
+	reason, err := decodeFirstTrustAdminOptionalString(fields, "expected_reason", 48)
+	if err != nil {
+		return firstTrustRepairRequest{}, required, err
+	}
+	epoch, err := decodeFirstTrustAdminUint(fields, "expected_manifest_epoch")
+	if err != nil || epoch == 0 {
+		return firstTrustRepairRequest{}, required, errAdminCommand
+	}
+	digest, err := decodeFirstTrustAdminOpaque(fields, "expected_manifest_sha256")
+	if err != nil {
+		return firstTrustRepairRequest{}, required, err
+	}
+	current, err := decodeFirstTrustAdminGeneration(fields, "expected_current")
+	if err != nil {
+		return firstTrustRepairRequest{}, required, err
+	}
+	parentNames := []string{"expected_parent_sequence", "expected_parent_filename", "expected_parent_sha256", "expected_parent_schema"}
+	parentCount := 0
+	for _, name := range parentNames {
+		if _, ok := fields[name]; ok {
+			parentCount++
+		}
+	}
+	var parent *firstTrustGenerationBinding
+	if parentCount != 0 {
+		if parentCount != len(parentNames) {
+			return firstTrustRepairRequest{}, required, errAdminCommand
+		}
+		decoded, decodeErr := decodeFirstTrustAdminGeneration(fields, "expected_parent")
+		if decodeErr != nil {
+			return firstTrustRepairRequest{}, required, decodeErr
+		}
+		parent = &decoded
+		required = append(required, parentNames...)
+	}
+	controlEpoch, err := decodeFirstTrustAdminUint(fields, "expected_control_epoch")
+	if err != nil || controlEpoch == 0 {
+		return firstTrustRepairRequest{}, required, errAdminCommand
+	}
+	anchorVersion, err := decodeFirstTrustAdminUint(fields, "expected_anchor_version")
+	if err != nil || anchorVersion == 0 {
+		return firstTrustRepairRequest{}, required, errAdminCommand
+	}
+	manifestHighWater, err := decodeFirstTrustAdminUint(fields, "expected_manifest_high_water")
+	if err != nil {
+		return firstTrustRepairRequest{}, required, err
+	}
+	controlHighWater, err := decodeFirstTrustAdminUint(fields, "expected_control_high_water")
+	if err != nil {
+		return firstTrustRepairRequest{}, required, err
+	}
+	nextSequence, err := decodeFirstTrustAdminUint(fields, "next_repair_sequence")
+	if err != nil || nextSequence == 0 {
+		return firstTrustRepairRequest{}, required, errAdminCommand
+	}
+	return firstTrustRepairRequest{
+		operationID: operationID, kind: kind, scope: scope, expectedState: state, expectedReason: reason,
+		expectedManifest:     firstTrustManifestBinding{epoch: epoch, sha256: digest, current: current, parent: parent},
+		expectedControlEpoch: controlEpoch, expectedAnchorVersion: anchorVersion, expectedManifestHighWater: manifestHighWater,
+		expectedControlHighWater: controlHighWater, nextRepairSequence: nextSequence,
+	}, required, nil
+}
+
+func decodeFirstTrustAdminGeneration(fields map[string]json.RawMessage, prefix string) (firstTrustGenerationBinding, error) {
+	sequence, err := decodeFirstTrustAdminUint(fields, prefix+"_sequence")
+	if err != nil || sequence == 0 {
+		return firstTrustGenerationBinding{}, errAdminCommand
+	}
+	filename, err := decodeFirstTrustAdminString(fields, prefix+"_filename", 128)
+	if err != nil {
+		return firstTrustGenerationBinding{}, err
+	}
+	digest, err := decodeFirstTrustAdminOpaque(fields, prefix+"_sha256")
+	if err != nil {
+		return firstTrustGenerationBinding{}, err
+	}
+	schema, err := decodeFirstTrustAdminUint(fields, prefix+"_schema")
+	if err != nil || schema == 0 {
+		return firstTrustGenerationBinding{}, errAdminCommand
+	}
+	return firstTrustGenerationBinding{sequence: sequence, filename: filename, sha256: digest, schemaVersion: schema}, nil
+}
+
+func decodeFirstTrustAdminOpaque(fields map[string]json.RawMessage, key string) ([32]byte, error) {
+	var result [32]byte
+	encoded, err := decodeFirstTrustAdminString(fields, key, 64)
+	if err != nil || len(encoded) != 64 {
+		return result, errAdminCommand
+	}
+	decoded, err := hex.DecodeString(encoded)
+	if err != nil || hex.EncodeToString(decoded) != encoded || len(decoded) != len(result) {
+		return result, errAdminCommand
+	}
+	copy(result[:], decoded)
+	if result == [32]byte{} {
+		return result, errAdminCommand
+	}
+	return result, nil
+}
+
+func decodeFirstTrustAdminOptionalString(fields map[string]json.RawMessage, key string, maximum int) (string, error) {
+	raw, ok := fields[key]
+	if !ok {
+		return "", errAdminCommand
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || len(value) > maximum {
+		return "", errAdminCommand
+	}
+	return value, nil
 }
 
 func decodeFirstTrustAdminBinding(fields map[string]json.RawMessage, command *firstTrustAdminCommand, includeFingerprint bool) error {
