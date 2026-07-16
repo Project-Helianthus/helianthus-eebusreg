@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -89,6 +90,59 @@ func TestMSP04CRPairingCallbackPersistsRetryCheckpointAndRestartArm(t *testing.T
 
 }
 
+func TestMSP04CROutgoingCallbacksShareOneDurableInflightAttempt(t *testing.T) {
+	fixture := newMSP04CRRuntimeFixture(t, 306)
+	service := newMSP04CRService()
+	backend, reader := fixture.acquire(t, service, "outgoing-one")
+	fixture.recoverUnavailableHostKey(t, backend)
+	if got := backend.firstTrust.coordinator.openPairingWindow(context.Background(), msp04cText(307), time.Minute); got != "open_empty" {
+		t.Fatalf("open pairing window = %q", got)
+	}
+	for _, state := range []shipapi.ConnectionState{shipapi.ConnectionStateQueued, shipapi.ConnectionStateInitiated, shipapi.ConnectionStateInProgress} {
+		reader.ServicePairingDetailUpdate(fixture.remoteSKI, shipapi.NewConnectionStateDetail(state, nil))
+	}
+	_, state, _, count, _, ok := soleMSP04CRRetryRecord(backend.firstTrust.coordinator)
+	if !ok || state != "RETRY_READY" || count != 0 || len(backend.firstTrust.coordinator.retryInflight) != 1 {
+		t.Fatalf("outgoing inflight tuple = %s/%d/%t inflight=%d", state, count, ok, len(backend.firstTrust.coordinator.retryInflight))
+	}
+	reader.ServicePairingDetailUpdate(fixture.remoteSKI, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateError, errors.New("outgoing")))
+	_, state, _, count, remaining, _ := soleMSP04CRRetryRecord(backend.firstTrust.coordinator)
+	if state != "BACKOFF_ACTIVE" || count != 1 || remaining <= 0 || remaining > 3*time.Second {
+		t.Fatalf("outgoing failure tuple = %s/%d/%s", state, count, remaining)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, restartedReader := fixture.acquire(t, newMSP04CRService(), "outgoing-two")
+	defer restarted.Close()
+	restartedReader.ServicePairingDetailUpdate(fixture.remoteSKI, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateQueued, nil))
+	_, state, _, count, remaining, _ = soleMSP04CRRetryRecord(restarted.firstTrust.coordinator)
+	if state != "BACKOFF_ACTIVE" || count != 1 || remaining <= 0 || remaining > 3*time.Second {
+		t.Fatalf("restart bypassed outgoing ceiling tuple = %s/%d/%s", state, count, remaining)
+	}
+}
+
+func TestMSP04CRUnauthorizedSKIsCannotAllocateConnectionOrRetryCapacity(t *testing.T) {
+	fixture := newMSP04CRRuntimeFixture(t, 308)
+	service := newMSP04CRService()
+	backend, reader := fixture.acquire(t, service, "unauthorized")
+	defer backend.Close()
+	fixture.recoverUnavailableHostKey(t, backend)
+	for ordinal := uint64(1); ordinal <= firstTrustMaximumConnections+8; ordinal++ {
+		ski := hex.EncodeToString(msp04cSubject(50_000 + ordinal))
+		reader.ServicePairingDetailUpdate(ski, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateQueued, nil))
+	}
+	backend.firstTrust.facade.mu.Lock()
+	connections := len(backend.firstTrust.facade.connections)
+	backend.firstTrust.facade.mu.Unlock()
+	backend.firstTrust.coordinator.mu.Lock()
+	quarantines := len(backend.firstTrust.coordinator.controlView.control.quarantines)
+	backend.firstTrust.coordinator.mu.Unlock()
+	if connections != 0 || quarantines != 0 {
+		t.Fatalf("unauthorized capacity = connections:%d quarantines:%d", connections, quarantines)
+	}
+}
+
 func TestMSP04CRPairingCallbackEntersTerminalHoldAtAttemptLimit(t *testing.T) {
 	fixture := newMSP04CRRuntimeFixture(t, 311)
 	service := newMSP04CRService()
@@ -112,9 +166,7 @@ func TestMSP04CRPairingCallbackEntersTerminalHoldAtAttemptLimit(t *testing.T) {
 	wantReasons := []string{"RETRYABLE_FAILURE", "RETRYABLE_FAILURE", "RETRYABLE_FAILURE", "HANDSHAKE_ATTEMPT_LIMIT"}
 	wantDelays := []time.Duration{3 * time.Second, 6 * time.Second, 10 * time.Second, 0}
 	advance := []time.Duration{0, 3 * time.Second, 6 * time.Second, 10 * time.Second}
-	vector := []string{"retry_ready_0"}
-	postFailureLabels := []string{"backoff_1_3s", "backoff_2_6s", "backoff_3_10s", "admin_hold_4"}
-	readyLabels := []string{"", "retry_ready_1", "retry_ready_2", "retry_ready_3"}
+	trace := &msp04crRetryTrace{}
 	for index := range wantStates {
 		if advance[index] != 0 {
 			clock.Advance(advance[index])
@@ -126,15 +178,13 @@ func TestMSP04CRPairingCallbackEntersTerminalHoldAtAttemptLimit(t *testing.T) {
 		if !ready || readyState != "RETRY_READY" || readyCount != uint64(index) || readyRemaining != 0 {
 			t.Fatalf("callback admission %d tuple = %s,%d,%s,%t", index+1, readyState, readyCount, readyRemaining, ready)
 		}
-		if index != 0 {
-			vector = append(vector, readyLabels[index])
-		}
+		trace.observe(coordinator)
 		reader.ServicePairingDetailUpdate(fixture.remoteSKI, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateError, errors.New("terminal")))
 		_, state, reason, count, remaining, ok := soleMSP04CRRetryRecord(coordinator)
 		if !ok || state != wantStates[index] || reason != wantReasons[index] || count != uint64(index+1) || remaining != wantDelays[index] {
 			t.Fatalf("callback failure %d tuple = %s/%s,%d,%s,%t", index+1, state, reason, count, remaining, ok)
 		}
-		vector = append(vector, postFailureLabels[index])
+		trace.observe(coordinator)
 	}
 
 	service.clearEvents()
@@ -143,8 +193,8 @@ func TestMSP04CRPairingCallbackEntersTerminalHoldAtAttemptLimit(t *testing.T) {
 	if state != "ADMIN_HOLD" || reason != "HANDSHAKE_ATTEMPT_LIMIT" || count != 4 || remaining != 0 || !slices.Contains(service.eventsSnapshot(), "cancel_pairing") {
 		t.Fatal("terminal hold admitted another callback or changed its saturated tuple")
 	}
-	vector = append(vector, "terminal_denied")
-	artifact := deriveMSP04CRArtifact("EEBUS-G11", state, reason, count, remaining, vector)
+	trace.observe(coordinator)
+	artifact := deriveMSP04CRArtifact("EEBUS-G11", backend, fixture, trace)
 	assertMSP04CRArtifactRedacted(t, artifact, fixture)
 }
 
@@ -181,15 +231,54 @@ func TestMSP04CRStartupClassifiesBeforeListenerAndBlocksTombstonedConfiguredPeer
 	if slices.Contains(events, "register_remote") || slices.Contains(events, "reconnect") {
 		t.Errorf("tombstoned startup effects = %v", events)
 	}
+	if err := restarted.Run(context.Background(), func([]byte) {}); !errors.Is(err, errRuntimeTrustEffectsDenied) {
+		t.Fatalf("revoked runtime Run = %v", err)
+	}
+	events = fixture.events.snapshot()
+	if slices.Contains(events, "listener_start") {
+		t.Fatalf("revoked runtime started listener: %v", events)
+	}
 
-	artifact := deriveMSP04CRArtifact("EEBUS-G10", state, reason, 0, 0, events)
+	artifact := deriveMSP04CRArtifact("EEBUS-G10", restarted, fixture, nil)
 	assertMSP04CRArtifactRedacted(t, artifact, fixture)
+}
+
+func TestMSP04CRRunDeniesEveryForbiddenRecoveryProduct(t *testing.T) {
+	tests := []struct{ state, reason string }{
+		{"QUARANTINED", "HOST_BINDING_MISMATCH"},
+		{"QUARANTINED", "MANIFEST_GENERATION_ROLLBACK"},
+		{"QUARANTINED", "CONTROL_EPOCH_ROLLBACK"},
+		{"QUARANTINED", "DURABILITY_UNKNOWN"},
+		{"QUARANTINED", "HANDSHAKE_ATTEMPT_LIMIT"},
+		{"REVOKED", "REVOKED_ASSOCIATION"},
+		{"NO_LOCAL_IDENTITY", "HOST_KEY_UNAVAILABLE"},
+	}
+	for index, test := range tests {
+		t.Run(test.reason, func(t *testing.T) {
+			fixture := newMSP04CRRuntimeFixture(t, uint64(60_000+index))
+			service := newMSP04CRService()
+			backend, _ := fixture.acquire(t, service, "run-denied")
+			defer backend.Close()
+			backend.firstTrust.coordinator.mu.Lock()
+			backend.firstTrust.coordinator.phase = firstTrustDisabled
+			backend.firstTrust.coordinator.recovery = test.state
+			backend.firstTrust.coordinator.recoveryReasonCode = test.reason
+			backend.firstTrust.coordinator.mu.Unlock()
+			if err := backend.Run(context.Background(), func([]byte) {}); !errors.Is(err, errRuntimeTrustEffectsDenied) {
+				t.Fatalf("Run(%s/%s) = %v", test.state, test.reason, err)
+			}
+			if slices.Contains(service.eventsSnapshot(), "listener_start") {
+				t.Fatal("forbidden recovery product started the listener")
+			}
+		})
+	}
 }
 
 func TestMSP04CRRevocationReturnsOnlyAfterDurableDisconnectAndUnregister(t *testing.T) {
 	t.Run("success ordering", func(t *testing.T) {
 		fixture := newMSP04CRRuntimeFixture(t, 331)
 		service := newMSP04CRService()
+		service.ackDisconnect = false
 		backend, reader := fixture.acquire(t, service, "revoke-success")
 		defer backend.Close()
 		fixture.recoverUnavailableHostKey(t, backend)
@@ -198,7 +287,19 @@ func TestMSP04CRRevocationReturnsOnlyAfterDurableDisconnectAndUnregister(t *test
 		service.clearEvents()
 
 		request := exactMSP04CRRevocationRequest(backend.firstTrust.coordinator, msp04cOrdinal(333))
-		result := backend.firstTrust.coordinator.revoke(context.Background(), request)
+		resultCh := make(chan string, 1)
+		go func() { resultCh <- backend.firstTrust.coordinator.revoke(context.Background(), request) }()
+		waitMSP04CREvent(t, fixture.events, "disconnect")
+		backend.firstTrust.coordinator.mu.Lock()
+		terminalBeforeAck := slices.ContainsFunc(backend.firstTrust.coordinator.controlView.control.receipts, func(receipt firstTrustDurableReceipt) bool {
+			return receipt.operationID == request.operationID && receipt.terminal
+		})
+		backend.firstTrust.coordinator.mu.Unlock()
+		if terminalBeforeAck || slices.Contains(fixture.events.snapshot(), "unregister") {
+			t.Fatal("asynchronous disconnect call return was treated as terminal acknowledgment")
+		}
+		service.acknowledgeDisconnect(fixture.remoteSKI)
+		result := <-resultCh
 		events := fixture.events.snapshot()
 		if result != "revoked" {
 			t.Errorf("revocation result = %q", result)
@@ -210,16 +311,17 @@ func TestMSP04CRRevocationReturnsOnlyAfterDurableDisconnectAndUnregister(t *test
 			t.Errorf("revocation order = %v, want anchor_finalize, disconnect, unregister", events)
 		}
 
-		artifact := deriveMSP04CRArtifact("EEBUS-G16", backend.firstTrust.coordinator.recoveryState(), backend.firstTrust.coordinator.recoveryReason(), 0, 0, events)
+		artifact := deriveMSP04CRArtifact("EEBUS-G16", backend, fixture, nil)
 		assertMSP04CRArtifactRedacted(t, artifact, fixture)
 	})
 
 	t.Run("withdrawal failure", func(t *testing.T) {
 		fixture := newMSP04CRRuntimeFixture(t, 341)
 		service := newMSP04CRService()
-		service.panicUnregister = true
+		service.ackDisconnect = false
 		backend, reader := fixture.acquire(t, service, "revoke-failure")
 		defer backend.Close()
+		backend.firstTrust.coordinator.withdrawalWait = 10 * time.Millisecond
 		fixture.recoverUnavailableHostKey(t, backend)
 		fixture.pairRemote(t, backend, reader, 342)
 		request := exactMSP04CRRevocationRequest(backend.firstTrust.coordinator, msp04cOrdinal(343))
@@ -239,7 +341,42 @@ func TestMSP04CRRevocationReturnsOnlyAfterDurableDisconnectAndUnregister(t *test
 		if terminalRevoked {
 			t.Fatal("incomplete runtime withdrawal persisted a terminal revoked receipt")
 		}
+		if err := backend.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		restartedService := newMSP04CRService()
+		restarted, _ := fixture.acquire(t, restartedService, "revoke-failure-restart")
+		defer restarted.Close()
+		if got := restarted.firstTrust.coordinator.revoke(context.Background(), request); got != "revoked" {
+			t.Fatalf("restart withdrawal replay = %q, effects=%v, state=%s/%s", got, restartedService.eventsSnapshot(), restarted.firstTrust.coordinator.recoveryState(), restarted.firstTrust.coordinator.recoveryReason())
+		}
+		restarted.firstTrust.coordinator.mu.Lock()
+		tombstones := len(restarted.firstTrust.coordinator.controlView.control.tombstones)
+		terminalRevoked = slices.ContainsFunc(restarted.firstTrust.coordinator.controlView.control.receipts, func(receipt firstTrustDurableReceipt) bool {
+			return receipt.operationID == request.operationID && receipt.terminal && receipt.result == "revoked"
+		})
+		restarted.firstTrust.coordinator.mu.Unlock()
+		if tombstones != 1 || !terminalRevoked {
+			t.Fatal("restart replay repeated the tombstone or failed to persist terminal withdrawal")
+		}
+		events := restartedService.eventsSnapshot()
+		if slices.Contains(events, "register_remote") {
+			t.Fatalf("restart withdrawal replay registered the revoked remote: %v", events)
+		}
 	})
+}
+
+func waitMSP04CREvent(t *testing.T, events *msp04crEventLog, target string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if slices.Contains(events.snapshot(), target) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("event %q was not observed: %v", target, events.snapshot())
 }
 
 type msp04crRuntimeFixture struct {
@@ -289,6 +426,7 @@ func (fixture *msp04crRuntimeFixture) acquire(t *testing.T, service *msp04crServ
 		reader = callback.(*runtimeServiceReader)
 		service.outerEvents = fixture.events
 		service.expectedSKI = fixture.remoteSKI
+		service.reader = reader
 		return service, nil
 	}
 	dependencies.openAssociationBridge = func(root string, bindings []eebusstore.KeyProviderBinding) (runtimeAssociationBridge, string) {
@@ -367,14 +505,15 @@ func invokeMSP04CRRevocation(coordinator *firstTrustCoordinator, request firstTr
 }
 
 type msp04crService struct {
-	mu              sync.Mutex
-	events          []string
-	outerEvents     *msp04crEventLog
-	expectedSKI     string
-	panicUnregister bool
+	mu            sync.Mutex
+	events        []string
+	outerEvents   *msp04crEventLog
+	expectedSKI   string
+	ackDisconnect bool
+	reader        *runtimeServiceReader
 }
 
-func newMSP04CRService() *msp04crService { return &msp04crService{} }
+func newMSP04CRService() *msp04crService { return &msp04crService{ackDisconnect: true} }
 
 func (service *msp04crService) Setup() error {
 	service.record("listener_setup")
@@ -398,13 +537,18 @@ func (service *msp04crService) CancelPairingWithSKI(ski string) {
 
 func (service *msp04crService) DisconnectSKI(ski string, _ string) {
 	service.recordExactSKI("disconnect", ski)
+	if service.ackDisconnect && service.reader != nil {
+		go service.acknowledgeDisconnect(ski)
+	}
+}
+
+func (service *msp04crService) acknowledgeDisconnect(ski string) {
+	service.recordExactSKI("disconnect_ack", ski)
+	service.reader.RemoteSKIDisconnected(nil, ski)
 }
 
 func (service *msp04crService) UnregisterRemoteSKI(ski string) {
 	service.recordExactSKI("unregister", ski)
-	if service.panicUnregister {
-		panic("withdrawal unavailable")
-	}
 }
 
 func (service *msp04crService) recordExactSKI(event, ski string) {
@@ -516,7 +660,31 @@ type msp04crArtifact struct {
 	ObservedEffects  []string `json:"observed_effects"`
 }
 
-func deriveMSP04CRArtifact(gate, state, reason string, count uint64, remaining time.Duration, events []string) []byte {
+type msp04crRetrySnapshot struct {
+	state     string
+	reason    string
+	count     uint64
+	remaining time.Duration
+}
+
+type msp04crRetryTrace struct{ snapshots []msp04crRetrySnapshot }
+
+func (trace *msp04crRetryTrace) observe(coordinator *firstTrustCoordinator) {
+	_, state, reason, count, remaining, ok := soleMSP04CRRetryRecord(coordinator)
+	if ok {
+		trace.snapshots = append(trace.snapshots, msp04crRetrySnapshot{state: state, reason: reason, count: count, remaining: remaining})
+	}
+}
+
+func deriveMSP04CRArtifact(gate string, backend *serviceBackend, fixture *msp04crRuntimeFixture, trace *msp04crRetryTrace) []byte {
+	state := backend.firstTrust.coordinator.recoveryState()
+	reason := backend.firstTrust.coordinator.recoveryReason()
+	events := fixture.events.snapshot()
+	var count uint64
+	var remaining time.Duration
+	if _, retryState, retryReason, retryCount, retryRemaining, ok := soleMSP04CRRetryRecord(backend.firstTrust.coordinator); ok && gate == "EEBUS-G11" {
+		state, reason, count, remaining = retryState, retryReason, retryCount, retryRemaining
+	}
 	status := "FAIL"
 	switch gate {
 	case "EEBUS-G10":
@@ -527,18 +695,30 @@ func deriveMSP04CRArtifact(gate, state, reason string, count uint64, remaining t
 			status = "PASS"
 		}
 	case "EEBUS-G11":
-		wantVector := []string{
-			"retry_ready_0", "backoff_1_3s", "retry_ready_1", "backoff_2_6s",
-			"retry_ready_2", "backoff_3_10s", "retry_ready_3", "admin_hold_4", "terminal_denied",
+		want := []msp04crRetrySnapshot{
+			{state: "RETRY_READY", reason: "RETRYABLE_FAILURE", count: 0},
+			{state: "BACKOFF_ACTIVE", reason: "RETRYABLE_FAILURE", count: 1, remaining: 3 * time.Second},
+			{state: "RETRY_READY", reason: "RETRYABLE_FAILURE", count: 1},
+			{state: "BACKOFF_ACTIVE", reason: "RETRYABLE_FAILURE", count: 2, remaining: 6 * time.Second},
+			{state: "RETRY_READY", reason: "RETRYABLE_FAILURE", count: 2},
+			{state: "BACKOFF_ACTIVE", reason: "RETRYABLE_FAILURE", count: 3, remaining: 10 * time.Second},
+			{state: "RETRY_READY", reason: "RETRYABLE_FAILURE", count: 3},
+			{state: "ADMIN_HOLD", reason: "HANDSHAKE_ATTEMPT_LIMIT", count: 4},
+			{state: "ADMIN_HOLD", reason: "HANDSHAKE_ATTEMPT_LIMIT", count: 4},
 		}
-		if state == "ADMIN_HOLD" && reason == "HANDSHAKE_ATTEMPT_LIMIT" && count == 4 && remaining == 0 && slices.Equal(events, wantVector) {
+		if state == "ADMIN_HOLD" && reason == "HANDSHAKE_ATTEMPT_LIMIT" && count == 4 && remaining == 0 && trace != nil && slices.Equal(trace.snapshots, want) {
 			status = "PASS"
+		}
+		events = make([]string, len(trace.snapshots))
+		for index, snapshot := range trace.snapshots {
+			events[index] = strings.ToLower(snapshot.state) + "_" + fmt.Sprint(snapshot.count) + "_" + fmt.Sprint(snapshot.remaining/time.Second)
 		}
 	case "EEBUS-G16":
 		finalize := slices.Index(events, "anchor_finalize")
 		disconnect := slices.Index(events, "disconnect")
+		acknowledgment := slices.Index(events, "disconnect_ack")
 		unregister := slices.Index(events, "unregister")
-		if state == "REVOKED" && reason == "REVOKED_ASSOCIATION" && finalize >= 0 && disconnect > finalize && unregister > disconnect {
+		if state == "REVOKED" && reason == "REVOKED_ASSOCIATION" && finalize >= 0 && disconnect > finalize && acknowledgment > disconnect && unregister > acknowledgment {
 			status = "PASS"
 		}
 	}

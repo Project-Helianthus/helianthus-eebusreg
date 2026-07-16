@@ -12,9 +12,9 @@ import (
 
 const (
 	firstTrustBackoffBase                     = 3 * time.Second
-	firstTrustBackoffMaximum                  = 10 * time.Minute
-	firstTrustBackoffExponentCap              = 8
-	firstTrustAttemptMaximum           uint64 = 16
+	firstTrustBackoffMaximum                  = 10 * time.Second
+	firstTrustBackoffExponentCap              = 2
+	firstTrustAttemptMaximum           uint64 = 4
 	firstTrustMaximumQuarantineRecords        = 128
 	firstTrustQuarantineRetention             = 24 * time.Hour
 	firstTrustMaximumTombstones               = 128
@@ -354,6 +354,9 @@ func firstTrustNextBackoff(policy firstTrustBackoffPolicy, current uint64) (uint
 	}
 	if next == 0 {
 		return 0, 0, false
+	}
+	if next == policy.attemptMaximum {
+		return next, 0, true
 	}
 	exponent := next - 1
 	if exponent > uint64(policy.exponentCap) {

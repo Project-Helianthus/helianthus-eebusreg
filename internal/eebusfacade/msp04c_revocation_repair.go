@@ -1,7 +1,9 @@
 package eebusfacade
 
 import (
+	"bytes"
 	"context"
+	"time"
 )
 
 func (coordinator *firstTrustCoordinator) revoke(ctx context.Context, request firstTrustRevocationRequest) string {
@@ -14,6 +16,32 @@ func (coordinator *firstTrustCoordinator) revoke(ctx context.Context, request fi
 	if coordinator.recoveryStore == nil || coordinator.anchor == nil {
 		coordinator.mu.Unlock()
 		return "mutation_disabled"
+	}
+	if receipt, exists := coordinator.durableReceiptLocked(request.operationID); exists {
+		if receipt.operationClass != "revocation" || receipt.bindingSHA256 != binding {
+			coordinator.mu.Unlock()
+			return "idempotency_conflict"
+		}
+		if receipt.terminal {
+			coordinator.mu.Unlock()
+			return receipt.result
+		}
+		if receipt.result != "revocation_withdrawal_incomplete" {
+			coordinator.mu.Unlock()
+			return "revocation_withdrawal_incomplete"
+		}
+		if coordinator.recoveryOperation != nil {
+			coordinator.mu.Unlock()
+			return "operation_in_progress"
+		}
+		subject, found := coordinator.firstTrustRevocationSubjectLocked(request)
+		coordinator.recoveryOperation = &firstTrustRecoveryOperation{operationID: request.operationID, operationClass: "revocation", bindingSHA256: binding}
+		coordinator.mu.Unlock()
+		if !found {
+			coordinator.finishIncompleteRevocation()
+			return "revocation_withdrawal_incomplete"
+		}
+		return coordinator.finishRevocationWithdrawal(ctx, request, binding, subject)
 	}
 	if result, handled := coordinator.firstTrustOperationReplayLocked(request.operationID, "revocation", binding); handled {
 		coordinator.mu.Unlock()
@@ -58,7 +86,7 @@ func (coordinator *firstTrustCoordinator) revoke(ctx context.Context, request fi
 		associationRef: request.associationRef, revocationEpoch: target.controlEpoch, operationID: request.operationID,
 	})
 	if !firstTrustAppendReceipt(&target, firstTrustDurableReceipt{
-		operationID: request.operationID, operationClass: "revocation", bindingSHA256: binding, result: "revoked", terminal: true,
+		operationID: request.operationID, operationClass: "revocation", bindingSHA256: binding, result: "revocation_withdrawal_incomplete",
 	}) {
 		coordinator.mu.Unlock()
 		return "idempotency_capacity"
@@ -69,18 +97,129 @@ func (coordinator *firstTrustCoordinator) revoke(ctx context.Context, request fi
 	coordinator.recoveryOperation = &firstTrustRecoveryOperation{operationID: request.operationID, operationClass: "revocation", bindingSHA256: binding}
 	selected := cloneFirstTrustControlView(coordinator.controlView)
 	anchor := cloneFirstTrustAnchorRecord(coordinator.anchorRecord)
+	subject := bytes.Clone(working.associations[associationIndex].subject)
 	coordinator.mu.Unlock()
 
 	target = coordinator.firstTrustBindEffectiveGeneration(ctx, working, target, request.operationID, "revocation")
 	publication, publicationOutcome, anchor := coordinator.publishFirstTrustControl(ctx, working, target, request.operationID, "revocation", selected, anchor)
 
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
 	coordinator.anchorRecord = cloneFirstTrustAnchorRecord(anchor)
-	coordinator.recoveryOperation = nil
 	switch publicationOutcome {
 	case "durable":
 		coordinator.controlView = cloneFirstTrustControlView(publication.target)
+		coordinator.phase = firstTrustPairingClosed
+		coordinator.recovery = "REVOKED"
+		coordinator.recoveryReasonCode = "REVOKED_ASSOCIATION"
+		coordinator.mu.Unlock()
+		return coordinator.finishRevocationWithdrawal(ctx, request, binding, subject)
+	case "unknown":
+		coordinator.recoveryOperation = nil
+		coordinator.phase = firstTrustDisabled
+		coordinator.recovery = "QUARANTINED"
+		coordinator.recoveryReasonCode = "DURABILITY_UNKNOWN"
+		coordinator.trustedRemotes = make(map[string]string)
+		coordinator.mu.Unlock()
+		return "revocation_outcome_unknown"
+	default:
+		coordinator.recoveryOperation = nil
+		coordinator.phase = firstTrustPairingClosed
+		coordinator.recovery = previousRecovery
+		if previousRecovery == "PAIRED_TRUSTED" {
+			coordinator.recoveryReasonCode = ""
+		}
+		coordinator.mu.Unlock()
+		return "failed_closed_unchanged"
+	}
+}
+
+func (coordinator *firstTrustCoordinator) finishRevocationWithdrawal(
+	ctx context.Context,
+	request firstTrustRevocationRequest,
+	binding [32]byte,
+	subject []byte,
+) string {
+	withdrawal, available := coordinator.effects.(firstTrustWithdrawalEffects)
+	if !available {
+		coordinator.finishIncompleteRevocation()
+		return "revocation_withdrawal_incomplete"
+	}
+	acknowledgment, started := withdrawal.disconnectRemote(subject)
+	if !started || acknowledgment == nil {
+		coordinator.finishIncompleteRevocation()
+		return "revocation_withdrawal_incomplete"
+	}
+	wait := coordinator.withdrawalWait
+	if wait <= 0 || wait > firstTrustWithdrawalWait {
+		wait = firstTrustWithdrawalWait
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-acknowledgment:
+	case <-ctx.Done():
+		withdrawal.cancelDisconnect(subject, acknowledgment)
+		coordinator.finishIncompleteRevocation()
+		return "revocation_withdrawal_incomplete"
+	case <-timer.C:
+		withdrawal.cancelDisconnect(subject, acknowledgment)
+		coordinator.finishIncompleteRevocation()
+		return "revocation_withdrawal_incomplete"
+	}
+	if !withdrawal.unregisterRemote(subject) {
+		coordinator.finishIncompleteRevocation()
+		return "revocation_withdrawal_incomplete"
+	}
+	return coordinator.finalizeRevocationReceipt(ctx, request, binding)
+}
+
+func (coordinator *firstTrustCoordinator) finishIncompleteRevocation() {
+	coordinator.mu.Lock()
+	coordinator.recoveryOperation = nil
+	coordinator.phase = firstTrustPairingClosed
+	coordinator.recovery = "REVOKED"
+	coordinator.recoveryReasonCode = "REVOKED_ASSOCIATION"
+	coordinator.mu.Unlock()
+}
+
+func (coordinator *firstTrustCoordinator) finalizeRevocationReceipt(ctx context.Context, request firstTrustRevocationRequest, binding [32]byte) string {
+	coordinator.mu.Lock()
+	publicationID, ok := firstTrustReadOrdinal(coordinator.random)
+	if !ok || coordinator.controlView.control.controlEpoch == ^uint64(0) {
+		coordinator.recoveryOperation = nil
+		coordinator.mu.Unlock()
+		return "revocation_withdrawal_incomplete"
+	}
+	working := cloneFirstTrustControlView(coordinator.controlView)
+	target := cloneFirstTrustControlRecord(working.control)
+	target.controlEpoch++
+	receiptUpdated := false
+	for index := range target.receipts {
+		if target.receipts[index].operationID == request.operationID && target.receipts[index].operationClass == "revocation" && target.receipts[index].bindingSHA256 == binding {
+			target.receipts[index].result = "revoked"
+			target.receipts[index].terminal = true
+			receiptUpdated = true
+			break
+		}
+	}
+	if !receiptUpdated {
+		coordinator.recoveryOperation = nil
+		coordinator.mu.Unlock()
+		return "revocation_withdrawal_incomplete"
+	}
+	selected := cloneFirstTrustControlView(coordinator.controlView)
+	anchor := cloneFirstTrustAnchorRecord(coordinator.anchorRecord)
+	coordinator.mu.Unlock()
+
+	publication, outcome, anchor := coordinator.publishFirstTrustControl(ctx, working, target, publicationID, "revocation", selected, anchor)
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	coordinator.anchorRecord = cloneFirstTrustAnchorRecord(anchor)
+	coordinator.recoveryOperation = nil
+	switch outcome {
+	case "durable":
+		coordinator.controlView = cloneFirstTrustControlView(publication.target)
+		coordinator.storeGeneration = publication.target.manifest.current.sequence
 		coordinator.phase = firstTrustPairingClosed
 		coordinator.recovery = "REVOKED"
 		coordinator.recoveryReasonCode = "REVOKED_ASSOCIATION"
@@ -93,12 +232,21 @@ func (coordinator *firstTrustCoordinator) revoke(ctx context.Context, request fi
 		return "revocation_outcome_unknown"
 	default:
 		coordinator.phase = firstTrustPairingClosed
-		coordinator.recovery = previousRecovery
-		if previousRecovery == "PAIRED_TRUSTED" {
-			coordinator.recoveryReasonCode = ""
-		}
-		return "failed_closed_unchanged"
+		coordinator.recovery = "REVOKED"
+		coordinator.recoveryReasonCode = "REVOKED_ASSOCIATION"
+		return "revocation_withdrawal_incomplete"
 	}
+}
+
+func (coordinator *firstTrustCoordinator) firstTrustRevocationSubjectLocked(request firstTrustRevocationRequest) ([]byte, bool) {
+	for _, associations := range [][]firstTrustAssociationRecord{coordinator.controlView.associations, coordinator.controlView.parentAssociations} {
+		for _, association := range associations {
+			if association.reference == request.associationRef && association.lineage == request.associationLineage && len(association.subject) == 20 {
+				return bytes.Clone(association.subject), true
+			}
+		}
+	}
+	return nil, false
 }
 
 func (coordinator *firstTrustCoordinator) repair(ctx context.Context, request firstTrustRepairRequest) string {

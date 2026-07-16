@@ -3,6 +3,7 @@ package eebusfacade
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"time"
 )
 
@@ -167,7 +168,7 @@ func (coordinator *firstTrustCoordinator) firstTrustRecoveredAnchorLocked() bool
 func (coordinator *firstTrustCoordinator) firstTrustInheritedRepairTerminalLocked() bool {
 	terminal := false
 	for _, receipt := range coordinator.controlView.control.receipts {
-		if receipt.terminal && receipt.operationClass == "revocation" && receipt.result == "revoked" {
+		if receipt.operationClass == "revocation" {
 			terminal = false
 			continue
 		}
@@ -254,6 +255,72 @@ func (coordinator *firstTrustCoordinator) recoveryReason() string {
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 	return coordinator.recoveryReasonCode
+}
+
+func (coordinator *firstTrustCoordinator) authorizeRuntimeAttempt(remote []byte) string {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	coordinator.expireLocked(coordinator.now())
+	if len(remote) != 20 || coordinator.reopening || coordinator.recoveryOperation != nil {
+		return "attempt_denied"
+	}
+	if coordinator.recoveryStore != nil {
+		if coordinator.reconciliationRequiredLocked() || coordinator.recovery != "REVOKED" && firstTrustSubjectTombstoned(coordinator.controlView, remote) {
+			return "attempt_denied"
+		}
+		if coordinator.recovery != "UNPAIRED_LOCKED" && coordinator.recovery != "PAIRED_TRUSTED" && coordinator.recovery != "REVOKED" {
+			return "attempt_denied"
+		}
+	}
+	if _, trusted := coordinator.trustedRemotes[string(remote)]; trusted {
+		if coordinator.recoveryStore == nil || coordinator.recovery == "PAIRED_TRUSTED" {
+			return "reconnect_authorized"
+		}
+		return "attempt_denied"
+	}
+	if coordinator.phase == firstTrustOpenEmpty && coordinator.window != nil {
+		return "pairing_authorized"
+	}
+	if coordinator.currentCandidate != nil && bytes.Equal(coordinator.currentCandidate.remote, remote) &&
+		(coordinator.phase == firstTrustCandidatePending || coordinator.phase == firstTrustCommitting) {
+		return "pairing_authorized"
+	}
+	return "attempt_denied"
+}
+
+func (coordinator *firstTrustCoordinator) runtimeStartAuthorized() bool {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.recoveryStore == nil {
+		return coordinator.phase != firstTrustDisabled && !coordinator.reopening
+	}
+	if coordinator.reopening || coordinator.recoveryOperation != nil || coordinator.reconciliationRequiredLocked() {
+		return false
+	}
+	return coordinator.recovery == "UNPAIRED_LOCKED" || coordinator.recovery == "PAIRED_TRUSTED"
+}
+
+func (coordinator *firstTrustCoordinator) registerConfiguredRemote(ski string, register func(string)) string {
+	remote, err := hex.DecodeString(ski)
+	if err != nil || len(remote) != 20 || register == nil {
+		return "registration_denied"
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.phase != firstTrustPairingClosed || coordinator.recovery != "PAIRED_TRUSTED" || coordinator.recoveryOperation != nil || coordinator.reconciliationRequiredLocked() {
+		return "registration_denied"
+	}
+	for _, association := range coordinator.controlView.associations {
+		if !bytes.Equal(association.subject, remote) || !firstTrustAssociationUsable(association, coordinator.controlView.control.associationLineage) || coordinator.firstTrustTombstonedLocked(association) {
+			continue
+		}
+		if _, trusted := coordinator.trustedRemotes[string(remote)]; !trusted {
+			return "registration_denied"
+		}
+		register(ski)
+		return "registered"
+	}
+	return "registration_denied"
 }
 
 func (coordinator *firstTrustCoordinator) phaseNameLocked() string {

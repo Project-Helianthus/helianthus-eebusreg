@@ -458,14 +458,15 @@ func TestServiceBackendCloseBeforeStartCannotReopenTransport(t *testing.T) {
 }
 
 type fakeRuntimeService struct {
-	mu         sync.Mutex
-	setup      bool
-	started    chan struct{}
-	shutdowns  int
-	registered []string
-	autoAccept []bool
-	waiting    []bool
-	cancels    int
+	mu           sync.Mutex
+	setup        bool
+	started      chan struct{}
+	shutdowns    int
+	registered   []string
+	autoAccept   []bool
+	waiting      []bool
+	cancels      int
+	disconnected func(string)
 }
 
 func (service *fakeRuntimeService) Setup() error {
@@ -484,6 +485,14 @@ func (service *fakeRuntimeService) Shutdown() {
 func (service *fakeRuntimeService) RegisterRemoteSKI(ski string) {
 	service.registered = append(service.registered, ski)
 }
+
+func (service *fakeRuntimeService) DisconnectSKI(ski string, _ string) {
+	if service.disconnected != nil {
+		go service.disconnected(ski)
+	}
+}
+
+func (*fakeRuntimeService) UnregisterRemoteSKI(string) {}
 
 func (service *fakeRuntimeService) SetAutoAccept(value bool) {
 	service.mu.Lock()

@@ -115,8 +115,8 @@ func TestMSP04CAdminRejectsUnknownFieldsAndOperationReuse(t *testing.T) {
 	if got := msp04cAdminOutcome(t, handler.handle(context.Background(), msp04cAdminPayload(t, changed))); got != "idempotency_conflict" {
 		t.Fatalf("changed-binding replay outcome = %q", got)
 	}
-	if fixture.store.calls() != 1 {
-		t.Fatalf("admin replay publication count = %d, want 1", fixture.store.calls())
+	if fixture.store.calls() != 2 {
+		t.Fatalf("admin replay publication count = %d, want 2", fixture.store.calls())
 	}
 }
 

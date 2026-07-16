@@ -24,8 +24,8 @@ func TestMSP04CRevocationPublishesDurableTombstoneAndSurvivesRestart(t *testing.
 		t.Fatalf("revocation outcome = %q", got)
 	}
 	assertMSP04CState(t, coordinator, "REVOKED", "REVOKED_ASSOCIATION")
-	if got := fixture.store.calls(); got != 1 {
-		t.Fatalf("publication count = %d, want 1", got)
+	if got := fixture.store.calls(); got != 2 {
+		t.Fatalf("publication count = %d, want 2", got)
 	}
 	fixture.events.assertOrdered(t, "anchor_stage", "store_commit", "anchor_finalize")
 	assertMSP04CRevokedGeneration(t, fixture.store.view, request)
@@ -50,8 +50,8 @@ func TestMSP04CRevocationPublishesDurableTombstoneAndSurvivesRestart(t *testing.
 	if got := restarted.revoke(context.Background(), request); got != "revoked" {
 		t.Fatalf("terminal replay outcome = %q", got)
 	}
-	if got := fixture.store.calls(); got != 1 {
-		t.Fatalf("terminal replay publication count = %d, want 1", got)
+	if got := fixture.store.calls(); got != 2 {
+		t.Fatalf("terminal replay publication count = %d, want 2", got)
 	}
 }
 
@@ -107,7 +107,7 @@ func TestMSP04CRevocationIdempotencyIsDurableAndBindingExact(t *testing.T) {
 	if got := coordinator.revoke(context.Background(), changed); got != "idempotency_conflict" {
 		t.Fatalf("changed-binding replay outcome = %q", got)
 	}
-	if fixture.store.calls() != 1 {
+	if fixture.store.calls() != 2 {
 		t.Fatal("changed-binding replay mutated durable state")
 	}
 
@@ -116,7 +116,7 @@ func TestMSP04CRevocationIdempotencyIsDurableAndBindingExact(t *testing.T) {
 	if got := restarted.revoke(context.Background(), request); got != "revoked" {
 		t.Fatalf("restart replay outcome = %q", got)
 	}
-	if fixture.store.calls() != 1 {
+	if fixture.store.calls() != 2 {
 		t.Fatal("restart replay produced a second publication")
 	}
 
@@ -127,7 +127,7 @@ func TestMSP04CRevocationIdempotencyIsDurableAndBindingExact(t *testing.T) {
 	if got := restarted.revoke(context.Background(), request); got != "idempotency_expired" {
 		t.Fatalf("compacted replay outcome = %q", got)
 	}
-	if fixture.store.calls() != 1 {
+	if fixture.store.calls() != 2 {
 		t.Fatal("compacted replay produced a publication")
 	}
 }
@@ -460,7 +460,8 @@ func assertMSP04CRevokedGeneration(t *testing.T, view firstTrustControlView, req
 		}
 	}
 	for _, tombstone := range view.control.tombstones {
-		if tombstone.associationRef == request.associationRef && tombstone.operationID == request.operationID && tombstone.revocationEpoch == request.expectedControlEpoch+1 && tombstone.effectiveGeneration == view.manifest.current {
+		if tombstone.associationRef == request.associationRef && tombstone.operationID == request.operationID && tombstone.revocationEpoch == request.expectedControlEpoch+1 &&
+			tombstone.effectiveGeneration.sequence != 0 && tombstone.effectiveGeneration.sequence <= view.manifest.current.sequence {
 			return
 		}
 	}

@@ -22,6 +22,7 @@ const (
 	firstTrustMaximumRetiredKeys   = firstTrustMaximumIdempotency
 	firstTrustMaximumActiveKeys    = 32
 	firstTrustMaximumKeyBytes      = 128
+	firstTrustWithdrawalWait       = 2 * time.Second
 )
 
 type firstTrustPersistence interface {
@@ -35,6 +36,12 @@ type firstTrustEffects interface {
 	cancelRemote([]byte, uint64)
 	connectionAlive([]byte, uint64) bool
 	registerRemoteSKI([]byte, uint64)
+}
+
+type firstTrustWithdrawalEffects interface {
+	disconnectRemote([]byte) (<-chan struct{}, bool)
+	cancelDisconnect([]byte, <-chan struct{})
+	unregisterRemote([]byte) bool
 }
 
 type firstTrustPhase uint8
@@ -104,11 +111,12 @@ type firstTrustInflight struct {
 type firstTrustCoordinator struct {
 	mu sync.Mutex
 
-	now        func() time.Time
-	random     io.Reader
-	store      firstTrustPersistence
-	effects    firstTrustEffects
-	commitWait time.Duration
+	now            func() time.Time
+	random         io.Reader
+	store          firstTrustPersistence
+	effects        firstTrustEffects
+	commitWait     time.Duration
+	withdrawalWait time.Duration
 
 	phase            firstTrustPhase
 	window           *firstTrustWindow
@@ -154,6 +162,7 @@ func newFirstTrustCoordinator(now func() time.Time, random io.Reader, store firs
 		store:          store,
 		effects:        effects,
 		commitWait:     firstTrustCommitWait,
+		withdrawalWait: firstTrustWithdrawalWait,
 		phase:          firstTrustDisabled,
 		trustedRemotes: make(map[string]string),
 		replays:        make(map[string]firstTrustReplay),

@@ -15,8 +15,8 @@ func TestMSP04CG11ExactSaturatingVector(t *testing.T) {
 	}
 	scope := msp04cOrdinal(141)
 
-	wantCounts := []uint64{0, 1, 2, 3, 4, 4}
-	wantDelays := []time.Duration{0, 3 * time.Second, 6 * time.Second, 10 * time.Second, 10 * time.Second, 10 * time.Second}
+	wantCounts := []uint64{0, 1, 2, 3, 4}
+	wantDelays := []time.Duration{0, 3 * time.Second, 6 * time.Second, 10 * time.Second, 0}
 	states := make([]string, 0, len(wantCounts))
 	counts := make([]uint64, 0, len(wantCounts))
 	delays := make([]time.Duration, 0, len(wantCounts))
@@ -35,7 +35,11 @@ func TestMSP04CG11ExactSaturatingVector(t *testing.T) {
 	}
 	record()
 	for step := 1; step < len(wantCounts); step++ {
-		if got := coordinator.recordRetryFailure(context.Background(), scope); got != "backoff_active" {
+		wantOutcome := "backoff_active"
+		if step == len(wantCounts)-1 {
+			wantOutcome = "admin_hold"
+		}
+		if got := coordinator.recordRetryFailure(context.Background(), scope); got != wantOutcome {
 			t.Fatalf("step %d failure outcome = %q", step, got)
 		}
 		record()
@@ -51,6 +55,8 @@ func TestMSP04CG11ExactSaturatingVector(t *testing.T) {
 		wantState := "BACKOFF_ACTIVE"
 		if index == 0 {
 			wantState = "RETRY_READY"
+		} else if index == len(wantCounts)-1 {
+			wantState = "ADMIN_HOLD"
 		}
 		if states[index] != wantState || counts[index] != wantCounts[index] || delays[index] != wantDelays[index] {
 			t.Fatalf("step %d tuple = %s/%d/%s, want %s/%d/%s", index, states[index], counts[index], delays[index], wantState, wantCounts[index], wantDelays[index])
@@ -198,6 +204,39 @@ func TestMSP04CG11ReadyTransitionMustBeDurableBeforeAdmission(t *testing.T) {
 	}
 }
 
+func TestMSP04CRRetryFailureNotPublishedLeavesDurablePendingHold(t *testing.T) {
+	fixture := newMSP04CFixture(t)
+	scope := msp04cOrdinal(186)
+	fixture.store.view.control.quarantines = []firstTrustQuarantineRecord{{
+		scope: scope, reason: "RETRYABLE_FAILURE", state: "RETRY_READY", retentionBudget: firstTrustQuarantineRetention,
+	}}
+	coordinator := fixture.newCoordinator()
+	_ = coordinator.reopen(context.Background())
+	if got := coordinator.admitRetry(context.Background(), scope); got != "retry_admitted" {
+		t.Fatalf("retry admission = %q", got)
+	}
+	fixture.store.commitOutcome = "commit_not_published"
+	if got := coordinator.recordRetryFailure(context.Background(), scope); got != "failure_state_failed_closed" {
+		t.Fatalf("failure publication = %q", got)
+	}
+	coordinator.mu.Lock()
+	pending := coordinator.anchorRecord.pending != nil
+	state, reason := coordinator.recovery, coordinator.recoveryReasonCode
+	coordinator.mu.Unlock()
+	if !pending || state != "QUARANTINED" || reason != "DURABILITY_UNKNOWN" {
+		t.Fatalf("fail-closed state = pending:%t %s/%s", pending, state, reason)
+	}
+
+	restarted := fixture.newCoordinator()
+	_ = restarted.reopen(context.Background())
+	if restarted.recoveryState() != "QUARANTINED" || restarted.recoveryReason() != "DURABILITY_UNKNOWN" {
+		t.Fatalf("restart classification = %s/%s", restarted.recoveryState(), restarted.recoveryReason())
+	}
+	if got := restarted.admitRetry(context.Background(), scope); got != "reconciliation_required" {
+		t.Fatalf("restart admission = %q", got)
+	}
+}
+
 func TestMSP04CG11PolicyBoundsAndCheckedSaturation(t *testing.T) {
 	if firstTrustBackoffBase <= 0 || firstTrustBackoffMaximum < firstTrustBackoffBase || firstTrustAttemptMaximum < 1 || firstTrustBackoffExponentCap < 0 || firstTrustMaximumQuarantineRecords < 1 || firstTrustQuarantineRetention <= 0 {
 		t.Fatal("production backoff constants violate the closed source bounds")
@@ -207,7 +246,7 @@ func TestMSP04CG11PolicyBoundsAndCheckedSaturation(t *testing.T) {
 		maximum: firstTrustBackoffMaximum, attemptMaximum: firstTrustAttemptMaximum,
 	}
 	count, delay, ok := firstTrustNextBackoff(production, firstTrustAttemptMaximum)
-	if !ok || count != firstTrustAttemptMaximum || delay <= 0 || delay > firstTrustBackoffMaximum {
+	if !ok || count != firstTrustAttemptMaximum || delay != 0 {
 		t.Fatalf("production saturation tuple = %d/%s/%t", count, delay, ok)
 	}
 

@@ -1079,6 +1079,20 @@ func (effects *msp04cEffectsSpy) registerRemoteSKI([]byte, uint64) {
 	effects.events.add("register")
 }
 
+func (effects *msp04cEffectsSpy) disconnectRemote([]byte) (<-chan struct{}, bool) {
+	effects.events.add("disconnect")
+	acknowledged := make(chan struct{})
+	close(acknowledged)
+	return acknowledged, true
+}
+
+func (*msp04cEffectsSpy) cancelDisconnect([]byte, <-chan struct{}) {}
+
+func (effects *msp04cEffectsSpy) unregisterRemote([]byte) bool {
+	effects.events.add("unregister")
+	return true
+}
+
 func (effects *msp04cEffectsSpy) registerCount() int {
 	effects.mu.Lock()
 	defer effects.mu.Unlock()
