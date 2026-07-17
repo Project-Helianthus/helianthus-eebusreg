@@ -1,5 +1,4 @@
-// Package eebusservicebridge keeps the released service constructor behind an
-// internal boundary while the upstream SHIP listener remains unscoped.
+// Package eebusservicebridge isolates the released service constructor behind an internal boundary.
 package eebusservicebridge
 
 import (
