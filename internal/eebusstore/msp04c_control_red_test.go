@@ -15,8 +15,8 @@ import (
 )
 
 func TestMSP04CControlRecordAdvancesTheInternalSchema(t *testing.T) {
-	if currentSchemaVersion != 2 {
-		t.Fatalf("current internal schema = %d, want 2", currentSchemaVersion)
+	if currentSchemaVersion != 3 {
+		t.Fatalf("current internal schema = %d, want 3", currentSchemaVersion)
 	}
 	source := stateV1{}
 	first, err := migrateMSP04BStateToMSP04C(source)
@@ -38,8 +38,9 @@ func TestMSP04CControlRecordAdvancesTheInternalSchema(t *testing.T) {
 func TestMSP04CControlRecordRoundTripsCanonicalMechanicalState(t *testing.T) {
 	record := msp04cStoreControlFixture()
 	generation := generationV1{
-		metadata: generationMetadata{sequence: 19},
-		state:    withControlRecordV2(stateV1{}, record),
+		metadata:      generationMetadata{sequence: 19},
+		state:         withControlRecordV2(stateV1{}, record),
+		schemaVersion: 2,
 	}
 	first, err := encodeGenerationV1(generation)
 	if err != nil {

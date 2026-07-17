@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	currentSchemaVersion   uint64 = 2
+	currentSchemaVersion   uint64 = 3
 	currentManifestVersion uint64 = 1
 	currentSlotVersion     uint64 = 1
 )
