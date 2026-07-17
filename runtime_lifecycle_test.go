@@ -2,6 +2,7 @@ package eebusruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -91,6 +92,22 @@ func TestRuntimeConcurrentLifecycleAcquiresOnceCancelsJoinsAndClosesOnce(t *test
 	second := lifecycleRuntimeSnapshot(t, "session-after-reconnect")
 	backend.publish(t, second)
 	assertRuntimeReconnectGraph(t, instance, "session-after-reconnect")
+	terminalDraft := second.Clone()
+	terminalDraft.Pairing[0].State = eebusraw.PairingStateDenied
+	terminalDraft.Services[0].Paired = false
+	terminalDraft.Status = RuntimeObservationV1{
+		State: ObservedRuntimeStateV1Degraded,
+		Degradation: &DegradationV1{
+			Reason: DegradationReasonV1DeniedTrust,
+			Since:  terminalDraft.Meta.DataTimestamp,
+		},
+	}
+	terminalDraft.Meta.DataHash = ""
+	terminalSnapshot, err := NewSnapshotV1(terminalDraft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend.setTerminalSnapshot(terminalSnapshot)
 
 	shutdownErrors := callRuntimeConcurrently(t, 32, "concurrent Shutdown", instance.Shutdown)
 	for err := range shutdownErrors {
@@ -112,6 +129,9 @@ func TestRuntimeConcurrentLifecycleAcquiresOnceCancelsJoinsAndClosesOnce(t *test
 	}
 	if terminal.Status.State != ObservedRuntimeStateV1Shutdown {
 		t.Fatalf("terminal state = %q, want shutdown", terminal.Status.State)
+	}
+	if terminal.Pairing[0].State != eebusraw.PairingStateDenied || terminal.Services[0].Paired {
+		t.Fatalf("terminal trust = pairing:%q paired:%t, want denied/false", terminal.Pairing[0].State, terminal.Services[0].Paired)
 	}
 	assertRuntimeFeatureGraphCounts(t, terminal)
 }
@@ -385,9 +405,18 @@ type fakeRuntimeBackend struct {
 	runExitedOnce  sync.Once
 	runCalls       atomic.Int32
 	closeCalls     atomic.Int32
+	terminalMu     sync.Mutex
+	terminal       SnapshotV1
+	hasTerminal    bool
 }
 
 type malformedFacadeBackend struct{}
+
+type closePublishingFacadeBackend struct {
+	started chan struct{}
+	payload []byte
+	publish func([]byte)
+}
 
 func (malformedFacadeBackend) Run(ctx context.Context, publish func([]byte)) error {
 	publish([]byte("{"))
@@ -397,7 +426,52 @@ func (malformedFacadeBackend) Run(ctx context.Context, publish func([]byte)) err
 
 func (malformedFacadeBackend) Close() error { return nil }
 
+func (backend *closePublishingFacadeBackend) Run(ctx context.Context, publish func([]byte)) error {
+	backend.publish = publish
+	close(backend.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (backend *closePublishingFacadeBackend) Close() error {
+	backend.publish(append([]byte(nil), backend.payload...))
+	return nil
+}
+
 var _ eebusfacade.Backend = malformedFacadeBackend{}
+var _ eebusfacade.Backend = (*closePublishingFacadeBackend)(nil)
+
+func TestFacadeRuntimeBackendCapturesCloseTerminalState(t *testing.T) {
+	terminalDraft := lifecycleRuntimeSnapshot(t, "terminal-close-capture")
+	terminalDraft.Pairing[0].State = eebusraw.PairingStateDenied
+	terminalDraft.Services[0].Paired = false
+	terminalDraft.Meta.DataHash = ""
+	terminal, err := NewSnapshotV1(terminalDraft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(terminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner := &closePublishingFacadeBackend{started: make(chan struct{}), payload: payload}
+	backend := &facadeRuntimeBackend{backend: inner}
+	ctx, cancel := context.WithCancel(context.Background())
+	runResult := make(chan error, 1)
+	go func() { runResult <- backend.Run(ctx, func(SnapshotV1) {}) }()
+	waitRuntimeSignal(t, inner.started, "facade backend run")
+	cancel()
+	if err := waitRuntimeResult(t, runResult, "facade backend cancellation"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+	captured, ok := backend.TerminalSnapshot()
+	if !ok || captured.Pairing[0].State != eebusraw.PairingStateDenied || captured.Services[0].Paired {
+		t.Fatalf("captured terminal projection = ok:%t pairing:%q paired:%t", ok, captured.Pairing[0].State, captured.Services[0].Paired)
+	}
+}
 
 func newFakeRuntimeBackend() *fakeRuntimeBackend {
 	return &fakeRuntimeBackend{
@@ -430,6 +504,22 @@ func (backend *fakeRuntimeBackend) Run(ctx context.Context, publish func(Snapsho
 func (backend *fakeRuntimeBackend) Close() error {
 	backend.closeCalls.Add(1)
 	return nil
+}
+
+func (backend *fakeRuntimeBackend) setTerminalSnapshot(snapshot SnapshotV1) {
+	backend.terminalMu.Lock()
+	backend.terminal = snapshot.Clone()
+	backend.hasTerminal = true
+	backend.terminalMu.Unlock()
+}
+
+func (backend *fakeRuntimeBackend) TerminalSnapshot() (SnapshotV1, bool) {
+	backend.terminalMu.Lock()
+	defer backend.terminalMu.Unlock()
+	if !backend.hasTerminal {
+		return SnapshotV1{}, false
+	}
+	return backend.terminal.Clone(), true
 }
 
 func (backend *fakeRuntimeBackend) publish(t *testing.T, snapshot SnapshotV1) {

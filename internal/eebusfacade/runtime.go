@@ -363,15 +363,18 @@ func validRuntimeSKI(value string) bool {
 }
 
 type runtimeServiceHandler struct {
-	mu sync.Mutex
+	mu        sync.Mutex
+	publishMu sync.Mutex
 
-	reducer           *runtimeObservationReducer
-	observations      map[string]runtimeGraphObservation
-	projectionCapture func() trustAdminProjection
-	projectionRemotes []string
-	now               func() time.Time
-	publish           func([]byte)
-	errors            chan error
+	reducer                   *runtimeObservationReducer
+	observations              map[string]runtimeGraphObservation
+	projectionCapture         func() trustAdminProjection
+	projectionLivenessAllowed func(string) bool
+	projectionRemotes         []string
+	publishedTrustRevision    uint64
+	now                       func() time.Time
+	publish                   func([]byte)
+	errors                    chan error
 }
 
 func newRuntimeServiceHandler(config RuntimeConfig, localSKI string, now func() time.Time) (*runtimeServiceHandler, error) {
@@ -417,6 +420,9 @@ func (handler *runtimeServiceHandler) setPublisher(publish func([]byte)) {
 
 func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.ServiceInterface, ski string) {
 	ski = strings.ToLower(strings.TrimSpace(ski))
+	if !handler.remoteLivenessAllowed(ski) {
+		return
+	}
 	devices, err := runtimeDevicesForRemote(service, ski)
 	if err != nil {
 		handler.report(err)
@@ -433,7 +439,11 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 }
 
 func (handler *runtimeServiceHandler) RemoteSKIDisconnected(_ eebusapi.ServiceInterface, ski string) {
-	handler.updateRemote(strings.ToLower(strings.TrimSpace(ski)), func(observation *runtimeGraphObservation) {
+	ski = strings.ToLower(strings.TrimSpace(ski))
+	if !handler.remoteLivenessAllowed(ski) {
+		return
+	}
+	handler.updateRemote(ski, func(observation *runtimeGraphObservation) {
 		observation.SessionState = "disconnected"
 		observation.Since = handler.timestamp()
 	})
@@ -451,6 +461,9 @@ func (handler *runtimeServiceHandler) VisibleRemoteServicesUpdated(_ eebusapi.Se
 	handler.mu.Lock()
 	changed := false
 	for ski, observation := range handler.observations {
+		if !handler.remoteLivenessAllowedLocked(ski) {
+			continue
+		}
 		isVisible := visible[ski]
 		if observation.Visible == isVisible {
 			continue
@@ -472,11 +485,15 @@ func (handler *runtimeServiceHandler) VisibleRemoteServicesUpdated(_ eebusapi.Se
 }
 
 func (handler *runtimeServiceHandler) ServiceShipIDUpdate(ski string, shipID string) {
+	ski = strings.ToLower(strings.TrimSpace(ski))
+	if !handler.remoteLivenessAllowed(ski) {
+		return
+	}
 	shipID = strings.TrimSpace(shipID)
 	if shipID == "" {
 		return
 	}
-	handler.updateRemote(strings.ToLower(strings.TrimSpace(ski)), func(observation *runtimeGraphObservation) {
+	handler.updateRemote(ski, func(observation *runtimeGraphObservation) {
 		observation.ShipID = shipID
 		observation.SessionID = runtimeSessionIdentity(*observation)
 		observation.Since = handler.timestamp()
@@ -492,6 +509,10 @@ func runtimeSessionIdentity(observation runtimeGraphObservation) string {
 }
 
 func (handler *runtimeServiceHandler) ServicePairingDetailUpdate(ski string, detail *shipapi.ConnectionStateDetail) {
+	ski = strings.ToLower(strings.TrimSpace(ski))
+	if !handler.remoteLivenessAllowed(ski) {
+		return
+	}
 	sessionState := ""
 	if detail != nil {
 		switch detail.State() {
@@ -501,7 +522,7 @@ func (handler *runtimeServiceHandler) ServicePairingDetailUpdate(ski string, det
 			sessionState = "degraded"
 		}
 	}
-	handler.updateRemote(strings.ToLower(strings.TrimSpace(ski)), func(observation *runtimeGraphObservation) {
+	handler.updateRemote(ski, func(observation *runtimeGraphObservation) {
 		if sessionState == "degraded" {
 			observation.SessionState = sessionState
 		}
@@ -544,9 +565,25 @@ func (handler *runtimeServiceHandler) publishCurrent() error {
 }
 
 func (handler *runtimeServiceHandler) publishTrustAdminProjection(projection trustAdminProjection) error {
+	handler.publishMu.Lock()
+	defer handler.publishMu.Unlock()
+	if projection.revision < handler.publishedTrustRevision {
+		return nil
+	}
+	handler.publishedTrustRevision = projection.revision
 	graph, remotes := handler.runtimeGraphAndProjectionRemotes()
 	applyTrustAdminProjection(graph, remotes, projection)
 	return handler.publishRuntimeGraph(graph)
+}
+
+func (handler *runtimeServiceHandler) remoteLivenessAllowed(ski string) bool {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	return handler.remoteLivenessAllowedLocked(ski)
+}
+
+func (handler *runtimeServiceHandler) remoteLivenessAllowedLocked(ski string) bool {
+	return handler.projectionLivenessAllowed == nil || handler.projectionLivenessAllowed(ski)
 }
 
 func (handler *runtimeServiceHandler) publishRuntimeGraph(graph []runtimeGraphObservation) error {

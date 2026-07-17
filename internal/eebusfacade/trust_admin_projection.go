@@ -11,6 +11,7 @@ const trustAdminProjectionContract = "helianthus.eebus.trust-admin-projection.v1
 
 type trustAdminProjection struct {
 	contract          string
+	revision          uint64
 	phase             string
 	recovery          string
 	mutationAvailable bool
@@ -27,6 +28,7 @@ type trustAdminRemoteProjection struct {
 type trustAdminProjectionBinding struct {
 	remotes  [][]byte
 	observer func(trustAdminProjection)
+	last     trustAdminProjection
 }
 
 func (handler *runtimeServiceHandler) bindTrustAdminProjection(coordinator *firstTrustCoordinator) error {
@@ -55,6 +57,7 @@ func (handler *runtimeServiceHandler) bindTrustAdminProjection(coordinator *firs
 		return errors.New("trust admin projection runtime is already bound")
 	}
 	handler.projectionCapture = coordinator.captureTrustAdminProjection
+	handler.projectionLivenessAllowed = coordinator.trustAdminLivenessAllowed
 	handler.projectionRemotes = append([]string(nil), remotes...)
 	handler.mu.Unlock()
 
@@ -66,6 +69,7 @@ func (handler *runtimeServiceHandler) bindTrustAdminProjection(coordinator *firs
 	if err != nil {
 		handler.mu.Lock()
 		handler.projectionCapture = nil
+		handler.projectionLivenessAllowed = nil
 		handler.projectionRemotes = nil
 		handler.mu.Unlock()
 	}
@@ -73,7 +77,7 @@ func (handler *runtimeServiceHandler) bindTrustAdminProjection(coordinator *firs
 }
 
 func applyTrustAdminProjection(graph []runtimeGraphObservation, remotes []string, projection trustAdminProjection) {
-	valid := projection.contract == trustAdminProjectionContract && len(graph) == len(remotes) && len(projection.remotes) == len(remotes)
+	valid := projection.contract == trustAdminProjectionContract && projection.revision != 0 && len(graph) == len(remotes) && len(projection.remotes) == len(remotes)
 	if projection.degradation != "" && projection.degradation != "denied-trust" && projection.degradation != "certificate-unavailable" {
 		valid = false
 	}
@@ -133,7 +137,9 @@ func (coordinator *firstTrustCoordinator) bindTrustAdminProjection(remotes [][]b
 		return errors.New("trust admin projection is already bound")
 	}
 	coordinator.trustAdminProjection = &trustAdminProjectionBinding{remotes: cloned, observer: observer}
+	coordinator.trustAdminRevision++
 	projection := coordinator.captureTrustAdminProjectionLocked()
+	coordinator.trustAdminProjection.last = cloneTrustAdminProjection(projection)
 	coordinator.mu.Unlock()
 
 	observer(projection)
@@ -147,7 +153,7 @@ func (coordinator *firstTrustCoordinator) captureTrustAdminProjection() trustAdm
 }
 
 func (coordinator *firstTrustCoordinator) captureTrustAdminProjectionLocked() trustAdminProjection {
-	projection := trustAdminProjection{contract: trustAdminProjectionContract}
+	projection := trustAdminProjection{contract: trustAdminProjectionContract, revision: coordinator.trustAdminRevision}
 	if coordinator.trustAdminProjection == nil {
 		projection.degradation = "denied-trust"
 		return projection
@@ -218,21 +224,43 @@ func (coordinator *firstTrustCoordinator) notifyTrustAdminProjection() {
 		return
 	}
 	projection := coordinator.captureTrustAdminProjectionLocked()
+	if trustAdminProjectionEqual(coordinator.trustAdminProjection.last, projection) {
+		coordinator.mu.Unlock()
+		return
+	}
+	coordinator.trustAdminRevision++
+	projection.revision = coordinator.trustAdminRevision
+	coordinator.trustAdminProjection.last = cloneTrustAdminProjection(projection)
 	observer := coordinator.trustAdminProjection.observer
 	coordinator.mu.Unlock()
 	observer(projection)
 }
 
 func (coordinator *firstTrustCoordinator) unlockAndNotifyTrustAdminProjectionChange(before trustAdminProjection) {
+	_ = before
 	after := coordinator.captureTrustAdminProjectionLocked()
 	var observer func(trustAdminProjection)
-	if coordinator.trustAdminProjection != nil {
+	if coordinator.trustAdminProjection != nil && !trustAdminProjectionEqual(coordinator.trustAdminProjection.last, after) {
+		coordinator.trustAdminRevision++
+		after.revision = coordinator.trustAdminRevision
+		coordinator.trustAdminProjection.last = cloneTrustAdminProjection(after)
 		observer = coordinator.trustAdminProjection.observer
 	}
 	coordinator.mu.Unlock()
-	if observer != nil && !trustAdminProjectionEqual(before, after) {
+	if observer != nil {
 		observer(after)
 	}
+}
+
+func (coordinator *firstTrustCoordinator) trustAdminLivenessAllowed(ski string) bool {
+	remote, err := hex.DecodeString(ski)
+	if err != nil || len(remote) != 20 {
+		return false
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	return coordinator.currentCandidate == nil || !bytes.Equal(coordinator.currentCandidate.remote, remote) ||
+		coordinator.phase != firstTrustCandidatePending && coordinator.phase != firstTrustCommitting
 }
 
 func (coordinator *firstTrustCoordinator) trustAdminStructuralIndeterminateLocked(phase string, phaseKnown bool) bool {
@@ -259,18 +287,8 @@ func (coordinator *firstTrustCoordinator) trustAdminStructuralIndeterminateLocke
 			return true
 		}
 	}
-	if coordinator.anchorRecord.version != 0 {
-		if coordinator.anchorRecord.version != firstTrustAnchorVersion ||
-			coordinator.anchorRecord.storeInstance != coordinator.controlView.control.storeInstance ||
-			coordinator.controlView.manifest.current.sequence < coordinator.anchorRecord.manifestGenerationHighWater ||
-			coordinator.controlView.control.controlEpoch < coordinator.anchorRecord.controlEpochHighWater {
-			return true
-		}
-		if coordinator.recovery == "PAIRED_TRUSTED" &&
-			(coordinator.controlView.manifest.current.sequence != coordinator.anchorRecord.manifestGenerationHighWater ||
-				coordinator.controlView.control.controlEpoch != coordinator.anchorRecord.controlEpochHighWater) {
-			return true
-		}
+	if coordinator.recovery != "NO_LOCAL_IDENTITY" && coordinator.firstTrustAnchorProductReasonLocked() != "" {
+		return true
 	}
 
 	switch coordinator.recovery {
@@ -280,8 +298,13 @@ func (coordinator *firstTrustCoordinator) trustAdminStructuralIndeterminateLocke
 		switch coordinator.recoveryReasonCode {
 		case "DURABILITY_UNKNOWN", "HOST_BINDING_MISMATCH", "CLONE_DETECTED", "MANIFEST_GENERATION_ROLLBACK", "CONTROL_EPOCH_ROLLBACK":
 			return true
+		case "ADMIN_HOLD", "HANDSHAKE_ATTEMPT_LIMIT":
+			return !coordinator.trustAdminHasQuarantineStateLocked("ADMIN_HOLD")
+		case "RETRYABLE_FAILURE":
+			return !coordinator.trustAdminHasQuarantineStateLocked("BACKOFF_ACTIVE")
+		default:
+			return true
 		}
-		return !coordinator.trustAdminHasTerminalQuarantineLocked()
 	case "NO_LOCAL_IDENTITY":
 		return coordinator.recoveryReasonCode != "" && coordinator.recoveryReasonCode != "HOST_KEY_UNAVAILABLE"
 	case "UNPAIRED_LOCKED", "PAIRED_TRUSTED":
@@ -291,6 +314,15 @@ func (coordinator *firstTrustCoordinator) trustAdminStructuralIndeterminateLocke
 	default:
 		return true
 	}
+}
+
+func (coordinator *firstTrustCoordinator) trustAdminHasQuarantineStateLocked(state string) bool {
+	for _, record := range coordinator.controlView.control.quarantines {
+		if record.state == state && firstTrustQuarantineRecordValid(record, coordinator.backoffPolicy) {
+			return true
+		}
+	}
+	return false
 }
 
 func (coordinator *firstTrustCoordinator) trustAdminTerminalDenialLocked() bool {

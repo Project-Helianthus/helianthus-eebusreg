@@ -130,7 +130,7 @@ func TestMSP045ClosedDegradationPrecedence(t *testing.T) {
 			mutate: func(setup *msp045ProductSetup) {
 				setup.anchorOutcome = "anchor_unavailable"
 				setup.view.control.quarantines = []firstTrustQuarantineRecord{{
-					scope: msp045Opaque(t), reason: "synthetic_hold", state: "ADMIN_HOLD",
+					scope: msp045Opaque(t), reason: "ADMIN_HOLD", state: "ADMIN_HOLD",
 					retentionBudget: time.Minute, lastControlEpoch: setup.view.control.controlEpoch,
 				}}
 			},
@@ -141,7 +141,7 @@ func TestMSP045ClosedDegradationPrecedence(t *testing.T) {
 			mutate: func(setup *msp045ProductSetup) {
 				setup.view.associations = nil
 				setup.view.control.quarantines = []firstTrustQuarantineRecord{{
-					scope: msp045Opaque(t), reason: "synthetic_backoff", state: "BACKOFF_ACTIVE",
+					scope: msp045Opaque(t), reason: "RETRYABLE_FAILURE", state: "BACKOFF_ACTIVE",
 					attemptCount: 1, remainingDelay: time.Second, retentionBudget: time.Minute,
 					lastControlEpoch: setup.view.control.controlEpoch,
 				}}
@@ -155,7 +155,7 @@ func TestMSP045ClosedDegradationPrecedence(t *testing.T) {
 					reason: "synthetic_invalid_record", state: "ADMIN_HOLD",
 				}}
 			},
-			wantState: "denied", wantReason: "denied-trust",
+			wantState: "unknown", wantReason: "denied-trust",
 		},
 		{name: "missing protected identity", mutate: func(setup *msp045ProductSetup) {
 			setup.storeOutcome = "key_provider_unavailable"
@@ -315,6 +315,79 @@ func TestMSP045CommitFailureProductsFailClosed(t *testing.T) {
 			msp045AssertTrust(t, snapshot, test.wantState, false, test.wantReason)
 		})
 	}
+}
+
+func TestMSP045FuturePrepareOutcomeFailsClosedAcrossCallers(t *testing.T) {
+	setFuture := func(harness *msp045RuntimeHarness) {
+		harness.bridge.mu.Lock()
+		harness.bridge.prepareOutcome = "future_prepare_product"
+		harness.bridge.mu.Unlock()
+	}
+
+	t.Run("confirmation", func(t *testing.T) {
+		harness := newMSP045ProductHarness(t, func(setup *msp045ProductSetup) { setup.view.associations = nil })
+		candidate := msp045PrepareCandidate(t, harness, 4_650)
+		setFuture(harness)
+		if got := harness.resources.coordinator.confirm(context.Background(), msp045RunToken(t, "future-confirm"), candidate.proof, candidate.nonce, candidate.expiry, candidate.connection, candidate.generation); got != "trust_outcome_unknown" {
+			t.Fatalf("confirmation = %q, want trust_outcome_unknown", got)
+		}
+		snapshot, _ := msp045Capture(t, harness.handler)
+		msp045AssertTrust(t, snapshot, "unknown", false, "denied-trust")
+	})
+
+	t.Run("revocation", func(t *testing.T) {
+		harness := newMSP045ProductHarness(t, nil)
+		setFuture(harness)
+		if got := harness.resources.coordinator.revoke(context.Background(), msp045RevocationRequest(t, harness.resources.coordinator)); got != "revocation_outcome_unknown" {
+			t.Fatalf("revocation = %q, want revocation_outcome_unknown", got)
+		}
+		snapshot, _ := msp045Capture(t, harness.handler)
+		msp045AssertTrust(t, snapshot, "unknown", false, "denied-trust")
+	})
+
+	t.Run("repair", func(t *testing.T) {
+		harness := newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
+			setup.storeOutcome = "key_provider_unavailable"
+			setup.view.associations = nil
+		})
+		setFuture(harness)
+		request := exactRuntimeRepairRequest(harness.resources.coordinator, "recover_unavailable_host_key", msp045Opaque(t))
+		if got := harness.resources.coordinator.repair(context.Background(), request); got != "repair_outcome_unknown" {
+			t.Fatalf("repair = %q, want repair_outcome_unknown", got)
+		}
+		snapshot, _ := msp045Capture(t, harness.handler)
+		msp045AssertTrust(t, snapshot, "unknown", false, "denied-trust")
+	})
+
+	t.Run("retry", func(t *testing.T) {
+		harness := newMSP045ProductHarness(t, nil)
+		setFuture(harness)
+		coordinator := harness.resources.coordinator
+		coordinator.mu.Lock()
+		target := cloneFirstTrustControlRecord(coordinator.controlView.control)
+		target.controlEpoch++
+		outcome := coordinator.publishFirstTrustRetryLocked(context.Background(), target)
+		state, reason := coordinator.recovery, coordinator.recoveryReasonCode
+		coordinator.mu.Unlock()
+		if outcome != "unknown" || state != "QUARANTINED" || reason != "DURABILITY_UNKNOWN" {
+			t.Fatalf("retry = %q %s/%s, want unknown QUARANTINED/DURABILITY_UNKNOWN", outcome, state, reason)
+		}
+	})
+
+	t.Run("predial", func(t *testing.T) {
+		harness := newMSP045ProductHarness(t, nil)
+		setFuture(harness)
+		coordinator := harness.resources.coordinator
+		coordinator.mu.Lock()
+		epoch := coordinator.controlView.control.controlEpoch
+		target := cloneFirstTrustControlRecord(coordinator.controlView.control)
+		target.controlEpoch++
+		coordinator.mu.Unlock()
+		_, outcome := coordinator.publishOutgoingAttemptControl(context.Background(), epoch, target, msp045Opaque(t), "attempt_prepare")
+		if outcome != "unknown" || coordinator.recoveryState() != "QUARANTINED" || coordinator.recoveryReason() != "DURABILITY_UNKNOWN" {
+			t.Fatalf("predial = %q %s/%s, want unknown QUARANTINED/DURABILITY_UNKNOWN", outcome, coordinator.recoveryState(), coordinator.recoveryReason())
+		}
+	})
 }
 
 func TestMSP045RepairAndRevocationPublishWithoutNetworkCallback(t *testing.T) {
@@ -537,6 +610,91 @@ func TestMSP045ProjectionIsCloneSafeOrderedAndRaceFree(t *testing.T) {
 	msp045AssertTrust(t, final, "denied", false, "denied-trust")
 	if bytes.Equal(baselinePayload, finalPayload) && !final.Services[0].Visible {
 		t.Fatal("liveness callbacks did not update visible state")
+	}
+}
+
+func TestMSP045OlderProjectionCannotOverwriteNewerDenial(t *testing.T) {
+	harness := newMSP045ProductHarness(t, nil)
+	paired := harness.resources.coordinator.captureTrustAdminProjection()
+	if len(paired.remotes) != 1 || !paired.remotes[0].paired {
+		t.Fatalf("paired projection = %+v", paired)
+	}
+	denied := cloneTrustAdminProjection(paired)
+	denied.revision++
+	denied.degradation = "denied-trust"
+	denied.remotes[0].state = "denied"
+	denied.remotes[0].paired = false
+
+	var payloads [][]byte
+	harness.handler.setPublisher(func(payload []byte) {
+		payloads = append(payloads, bytes.Clone(payload))
+	})
+	if err := harness.handler.publishTrustAdminProjection(denied); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.handler.publishTrustAdminProjection(paired); err != nil {
+		t.Fatal(err)
+	}
+	if len(payloads) != 1 {
+		t.Fatalf("ordered publisher emitted %d snapshots, want only the newer denial", len(payloads))
+	}
+	msp045AssertTrust(t, decodeRuntimePayload(t, payloads[0]), "denied", false, "denied-trust")
+}
+
+func TestMSP045ConfiguredRemoteCandidateCannotMutatePublicLiveness(t *testing.T) {
+	harness := newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
+		setup.view.associations = nil
+	})
+	baseline, baselinePayload := msp045Capture(t, harness.handler)
+	if got := harness.resources.coordinator.openPairingWindow(context.Background(), msp045RunToken(t, "same-ski-window"), time.Minute); got != "open_empty" {
+		t.Fatalf("open pairing window = %q", got)
+	}
+	harness.reader.ServicePairingDetailUpdate(harness.remoteSKI, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateReceivedPairingRequest, nil))
+	harness.reader.ServiceShipIDUpdate(harness.remoteSKI, msp045RunToken(t, "candidate-service"))
+	harness.reader.RemoteSKIConnected(nil, harness.remoteSKI)
+	harness.reader.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{Ski: harness.remoteSKI}})
+	candidate, candidatePayload := msp045Capture(t, harness.handler)
+	msp045AssertSamePublicSnapshot(t, baseline, baselinePayload, candidate, candidatePayload)
+}
+
+func TestMSP045UnknownRecoveryReasonOutranksTerminalHold(t *testing.T) {
+	for _, state := range []string{"ADMIN_HOLD", "BACKOFF_ACTIVE"} {
+		t.Run(state, func(t *testing.T) {
+			harness := newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
+				record := firstTrustQuarantineRecord{
+					scope: msp045Opaque(t), state: state, reason: state,
+					retentionBudget: time.Minute, lastControlEpoch: setup.view.control.controlEpoch,
+				}
+				if state == "BACKOFF_ACTIVE" {
+					record.attemptCount = 1
+					record.remainingDelay = time.Second
+				}
+				setup.view.associations = nil
+				setup.view.control.quarantines = []firstTrustQuarantineRecord{record}
+			})
+			harness.resources.coordinator.mu.Lock()
+			harness.resources.coordinator.recoveryReasonCode = "FUTURE_REASON"
+			harness.resources.coordinator.mu.Unlock()
+			snapshot, _ := msp045Capture(t, harness.handler)
+			msp045AssertTrust(t, snapshot, "unknown", false, "denied-trust")
+		})
+	}
+}
+
+func TestMSP045MalformedOpenedAnchorNeverProjectsPaired(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*msp045ProductSetup)
+	}{
+		{name: "zero version", mutate: func(setup *msp045ProductSetup) { setup.anchorRecord.version = 0 }},
+		{name: "zero identity", mutate: func(setup *msp045ProductSetup) { setup.anchorRecord.anchorIdentity = [32]byte{} }},
+		{name: "anchor behind store", mutate: func(setup *msp045ProductSetup) { setup.anchorRecord.manifestGenerationHighWater-- }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			harness := newMSP045ProductHarness(t, test.mutate)
+			snapshot, _ := msp045Capture(t, harness.handler)
+			msp045AssertTrust(t, snapshot, "unknown", false, "denied-trust")
+		})
 	}
 }
 

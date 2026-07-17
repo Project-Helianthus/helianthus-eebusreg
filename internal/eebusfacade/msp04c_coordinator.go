@@ -110,14 +110,8 @@ func (coordinator *firstTrustCoordinator) classifyFirstTrustStartupLocked(storeO
 	if anchorOutcome != "opened_anchor" && !coordinator.firstTrustRecoveredAnchorLocked() {
 		return "QUARANTINED", "DURABILITY_UNKNOWN"
 	}
-	if coordinator.anchorRecord.storeInstance != coordinator.controlView.control.storeInstance {
-		return "QUARANTINED", "CLONE_DETECTED"
-	}
-	if coordinator.controlView.manifest.current.sequence < coordinator.anchorRecord.manifestGenerationHighWater {
-		return "QUARANTINED", "MANIFEST_GENERATION_ROLLBACK"
-	}
-	if coordinator.controlView.control.controlEpoch < coordinator.anchorRecord.controlEpochHighWater {
-		return "QUARANTINED", "CONTROL_EPOCH_ROLLBACK"
+	if reason := coordinator.firstTrustAnchorProductReasonLocked(); reason != "" {
+		return "QUARANTINED", reason
 	}
 	if coordinator.firstTrustInheritedRepairTerminalLocked() {
 		return "UNPAIRED_LOCKED", ""
@@ -147,6 +141,31 @@ func (coordinator *firstTrustCoordinator) classifyFirstTrustStartupLocked(storeO
 		return "PAIRED_TRUSTED", ""
 	}
 	return "UNPAIRED_LOCKED", ""
+}
+
+func (coordinator *firstTrustCoordinator) firstTrustAnchorProductReasonLocked() string {
+	anchor := coordinator.anchorRecord
+	control := coordinator.controlView.control
+	if anchor.pending != nil || anchor.version != firstTrustAnchorVersion || anchor.anchorIdentity == [32]byte{} ||
+		anchor.storeInstance == [32]byte{} || control.storeInstance == [32]byte{} {
+		return "DURABILITY_UNKNOWN"
+	}
+	if anchor.storeInstance != control.storeInstance {
+		return "CLONE_DETECTED"
+	}
+	if coordinator.controlView.manifest.current.sequence < anchor.manifestGenerationHighWater {
+		return "MANIFEST_GENERATION_ROLLBACK"
+	}
+	if coordinator.controlView.manifest.current.sequence != anchor.manifestGenerationHighWater {
+		return "DURABILITY_UNKNOWN"
+	}
+	if control.controlEpoch < anchor.controlEpochHighWater {
+		return "CONTROL_EPOCH_ROLLBACK"
+	}
+	if control.controlEpoch != anchor.controlEpochHighWater {
+		return "DURABILITY_UNKNOWN"
+	}
+	return ""
 }
 
 func firstTrustQuarantineRecordValid(record firstTrustQuarantineRecord, policy firstTrustBackoffPolicy) bool {
@@ -409,8 +428,12 @@ func (coordinator *firstTrustCoordinator) publishFirstTrustControl(
 	anchor firstTrustAnchorRecord,
 ) (firstTrustPreparedPublication, string, firstTrustAnchorRecord) {
 	publication, outcome := coordinator.recoveryStore.PrepareControl(ctx, cloneFirstTrustControlView(working), cloneFirstTrustControlRecord(target), operationID, operationClass)
-	if outcome != "prepared" {
+	switch outcome {
+	case "prepared":
+	case "validation_failed", "commit_not_published":
 		return publication, "prepare_failed", anchor
+	default:
+		return publication, "unknown", anchor
 	}
 	if !firstTrustPreparedPublicationValid(publication, selected, operationID, operationClass) {
 		return publication, "unknown", anchor

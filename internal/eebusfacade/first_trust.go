@@ -148,6 +148,7 @@ type firstTrustCoordinator struct {
 	retryInflight        map[[32]byte]bool
 	recoveryOperation    *firstTrustRecoveryOperation
 	trustAdminProjection *trustAdminProjectionBinding
+	trustAdminRevision   uint64
 
 	outgoingAttemptLanes                  [32]sync.Mutex
 	outgoingAttemptContexts               map[[32]byte]firstTrustOutgoingAttemptRuntime
