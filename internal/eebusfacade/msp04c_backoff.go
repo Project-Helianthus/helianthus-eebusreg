@@ -27,7 +27,8 @@ func (coordinator *firstTrustCoordinator) admitRetry(ctx context.Context, scope 
 		return "request_cancelled"
 	}
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
+	before := coordinator.captureTrustAdminProjectionLocked()
+	defer coordinator.unlockAndNotifyTrustAdminProjectionChange(before)
 	if coordinator.recoveryStore == nil || coordinator.anchor == nil {
 		return "mutation_disabled"
 	}
@@ -100,7 +101,8 @@ func (coordinator *firstTrustCoordinator) recordRetryFailure(ctx context.Context
 		return "request_cancelled"
 	}
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
+	before := coordinator.captureTrustAdminProjectionLocked()
+	defer coordinator.unlockAndNotifyTrustAdminProjectionChange(before)
 	if coordinator.recoveryStore == nil || coordinator.anchor == nil {
 		return "mutation_disabled"
 	}
@@ -170,7 +172,8 @@ func (coordinator *firstTrustCoordinator) checkpointRetry(ctx context.Context, s
 		return "request_cancelled"
 	}
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
+	before := coordinator.captureTrustAdminProjectionLocked()
+	defer coordinator.unlockAndNotifyTrustAdminProjectionChange(before)
 	if coordinator.recoveryStore == nil || coordinator.anchor == nil {
 		return "mutation_disabled"
 	}

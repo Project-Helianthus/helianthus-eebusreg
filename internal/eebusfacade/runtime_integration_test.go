@@ -98,7 +98,7 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	clock.Advance(time.Second)
 	handler.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{Ski: remoteSKI}})
 	visible := decodeRuntimePayload(t, waitRuntimePayload(t, updates))
-	if len(visible.Services) != 1 || !visible.Services[0].Visible || !visible.Services[0].Paired {
+	if len(visible.Services) != 1 || !visible.Services[0].Visible || visible.Services[0].Paired {
 		t.Fatalf("visible services = %+v", visible.Services)
 	}
 

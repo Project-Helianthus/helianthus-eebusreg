@@ -138,6 +138,7 @@ func (coordinator *firstTrustCoordinator) revokeSerialized(ctx context.Context, 
 		coordinator.recovery = "REVOKED"
 		coordinator.recoveryReasonCode = "REVOKED_ASSOCIATION"
 		coordinator.mu.Unlock()
+		coordinator.notifyTrustAdminProjection()
 		return coordinator.finishRevocationWithdrawal(ctx, request, binding, subject)
 	case "unknown":
 		coordinator.recoveryOperation = nil
@@ -146,6 +147,7 @@ func (coordinator *firstTrustCoordinator) revokeSerialized(ctx context.Context, 
 		coordinator.recoveryReasonCode = "DURABILITY_UNKNOWN"
 		coordinator.trustedRemotes = make(map[string]string)
 		coordinator.mu.Unlock()
+		coordinator.notifyTrustAdminProjection()
 		return "revocation_outcome_unknown"
 	default:
 		coordinator.recoveryOperation = nil
@@ -155,6 +157,7 @@ func (coordinator *firstTrustCoordinator) revokeSerialized(ctx context.Context, 
 			coordinator.recoveryReasonCode = ""
 		}
 		coordinator.mu.Unlock()
+		coordinator.notifyTrustAdminProjection()
 		return "failed_closed_unchanged"
 	}
 }
@@ -206,6 +209,7 @@ func (coordinator *firstTrustCoordinator) finishIncompleteRevocation() {
 	coordinator.recovery = "REVOKED"
 	coordinator.recoveryReasonCode = "REVOKED_ASSOCIATION"
 	coordinator.mu.Unlock()
+	coordinator.notifyTrustAdminProjection()
 }
 
 func (coordinator *firstTrustCoordinator) finalizeRevocationReceipt(ctx context.Context, request firstTrustRevocationRequest, binding [32]byte) string {
@@ -239,9 +243,9 @@ func (coordinator *firstTrustCoordinator) finalizeRevocationReceipt(ctx context.
 
 	publication, outcome, anchor := coordinator.publishFirstTrustControl(ctx, working, target, publicationID, "revocation", selected, anchor)
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
 	coordinator.anchorRecord = cloneFirstTrustAnchorRecord(anchor)
 	coordinator.recoveryOperation = nil
+	result := "revocation_withdrawal_incomplete"
 	switch outcome {
 	case "durable":
 		coordinator.controlView = cloneFirstTrustControlView(publication.target)
@@ -249,19 +253,21 @@ func (coordinator *firstTrustCoordinator) finalizeRevocationReceipt(ctx context.
 		coordinator.phase = firstTrustPairingClosed
 		coordinator.recovery = "REVOKED"
 		coordinator.recoveryReasonCode = "REVOKED_ASSOCIATION"
-		return "revoked"
+		result = "revoked"
 	case "unknown":
 		coordinator.phase = firstTrustDisabled
 		coordinator.recovery = "QUARANTINED"
 		coordinator.recoveryReasonCode = "DURABILITY_UNKNOWN"
 		coordinator.trustedRemotes = make(map[string]string)
-		return "revocation_outcome_unknown"
+		result = "revocation_outcome_unknown"
 	default:
 		coordinator.phase = firstTrustPairingClosed
 		coordinator.recovery = "REVOKED"
 		coordinator.recoveryReasonCode = "REVOKED_ASSOCIATION"
-		return "revocation_withdrawal_incomplete"
 	}
+	coordinator.mu.Unlock()
+	coordinator.notifyTrustAdminProjection()
+	return result
 }
 
 func (coordinator *firstTrustCoordinator) firstTrustRevocationSubjectLocked(request firstTrustRevocationRequest) ([]byte, bool) {
@@ -335,6 +341,7 @@ func (coordinator *firstTrustCoordinator) repair(ctx context.Context, request fi
 				coordinator.recovery = "QUARANTINED"
 				coordinator.recoveryReasonCode = "DURABILITY_UNKNOWN"
 				coordinator.mu.Unlock()
+				coordinator.notifyTrustAdminProjection()
 				return "repair_outcome_unknown"
 			}
 			cloned := cloneFirstTrustLocalIdentityBinding(identity)
@@ -348,6 +355,7 @@ func (coordinator *firstTrustCoordinator) repair(ctx context.Context, request fi
 			coordinator.recovery = "QUARANTINED"
 			coordinator.recoveryReasonCode = "DURABILITY_UNKNOWN"
 			coordinator.mu.Unlock()
+			coordinator.notifyTrustAdminProjection()
 			return "repair_outcome_unknown"
 		}
 		anchor = cloneFirstTrustAnchorRecord(created)
@@ -356,9 +364,9 @@ func (coordinator *firstTrustCoordinator) repair(ctx context.Context, request fi
 	publication, publicationOutcome, anchor := coordinator.publishFirstTrustControl(ctx, working, target, request.operationID, request.kind, selected, anchor)
 
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
 	coordinator.anchorRecord = cloneFirstTrustAnchorRecord(anchor)
 	coordinator.recoveryOperation = nil
+	result := "failed_closed_unchanged"
 	switch publicationOutcome {
 	case "durable":
 		coordinator.controlView = cloneFirstTrustControlView(publication.target)
@@ -366,16 +374,17 @@ func (coordinator *firstTrustCoordinator) repair(ctx context.Context, request fi
 		coordinator.recovery = "UNPAIRED_LOCKED"
 		coordinator.recoveryReasonCode = ""
 		coordinator.trustedRemotes = make(map[string]string)
-		return "repaired_unpaired"
+		result = "repaired_unpaired"
 	case "unknown":
 		coordinator.phase = firstTrustDisabled
 		coordinator.recovery = "QUARANTINED"
 		coordinator.recoveryReasonCode = "DURABILITY_UNKNOWN"
 		coordinator.trustedRemotes = make(map[string]string)
-		return "repair_outcome_unknown"
-	default:
-		return "failed_closed_unchanged"
+		result = "repair_outcome_unknown"
 	}
+	coordinator.mu.Unlock()
+	coordinator.notifyTrustAdminProjection()
+	return result
 }
 
 func (coordinator *firstTrustCoordinator) reconcileFirstTrustPublication(ctx context.Context, request firstTrustRepairRequest, binding [32]byte) string {
@@ -439,19 +448,21 @@ func (coordinator *firstTrustCoordinator) reconcileFirstTrustPublication(ctx con
 		}
 	}
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
 	coordinator.recoveryOperation = nil
 	coordinator.anchorRecord = cloneFirstTrustAnchorRecord(anchor)
+	finalResult := result
 	if resolved {
 		coordinator.phase = firstTrustPairingClosed
 		coordinator.recovery = "UNPAIRED_LOCKED"
 		coordinator.recoveryReasonCode = ""
-		return result
+	} else {
+		coordinator.phase = firstTrustDisabled
+		coordinator.recovery = "QUARANTINED"
+		coordinator.recoveryReasonCode = "DURABILITY_UNKNOWN"
 	}
-	coordinator.phase = firstTrustDisabled
-	coordinator.recovery = "QUARANTINED"
-	coordinator.recoveryReasonCode = "DURABILITY_UNKNOWN"
-	return result
+	coordinator.mu.Unlock()
+	coordinator.notifyTrustAdminProjection()
+	return finalResult
 }
 
 func (coordinator *firstTrustCoordinator) firstTrustOperationReplayLocked(operationID [32]byte, operationClass string, binding [32]byte) (string, bool) {

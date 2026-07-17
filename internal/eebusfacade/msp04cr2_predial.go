@@ -421,7 +421,8 @@ func (coordinator *firstTrustCoordinator) publishOutgoingAttemptControl(
 		ctx, working, target, operationID, operationClass, selected, anchor,
 	)
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
+	before := coordinator.captureTrustAdminProjectionLocked()
+	defer coordinator.unlockAndNotifyTrustAdminProjectionChange(before)
 	coordinator.anchorRecord = cloneFirstTrustAnchorRecord(anchor)
 	switch outcome {
 	case "durable":

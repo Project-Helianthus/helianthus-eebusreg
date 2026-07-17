@@ -254,6 +254,12 @@ func attachRuntimeFirstTrust(
 	if err := reader.attachFirstTrust(facade); err != nil {
 		return err
 	}
+	if reader.observation != nil {
+		if err := reader.observation.bindTrustAdminProjection(resources.coordinator); err != nil {
+			reader.detachFirstTrust(facade)
+			return err
+		}
+	}
 	return nil
 }
 

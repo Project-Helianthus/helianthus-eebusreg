@@ -44,6 +44,10 @@ type runtimeBackend interface {
 	Close() error
 }
 
+type runtimeTerminalSnapshotProvider interface {
+	TerminalSnapshot() (SnapshotV1, bool)
+}
+
 type runtimeBackendFactory func(context.Context, Config) (runtimeBackend, error)
 
 type runtimeStartAttempt struct {
@@ -75,7 +79,11 @@ type runtimeImplementation struct {
 }
 
 type facadeRuntimeBackend struct {
-	backend eebusfacade.Backend
+	backend     eebusfacade.Backend
+	mu          sync.Mutex
+	closing     bool
+	terminal    SnapshotV1
+	hasTerminal bool
 }
 
 func New(config Config) (Runtime, error) {
@@ -238,7 +246,13 @@ func (runtime *runtimeImplementation) Shutdown() error {
 	}
 
 	runtime.mu.Lock()
-	terminalErr := runtime.freezeTerminalSnapshotLocked()
+	var terminalErr error
+	if provider, ok := backend.(runtimeTerminalSnapshotProvider); ok {
+		if terminal, exists := provider.TerminalSnapshot(); exists {
+			terminalErr = runtime.acceptTerminalSnapshotLocked(terminal)
+		}
+	}
+	terminalErr = errors.Join(terminalErr, runtime.freezeTerminalSnapshotLocked())
 	workerErr := runtime.workerErr
 	runtime.mu.Unlock()
 
@@ -249,6 +263,16 @@ func (runtime *runtimeImplementation) Shutdown() error {
 	close(completion)
 	runtime.mu.Unlock()
 	return result
+}
+
+func (runtime *runtimeImplementation) acceptTerminalSnapshotLocked(source SnapshotV1) error {
+	snapshot, err := NewSnapshotV1(source)
+	if err != nil {
+		return fmt.Errorf("accept terminal runtime snapshot: %w", err)
+	}
+	runtime.snapshot = snapshot.Clone()
+	runtime.hasSnapshot = true
+	return nil
 }
 
 func (runtime *runtimeImplementation) Snapshot() (SnapshotV1, error) {
@@ -380,6 +404,12 @@ func (backend *facadeRuntimeBackend) Run(ctx context.Context, publish func(Snaps
 			parseMu.Unlock()
 			return
 		}
+		backend.mu.Lock()
+		if backend.closing {
+			backend.terminal = snapshot.Clone()
+			backend.hasTerminal = true
+		}
+		backend.mu.Unlock()
 		publish(snapshot)
 	})
 	parseMu.Lock()
@@ -388,7 +418,19 @@ func (backend *facadeRuntimeBackend) Run(ctx context.Context, publish func(Snaps
 }
 
 func (backend *facadeRuntimeBackend) Close() error {
+	backend.mu.Lock()
+	backend.closing = true
+	backend.mu.Unlock()
 	return backend.backend.Close()
+}
+
+func (backend *facadeRuntimeBackend) TerminalSnapshot() (SnapshotV1, bool) {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if !backend.hasTerminal {
+		return SnapshotV1{}, false
+	}
+	return backend.terminal.Clone(), true
 }
 
 func normalizeRuntimeConfig(config Config) (Config, error) {
