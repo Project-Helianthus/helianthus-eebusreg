@@ -4,7 +4,7 @@ go 1.22.0
 
 require (
 	github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.1
-	github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.1
+	github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.2
 	github.com/Project-Helianthus/helianthus-spine-go v0.7.1-helianthus.1
 	github.com/gorilla/websocket v1.5.3
 	golang.org/x/mod v0.21.0

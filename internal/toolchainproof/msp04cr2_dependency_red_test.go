@@ -25,7 +25,7 @@ func TestMSP04CR2DependencyClosureUsesReviewedHelianthusReleases(t *testing.T) {
 		version string
 	}{
 		{path: "github.com/Project-Helianthus/helianthus-eebus-go", version: "v0.7.1-helianthus.1"},
-		{path: "github.com/Project-Helianthus/helianthus-ship-go", version: "v0.6.1-helianthus.1"},
+		{path: "github.com/Project-Helianthus/helianthus-ship-go", version: "v0.6.1-helianthus.2"},
 		{path: "github.com/Project-Helianthus/helianthus-spine-go", version: "v0.7.1-helianthus.1"},
 	}
 	got := make(map[string]string, len(file.Require))
