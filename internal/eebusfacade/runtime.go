@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
+	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
-	eebusapi "github.com/enbility/eebus-go/api"
-	shipapi "github.com/enbility/ship-go/api"
-	shipcert "github.com/enbility/ship-go/cert"
-	spineapi "github.com/enbility/spine-go/api"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	shipcert "github.com/Project-Helianthus/helianthus-ship-go/cert"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 )
 
 var (
@@ -294,7 +294,7 @@ func loadProtectedRuntimeMaterial(context.Context, string) (runtimeMaterial, err
 }
 
 func newEEBusService(RuntimeConfig, runtimeMaterial, eebusapi.ServiceReaderInterface) (runtimeService, error) {
-	return nil, fmt.Errorf("%w: ship-go v0.6.0 binds the listener on all interfaces", errScopedSHIPListenerUnavailable)
+	return nil, fmt.Errorf("%w: helianthus-ship-go v0.6.1-helianthus.1 binds the listener on all interfaces", errScopedSHIPListenerUnavailable)
 }
 
 func validateRuntimeMaterial(material runtimeMaterial) error {

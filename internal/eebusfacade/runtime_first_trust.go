@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusstore"
-	eebusapi "github.com/enbility/eebus-go/api"
-	shipapi "github.com/enbility/ship-go/api"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 )
 
 type runtimeFirstTrustAuthorization struct {

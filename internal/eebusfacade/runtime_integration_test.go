@@ -14,14 +14,14 @@ import (
 	"testing"
 	"time"
 
+	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
+	eebusmocks "github.com/Project-Helianthus/helianthus-eebus-go/mocks"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusstore"
-	eebusapi "github.com/enbility/eebus-go/api"
-	eebusmocks "github.com/enbility/eebus-go/mocks"
-	shipapi "github.com/enbility/ship-go/api"
-	shipcert "github.com/enbility/ship-go/cert"
-	spineapi "github.com/enbility/spine-go/api"
-	spinemocks "github.com/enbility/spine-go/mocks"
-	spinemodel "github.com/enbility/spine-go/model"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	shipcert "github.com/Project-Helianthus/helianthus-ship-go/cert"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	spinemocks "github.com/Project-Helianthus/helianthus-spine-go/mocks"
+	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testing.T) {

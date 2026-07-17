@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/enbility/ship-go/cert"
+	"github.com/Project-Helianthus/helianthus-ship-go/cert"
 )
 
 func TestG19ReplayFixtureIsDeterministicAndPublicSafe(t *testing.T) {

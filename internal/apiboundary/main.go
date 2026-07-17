@@ -716,7 +716,7 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 	modulePath := moduleFile.Module.Mod.Path
 	runtimeLifecycleActive := false
 	for _, required := range moduleFile.Require {
-		if required.Mod.Path == "github.com/enbility/eebus-go" {
+		if required.Mod.Path == "github.com/Project-Helianthus/helianthus-eebus-go" {
 			runtimeLifecycleActive = true
 			break
 		}
@@ -784,8 +784,8 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 		internalAliases := internalImportAliases(file, modulePath)
 		for _, imp := range file.Imports {
 			importPath := strings.Trim(imp.Path.Value, `"`)
-			if !internal && strings.Contains(importPath, "github.com/enbility") {
-				violations = append(violations, at(fset, imp.Pos(), rel, "direct enbility imports are allowed only under internal/"))
+			if !internal && isProtocolImplementationImport(importPath) {
+				violations = append(violations, at(fset, imp.Pos(), rel, "direct protocol implementation imports are allowed only under internal/"))
 			}
 			rootRuntimeImplementation := !internal && !testFile && filepath.ToSlash(filepath.Dir(rel)) == "." && file.Name.Name == "eebusruntime"
 			facadeImplementationImport := rootRuntimeImplementation && importPath == modulePath+"/internal/eebusfacade" &&
@@ -875,6 +875,19 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 		return manifest.Packages[i].ImportPath < manifest.Packages[j].ImportPath
 	})
 	return manifest, violations, nil
+}
+
+func isProtocolImplementationImport(path string) bool {
+	for _, prefix := range []string{
+		"github.com/Project-Helianthus/helianthus-eebus-go",
+		"github.com/Project-Helianthus/helianthus-ship-go",
+		"github.com/Project-Helianthus/helianthus-spine-go",
+	} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func inspectRuntimeExports(modulePath string, packages map[string]*packageInventory, lifecycleActive bool) []string {

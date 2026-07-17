@@ -10,7 +10,7 @@ import (
 func TestMSP055RuntimeDoesNotImportUnscopedEEBusService(t *testing.T) {
 	for _, file := range parseImplementationFiles(t) {
 		for _, imported := range file.Imports {
-			if strings.Trim(imported.Path.Value, `"`) == "github.com/enbility/eebus-go/service" {
+			if strings.Trim(imported.Path.Value, `"`) == "github.com/Project-Helianthus/helianthus-eebus-go/service" {
 				t.Fatal("internal runtime imports eebus-go service with a wildcard SHIP listener")
 			}
 		}

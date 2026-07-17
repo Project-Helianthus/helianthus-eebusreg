@@ -7,12 +7,12 @@ import (
 	"sync"
 	"time"
 
-	eebusapi "github.com/enbility/eebus-go/api"
-	"github.com/enbility/eebus-go/service"
-	shipapi "github.com/enbility/ship-go/api"
-	"github.com/enbility/ship-go/cert"
-	shipmdns "github.com/enbility/ship-go/mdns"
-	"github.com/enbility/spine-go/model"
+	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/service"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	"github.com/Project-Helianthus/helianthus-ship-go/cert"
+	shipmdns "github.com/Project-Helianthus/helianthus-ship-go/mdns"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 type fakePeerOptions struct {

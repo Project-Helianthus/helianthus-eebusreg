@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusstore"
-	shipapi "github.com/enbility/ship-go/api"
-	shipcert "github.com/enbility/ship-go/cert"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	shipcert "github.com/Project-Helianthus/helianthus-ship-go/cert"
 )
 
 func TestMSP04CRuntimeRecoveryRevocationAndFreshLineageSurviveRealStoreRestart(t *testing.T) {

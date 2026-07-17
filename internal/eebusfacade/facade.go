@@ -7,12 +7,12 @@ import (
 	"sort"
 	"strconv"
 
-	eebusapi "github.com/enbility/eebus-go/api"
+	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
 )
 
 const (
-	EEBusGoModulePath = "github.com/enbility/eebus-go"
-	EEBusGoVersion    = "v0.7.0"
+	EEBusGoModulePath = "github.com/Project-Helianthus/helianthus-eebus-go"
+	EEBusGoVersion    = "v0.7.1-helianthus.1"
 	apiImportPath     = EEBusGoModulePath + "/api"
 )
 
@@ -179,14 +179,14 @@ func expectedServiceReaderCallbackSignatures() []callbackSignature {
 		{
 			Name: "RemoteSKIConnected",
 			Inputs: []string{
-				"github.com/enbility/eebus-go/api.ServiceInterface",
+				"github.com/Project-Helianthus/helianthus-eebus-go/api.ServiceInterface",
 				"string",
 			},
 		},
 		{
 			Name: "RemoteSKIDisconnected",
 			Inputs: []string{
-				"github.com/enbility/eebus-go/api.ServiceInterface",
+				"github.com/Project-Helianthus/helianthus-eebus-go/api.ServiceInterface",
 				"string",
 			},
 		},
@@ -194,7 +194,7 @@ func expectedServiceReaderCallbackSignatures() []callbackSignature {
 			Name: "ServicePairingDetailUpdate",
 			Inputs: []string{
 				"string",
-				"*github.com/enbility/ship-go/api.ConnectionStateDetail",
+				"*github.com/Project-Helianthus/helianthus-ship-go/api.ConnectionStateDetail",
 			},
 		},
 		{
@@ -207,8 +207,8 @@ func expectedServiceReaderCallbackSignatures() []callbackSignature {
 		{
 			Name: "VisibleRemoteServicesUpdated",
 			Inputs: []string{
-				"github.com/enbility/eebus-go/api.ServiceInterface",
-				"[]github.com/enbility/ship-go/api.RemoteService",
+				"github.com/Project-Helianthus/helianthus-eebus-go/api.ServiceInterface",
+				"[]github.com/Project-Helianthus/helianthus-ship-go/api.RemoteService",
 			},
 		},
 	}
