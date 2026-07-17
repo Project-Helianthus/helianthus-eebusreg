@@ -162,6 +162,87 @@ func TestMSP04CR2ExecutedArtifactRejectsCallbackOnlyAccountingAndRedactsPrivateB
 	}
 }
 
+func TestMSP04CR2ProductionProofUsesCanonicalStoreAndObservedNetwork(t *testing.T) {
+	for _, scenario := range []string{"permit", "policy_denied"} {
+		t.Run(scenario, func(t *testing.T) {
+			peer := newMSP04CR2FakePeer(t, "")
+			options := peer.options(t, scenario)
+			proof, err := executeMSP04CR2Proof(t, options)
+			if err != nil {
+				t.Fatalf("execute %s production proof: %v", scenario, err)
+			}
+			if scenario == "permit" {
+				peer.requireAccept(t)
+			}
+			requests, accepts := peer.requestCount(), peer.acceptCount()
+			if len(proof.dials) != requests || len(proof.accepts) != accepts {
+				t.Fatalf("proof dial/accept observations = %d/%d, fake peer observed %d/%d", len(proof.dials), len(proof.accepts), requests, accepts)
+			}
+			assertMSP04CR2CanonicalProofStore(t, options.StateRoot)
+		})
+	}
+}
+
+func TestMSP04CR2ExecutedArtifactCannotBeForgedWithoutDialAndAcceptObservations(t *testing.T) {
+	attemptID := [32]byte{1}
+	scope := [32]byte{2}
+	forged := msp04cr2SyntheticProof{
+		scenario:       "permit",
+		evidenceStatus: "PASS",
+		reservations: []msp04cr2PrivateReservation{{
+			attemptID: attemptID, scope: scope, controlEpoch: 1, path: "/ship/",
+		}},
+		permits: []msp04cr2PrivatePermit{{
+			attemptID: attemptID, scope: scope, controlEpoch: 1, contextID: "forged_context",
+		}},
+		dials:   []msp04cr2PrivateDial{{attemptID: attemptID, path: "/ship/", contextID: "forged_context"}},
+		accepts: []msp04cr2PrivateAccept{{attemptID: attemptID, path: "/ship/"}},
+	}
+	callbackOnly := msp04cr2SyntheticProof{scenario: "callback_only", evidenceStatus: "FAIL"}
+	payload, err := buildMSP04CR2ExecutedArtifact([]msp04cr2SyntheticProof{forged, callbackOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifact struct {
+		Gates []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"gates"`
+	}
+	if err := json.Unmarshal(payload, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	if len(artifact.Gates) != 3 {
+		t.Fatalf("forged artifact gate count = %d, want 3", len(artifact.Gates))
+	}
+	for _, gate := range artifact.Gates {
+		if gate.Status != "FAIL" {
+			t.Errorf("%s status from unobserved synthetic accounting = %q, want FAIL", gate.ID, gate.Status)
+		}
+	}
+}
+
+func assertMSP04CR2CanonicalProofStore(t *testing.T, root string) {
+	t.Helper()
+	shadow := filepath.Join(root, ".msp04cr2-state.json")
+	if _, err := os.Lstat(shadow); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("production proof used shadow state %q instead of the canonical durable store: %v", shadow, err)
+	}
+	generations, err := os.ReadDir(filepath.Join(root, "generations"))
+	if err != nil || len(generations) == 0 {
+		t.Fatalf("production proof canonical generations = %d/%v, want at least one durable generation", len(generations), err)
+	}
+	manifestFound := false
+	for _, name := range []string{"MANIFEST.A", "MANIFEST.B"} {
+		if info, statErr := os.Stat(filepath.Join(root, name)); statErr == nil && info.Mode().IsRegular() {
+			manifestFound = true
+		}
+	}
+	if !manifestFound {
+		t.Fatal("production proof did not publish a canonical manifest slot")
+	}
+}
+
 func assertMSP04CR2Counts(t *testing.T, proof msp04cr2SyntheticProof, reservations, permits, dials, accepts int) {
 	t.Helper()
 	if len(proof.reservations) != reservations || len(proof.permits) != permits || len(proof.dials) != dials || len(proof.accepts) != accepts {
@@ -360,6 +441,12 @@ func (peer *msp04cr2FakePeer) requestCount() int {
 	peer.mu.Lock()
 	defer peer.mu.Unlock()
 	return peer.requestTotal
+}
+
+func (peer *msp04cr2FakePeer) acceptCount() int {
+	peer.mu.Lock()
+	defer peer.mu.Unlock()
+	return peer.acceptTotal
 }
 
 func (peer *msp04cr2FakePeer) setCloseAfterAccepts(count int) {
