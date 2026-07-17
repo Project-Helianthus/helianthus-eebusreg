@@ -56,6 +56,9 @@ func (coordinator *firstTrustCoordinator) admitRetry(ctx context.Context, scope 
 		return "retry_admitted"
 	}
 	if coordinator.retryInflight[scope] {
+		if coordinator.firstTrustOutgoingAttemptForScopeLocked(scope) >= 0 {
+			return "retry_admitted"
+		}
 		return "attempt_in_progress"
 	}
 	switch record.state {

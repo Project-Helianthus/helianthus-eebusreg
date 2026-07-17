@@ -34,9 +34,9 @@ func (coordinator *firstTrustCoordinator) reopenWithRecovery(ctx context.Context
 	}
 
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
-	coordinator.reopening = false
 	if ctx.Err() != nil {
+		coordinator.reopening = false
+		coordinator.mu.Unlock()
 		return "reopen_cancelled"
 	}
 	coordinator.controlView = cloneFirstTrustControlView(view)
@@ -45,6 +45,28 @@ func (coordinator *firstTrustCoordinator) reopenWithRecovery(ctx context.Context
 	coordinator.retryArms = make(map[[32]byte]firstTrustRetryArm)
 	coordinator.retryInflight = make(map[[32]byte]bool)
 	coordinator.trustedRemotes = make(map[string]string)
+	coordinator.cancelAllOutgoingAttemptContextsLocked()
+	prechargeState, prechargeReason := coordinator.classifyFirstTrustStartupLocked(storeOutcome, anchorOutcome)
+	chargeAllowed := prechargeState == "PAIRED_TRUSTED" || prechargeState == "UNPAIRED_LOCKED" ||
+		prechargeState == "QUARANTINED" && prechargeReason != "DURABILITY_UNKNOWN" && prechargeReason != "HOST_BINDING_MISMATCH" &&
+			prechargeReason != "CLONE_DETECTED" && prechargeReason != "MANIFEST_GENERATION_ROLLBACK" && prechargeReason != "CONTROL_EPOCH_ROLLBACK"
+	hasUnresolvedAttempts := len(coordinator.controlView.control.attempts) != 0
+	coordinator.mu.Unlock()
+
+	chargeOutcome := "not_required"
+	if hasUnresolvedAttempts && chargeAllowed {
+		chargeOutcome = coordinator.chargeRestartedOutgoingAttempts(ctx)
+	}
+
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	coordinator.reopening = false
+	if hasUnresolvedAttempts && (!chargeAllowed || chargeOutcome != "charged") {
+		coordinator.phase = firstTrustDisabled
+		coordinator.recovery = "QUARANTINED"
+		coordinator.recoveryReasonCode = "DURABILITY_UNKNOWN"
+		return storeOutcome
+	}
 
 	state, reason := coordinator.classifyFirstTrustStartupLocked(storeOutcome, anchorOutcome)
 	coordinator.recovery, coordinator.recoveryReasonCode = state, reason
@@ -60,6 +82,9 @@ func (coordinator *firstTrustCoordinator) reopenWithRecovery(ctx context.Context
 	phase, recovery := normalizeFirstTrustProduct(coordinator.phaseNameLocked(), coordinator.recovery, map[bool]string{true: "CORRUPT_STORE"}[state == "CORRUPT_STORE"])
 	coordinator.phase = firstTrustPhaseFromName(phase)
 	coordinator.recovery = recovery
+	if chargeOutcome == "charged" {
+		return "pairing_closed"
+	}
 	if phase == "PAIRING_CLOSED" {
 		return "pairing_closed"
 	}

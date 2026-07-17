@@ -19,6 +19,7 @@ const (
 	firstTrustQuarantineRetention             = 24 * time.Hour
 	firstTrustMaximumTombstones               = 128
 	firstTrustMaximumDurableReceipts          = 128
+	firstTrustMaximumOutgoingAttempts         = 128
 	firstTrustAnchorVersion            uint64 = 1
 )
 
@@ -92,6 +93,58 @@ type firstTrustDurableReceipt struct {
 	terminal       bool
 }
 
+type firstTrustOutgoingAttemptEndpoint struct {
+	host string
+	port uint16
+}
+
+type firstTrustOutgoingAttemptRequest struct {
+	remoteSKI []byte
+	endpoint  firstTrustOutgoingAttemptEndpoint
+	path      string
+}
+
+type firstTrustOutgoingAttemptMetadata struct {
+	attemptID    [32]byte
+	scope        [32]byte
+	controlEpoch uint64
+}
+
+type firstTrustOutgoingAttemptRecord struct {
+	state                  string
+	attemptID              [32]byte
+	remoteSKI              []byte
+	scope                  [32]byte
+	controlEpoch           uint64
+	associationLineage     [32]byte
+	endpoint               firstTrustOutgoingAttemptEndpoint
+	path                   string
+	cancellationGeneration uint64
+	reservationOrder       uint64
+	reservationTimestamp   int64
+	attemptCountBefore     uint64
+}
+
+type firstTrustOutgoingAttemptHandle struct {
+	metadata               firstTrustOutgoingAttemptMetadata
+	context                context.Context
+	cancellationGeneration uint64
+}
+
+type firstTrustOutgoingAttemptPermit struct {
+	decision string
+	reason   string
+	metadata firstTrustOutgoingAttemptMetadata
+	context  context.Context
+}
+
+type firstTrustOutgoingAttemptRuntime struct {
+	metadata               firstTrustOutgoingAttemptMetadata
+	context                context.Context
+	cancel                 context.CancelFunc
+	cancellationGeneration uint64
+}
+
 type firstTrustLocalIdentityBinding struct {
 	certificateChainDER [][]byte
 	providerID          string
@@ -108,6 +161,7 @@ type firstTrustControlRecord struct {
 	tombstones          []firstTrustRevocationTombstone
 	quarantines         []firstTrustQuarantineRecord
 	receipts            []firstTrustDurableReceipt
+	attempts            []firstTrustOutgoingAttemptRecord
 	operationHighWater  uint64
 	repairSequence      uint64
 	replacementIdentity *firstTrustLocalIdentityBinding
@@ -317,10 +371,20 @@ func cloneFirstTrustControlRecord(source firstTrustControlRecord) firstTrustCont
 	result.tombstones = append([]firstTrustRevocationTombstone(nil), source.tombstones...)
 	result.quarantines = append([]firstTrustQuarantineRecord(nil), source.quarantines...)
 	result.receipts = append([]firstTrustDurableReceipt(nil), source.receipts...)
+	result.attempts = make([]firstTrustOutgoingAttemptRecord, len(source.attempts))
+	for index, attempt := range source.attempts {
+		result.attempts[index] = cloneFirstTrustOutgoingAttemptRecord(attempt)
+	}
 	if source.replacementIdentity != nil {
 		identity := cloneFirstTrustLocalIdentityBinding(*source.replacementIdentity)
 		result.replacementIdentity = &identity
 	}
+	return result
+}
+
+func cloneFirstTrustOutgoingAttemptRecord(source firstTrustOutgoingAttemptRecord) firstTrustOutgoingAttemptRecord {
+	result := source
+	result.remoteSKI = bytes.Clone(source.remoteSKI)
 	return result
 }
 
