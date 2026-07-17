@@ -299,6 +299,8 @@ type msp04cr2FakePeer struct {
 	mu                sync.Mutex
 	requestTotal      int
 	acceptTotal       int
+	requestPaths      []string
+	acceptPaths       []string
 	closeAfterAccepts int
 }
 
@@ -350,13 +352,19 @@ func (peer *msp04cr2FakePeer) options(t *testing.T, scenario string) msp04cr2Syn
 	return msp04cr2SyntheticProofOptions{
 		Scenario: scenario, StateRoot: stateRoot, RemoteSKI: peer.remoteSKI,
 		EndpointHost: peer.host, EndpointPort: peer.port, SelectedPath: peer.selectedPath,
-		FallbackPath: "", TLSConfig: peer.clientTLS.Clone(),
+		FallbackPath: "", TLSConfig: peer.clientTLS.Clone(), ObserveNetwork: peer.networkSnapshot,
+		ReleaseNetwork: peer.releaseNetwork,
 	}
+}
+
+func (peer *msp04cr2FakePeer) releaseNetwork() {
+	peer.releaseOnce.Do(func() { close(peer.release) })
 }
 
 func (peer *msp04cr2FakePeer) handle(writer http.ResponseWriter, request *http.Request) {
 	peer.mu.Lock()
 	peer.requestTotal++
+	peer.requestPaths = append(peer.requestPaths, request.URL.Path)
 	peer.mu.Unlock()
 	select {
 	case peer.requests <- request.URL.Path:
@@ -377,6 +385,7 @@ func (peer *msp04cr2FakePeer) handle(writer http.ResponseWriter, request *http.R
 	}
 	peer.mu.Lock()
 	peer.acceptTotal++
+	peer.acceptPaths = append(peer.acceptPaths, request.URL.Path)
 	closeNow := peer.closeAfterAccepts > 0 && peer.acceptTotal <= peer.closeAfterAccepts
 	peer.mu.Unlock()
 	if closeNow {
@@ -447,6 +456,12 @@ func (peer *msp04cr2FakePeer) acceptCount() int {
 	peer.mu.Lock()
 	defer peer.mu.Unlock()
 	return peer.acceptTotal
+}
+
+func (peer *msp04cr2FakePeer) networkSnapshot() ([]string, []string) {
+	peer.mu.Lock()
+	defer peer.mu.Unlock()
+	return append([]string(nil), peer.requestPaths...), append([]string(nil), peer.acceptPaths...)
 }
 
 func (peer *msp04cr2FakePeer) setCloseAfterAccepts(count int) {

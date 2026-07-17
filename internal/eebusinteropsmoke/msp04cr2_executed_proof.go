@@ -2,33 +2,25 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"net"
-	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
-	"time"
-
-	"github.com/gorilla/websocket"
 )
 
-const msp04cr2MaximumProofAttempts = 4
-
 type msp04cr2SyntheticProofOptions struct {
-	Scenario     string
-	StateRoot    string
-	RemoteSKI    string
-	EndpointHost string
-	EndpointPort uint16
-	SelectedPath string
-	FallbackPath string
-	TLSConfig    *tls.Config
+	Scenario       string
+	StateRoot      string
+	RemoteSKI      string
+	EndpointHost   string
+	EndpointPort   uint16
+	SelectedPath   string
+	FallbackPath   string
+	TLSConfig      *tls.Config
+	ObserveNetwork func() ([]string, []string)
+	ReleaseNetwork func()
 }
 
 type msp04cr2PrivateEvent struct {
@@ -63,6 +55,13 @@ type msp04cr2PrivateAccept struct {
 	path      string
 }
 
+type msp04cr2ObservedNetwork struct {
+	composition      string
+	requests         []string
+	accepts          []string
+	callbackRejected bool
+}
+
 type msp04cr2SyntheticProof struct {
 	scenario       string
 	evidenceStatus string
@@ -71,25 +70,52 @@ type msp04cr2SyntheticProof struct {
 	permits        []msp04cr2PrivatePermit
 	dials          []msp04cr2PrivateDial
 	accepts        []msp04cr2PrivateAccept
+	observed       *msp04cr2ObservedNetwork
 }
 
-type msp04cr2PrivateState struct {
-	ControlEpoch uint64                        `json:"control_epoch"`
-	Attempts     []msp04cr2PrivateStateAttempt `json:"attempts"`
+type msp04cr2ProductionProofRunner func(
+	context.Context,
+	string,
+	string,
+	string,
+	string,
+	uint16,
+	string,
+	func() ([]string, []string),
+	func(),
+) ([]byte, error)
+
+var runMSP04CR2ProductionProof msp04cr2ProductionProofRunner = func(
+	context.Context,
+	string,
+	string,
+	string,
+	string,
+	uint16,
+	string,
+	func() ([]string, []string),
+	func(),
+) ([]byte, error) {
+	return nil, errors.New("MSP-04C-R2 production proof runner is unavailable")
 }
 
-type msp04cr2PrivateStateAttempt struct {
+type msp04cr2WireBinding struct {
 	AttemptID    string `json:"attempt_id"`
-	RemoteSKI    string `json:"remote_ski"`
 	Scope        string `json:"scope"`
 	ControlEpoch uint64 `json:"control_epoch"`
-	EndpointHost string `json:"endpoint_host"`
-	EndpointPort uint16 `json:"endpoint_port"`
 	Path         string `json:"path"`
-	State        uint8  `json:"state"`
+	ContextID    string `json:"context_id"`
 }
 
-type msp04cr2ProofContextKey struct{}
+type msp04cr2WireProof struct {
+	Composition      string                `json:"composition"`
+	Scenario         string                `json:"scenario"`
+	Reservations     []msp04cr2WireBinding `json:"reservations"`
+	Permits          []msp04cr2WireBinding `json:"permits"`
+	Requests         []string              `json:"requests"`
+	Accepts          []string              `json:"accepts"`
+	CallbackRejected bool                  `json:"callback_rejected"`
+}
 
 func executeMSP04CR2SyntheticProof(
 	ctx context.Context,
@@ -106,116 +132,108 @@ func executeMSP04CR2SyntheticProof(
 		return proof, err
 	}
 
-	switch options.Scenario {
-	case "reserve_failure":
-		proof.events = append(proof.events, msp04cr2PrivateEvent{kind: "reservation_failed"})
-		proof.evidenceStatus = "PASS"
-		return proof, nil
-	case "policy_denied", "backoff", "quarantined", "revoked":
-		proof.events = append(proof.events, msp04cr2PrivateEvent{kind: "pre_effect_denied"})
-		proof.evidenceStatus = "PASS"
-		return proof, nil
-	case "callback_only":
-		proof.events = append(proof.events, msp04cr2PrivateEvent{kind: "callback_observed"})
-		return proof, nil
+	payload, err := runMSP04CR2ProductionProof(
+		ctx,
+		options.Scenario,
+		options.StateRoot,
+		options.RemoteSKI,
+		options.EndpointHost,
+		options.EndpointPort,
+		options.SelectedPath,
+		options.ObserveNetwork,
+		options.ReleaseNetwork,
+	)
+	if err != nil {
+		return proof, err
 	}
-
-	state := msp04cr2PrivateState{Attempts: make([]msp04cr2PrivateStateAttempt, 0, 2)}
-	runAttempt := func(path string, ordinal int) error {
-		if ordinal < 1 || ordinal > msp04cr2MaximumProofAttempts {
-			return errors.New("proof attempt bound exceeded")
-		}
-		attemptID := msp04cr2ProofDigest(options, "attempt", ordinal, path)
-		scope := msp04cr2ProofDigest(options, "scope", ordinal, path)
-		state.ControlEpoch++
-		reservation := msp04cr2PrivateReservation{
-			attemptID: attemptID, scope: scope, controlEpoch: state.ControlEpoch, path: path,
-		}
-		state.Attempts = append(state.Attempts, msp04cr2PrivateStateAttempt{
-			AttemptID: hex.EncodeToString(attemptID[:]), RemoteSKI: options.RemoteSKI,
-			Scope: hex.EncodeToString(scope[:]), ControlEpoch: state.ControlEpoch,
-			EndpointHost: options.EndpointHost, EndpointPort: options.EndpointPort, Path: path, State: 1,
-		})
-		if err := writeMSP04CR2PrivateState(options.StateRoot, state); err != nil {
-			state.Attempts = state.Attempts[:len(state.Attempts)-1]
-			return fmt.Errorf("durable reservation: %w", err)
-		}
-		proof.reservations = append(proof.reservations, reservation)
-		proof.events = append(proof.events,
-			msp04cr2PrivateEvent{kind: "reservation_committed", attemptID: attemptID, controlEpoch: reservation.controlEpoch, path: path},
-			msp04cr2PrivateEvent{kind: "handle_returned", attemptID: attemptID, controlEpoch: reservation.controlEpoch, path: path},
-		)
-
-		state.ControlEpoch++
-		state.Attempts[len(state.Attempts)-1].State = 2
-		if err := writeMSP04CR2PrivateState(options.StateRoot, state); err != nil {
-			return fmt.Errorf("durable launch: %w", err)
-		}
-		contextID := fmt.Sprintf("context_%d", ordinal)
-		attemptContext, cancel := context.WithCancel(context.WithValue(ctx, msp04cr2ProofContextKey{}, contextID))
-		defer cancel()
-		proof.events = append(proof.events, msp04cr2PrivateEvent{
-			kind: "launch_committed", attemptID: attemptID, controlEpoch: reservation.controlEpoch, path: path,
-		})
-		proof.permits = append(proof.permits, msp04cr2PrivatePermit{
-			attemptID: attemptID, scope: scope, controlEpoch: reservation.controlEpoch, contextID: contextID,
-		})
-		proof.events = append(proof.events, msp04cr2PrivateEvent{
-			kind: "permit_returned", attemptID: attemptID, controlEpoch: reservation.controlEpoch, path: path,
-		})
-
-		observedContext, _ := attemptContext.Value(msp04cr2ProofContextKey{}).(string)
-		proof.dials = append(proof.dials, msp04cr2PrivateDial{attemptID: attemptID, path: path, contextID: observedContext})
-		proof.events = append(proof.events, msp04cr2PrivateEvent{
-			kind: "dial_context", attemptID: attemptID, controlEpoch: reservation.controlEpoch, path: path,
-		})
-		dialer := websocket.Dialer{
-			HandshakeTimeout: time.Second,
-			TLSClientConfig:  options.TLSConfig.Clone(),
-			Subprotocols:     []string{"ship"},
-		}
-		address := "wss://" + net.JoinHostPort(options.EndpointHost, fmt.Sprintf("%d", options.EndpointPort)) + path
-		connection, response, dialErr := dialer.DialContext(attemptContext, address, http.Header{})
-		if response != nil && response.Body != nil {
-			_ = response.Body.Close()
-		}
-		if connection != nil {
-			proof.accepts = append(proof.accepts, msp04cr2PrivateAccept{attemptID: attemptID, path: path})
-			proof.events = append(proof.events, msp04cr2PrivateEvent{
-				kind: "peer_accept", attemptID: attemptID, controlEpoch: reservation.controlEpoch, path: path,
-			})
-			_ = connection.Close()
-		}
-		state.ControlEpoch++
-		state.Attempts = state.Attempts[:len(state.Attempts)-1]
-		if persistErr := writeMSP04CR2PrivateState(options.StateRoot, state); persistErr != nil {
-			return fmt.Errorf("durable completion: %w", persistErr)
-		}
-		return dialErr
+	var wire msp04cr2WireProof
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		return proof, errors.New("malformed MSP-04C-R2 production proof")
 	}
-
-	var runErr error
-	switch options.Scenario {
-	case "permit":
-		runErr = runAttempt(options.SelectedPath, 1)
-	case "fallback":
-		if firstErr := runAttempt(options.SelectedPath, 1); firstErr == nil {
-			return proof, errors.New("selected path unexpectedly succeeded")
-		}
-		runErr = runAttempt(options.FallbackPath, 2)
-	case "reconnect":
-		if firstErr := runAttempt(options.SelectedPath, 1); firstErr != nil {
-			return proof, firstErr
-		}
-		runErr = runAttempt(options.SelectedPath, 2)
-	default:
-		return proof, errors.New("unsupported MSP-04C-R2 proof scenario")
+	if wire.Scenario != options.Scenario || wire.Composition != "released-eebus-go+ship-go+canonical-store" {
+		return proof, errors.New("unexpected MSP-04C-R2 production composition")
 	}
-	if runErr != nil {
-		return proof, runErr
+	proof.observed = &msp04cr2ObservedNetwork{
+		composition:      wire.Composition,
+		requests:         append([]string(nil), wire.Requests...),
+		accepts:          append([]string(nil), wire.Accepts...),
+		callbackRejected: wire.CallbackRejected,
+	}
+	if err := proof.consumeBindings(wire); err != nil {
+		return proof, err
 	}
 	proof.evidenceStatus = msp04cr2ExecutedProofStatus(proof)
 	return proof, nil
+}
+
+func (proof *msp04cr2SyntheticProof) consumeBindings(wire msp04cr2WireProof) error {
+	if len(wire.Reservations) != len(wire.Permits) || len(wire.Permits) != len(wire.Requests) {
+		if len(wire.Reservations) == 0 && len(wire.Permits) == 0 && len(wire.Requests) == 0 {
+			return nil
+		}
+		return errors.New("production gate and network observation cardinality differ")
+	}
+	for index := range wire.Reservations {
+		reservationID, ok := decodeMSP04CR2Opaque(wire.Reservations[index].AttemptID)
+		if !ok {
+			return errors.New("invalid production reservation attempt id")
+		}
+		scope, ok := decodeMSP04CR2Opaque(wire.Reservations[index].Scope)
+		if !ok {
+			return errors.New("invalid production reservation scope")
+		}
+		permitID, ok := decodeMSP04CR2Opaque(wire.Permits[index].AttemptID)
+		if !ok || permitID != reservationID || wire.Permits[index].Scope != wire.Reservations[index].Scope ||
+			wire.Permits[index].ControlEpoch != wire.Reservations[index].ControlEpoch || wire.Permits[index].ContextID == "" ||
+			!msp04cr2EquivalentPath(wire.Reservations[index].Path, wire.Requests[index]) {
+			return errors.New("production permit or DialContext changed its durable binding")
+		}
+		reservation := msp04cr2PrivateReservation{
+			attemptID: reservationID, scope: scope, controlEpoch: wire.Reservations[index].ControlEpoch,
+			path: wire.Reservations[index].Path,
+		}
+		permit := msp04cr2PrivatePermit{
+			attemptID: permitID, scope: scope, controlEpoch: wire.Permits[index].ControlEpoch,
+			contextID: wire.Permits[index].ContextID,
+		}
+		proof.reservations = append(proof.reservations, reservation)
+		proof.permits = append(proof.permits, permit)
+		proof.dials = append(proof.dials, msp04cr2PrivateDial{
+			attemptID: permitID, path: reservation.path, contextID: permit.contextID,
+		})
+		proof.events = append(proof.events,
+			msp04cr2PrivateEvent{kind: "reservation_committed", attemptID: reservationID, controlEpoch: reservation.controlEpoch, path: reservation.path},
+			msp04cr2PrivateEvent{kind: "handle_returned", attemptID: reservationID, controlEpoch: reservation.controlEpoch, path: reservation.path},
+			msp04cr2PrivateEvent{kind: "launch_committed", attemptID: permitID, controlEpoch: permit.controlEpoch, path: reservation.path},
+			msp04cr2PrivateEvent{kind: "permit_returned", attemptID: permitID, controlEpoch: permit.controlEpoch, path: reservation.path},
+			msp04cr2PrivateEvent{kind: "dial_context", attemptID: permitID, controlEpoch: permit.controlEpoch, path: reservation.path},
+		)
+	}
+
+	usedRequests := make([]bool, len(wire.Requests))
+	for _, acceptedPath := range wire.Accepts {
+		requestIndex := -1
+		for index, requestPath := range wire.Requests {
+			if !usedRequests[index] && msp04cr2EquivalentPath(requestPath, acceptedPath) {
+				requestIndex = index
+				break
+			}
+		}
+		if requestIndex < 0 {
+			return errors.New("peer accept has no production DialContext observation")
+		}
+		usedRequests[requestIndex] = true
+		accepted := msp04cr2PrivateAccept{
+			attemptID: proof.permits[requestIndex].attemptID,
+			path:      proof.reservations[requestIndex].path,
+		}
+		proof.accepts = append(proof.accepts, accepted)
+		proof.events = append(proof.events, msp04cr2PrivateEvent{
+			kind: "peer_accept", attemptID: accepted.attemptID,
+			controlEpoch: proof.permits[requestIndex].controlEpoch, path: accepted.path,
+		})
+	}
+	return nil
 }
 
 func validateMSP04CR2SyntheticProofOptions(options msp04cr2SyntheticProofOptions) error {
@@ -231,7 +249,8 @@ func validateMSP04CR2SyntheticProofOptions(options msp04cr2SyntheticProofOptions
 	decodedRemote, decodeErr := hex.DecodeString(remote)
 	if root == "." || root == "" || !filepath.IsAbs(root) || len(decodedRemote) != 20 || decodeErr != nil ||
 		remote != strings.ToLower(remote) || strings.TrimSpace(options.EndpointHost) == "" || options.EndpointPort == 0 ||
-		options.TLSConfig == nil || len(options.SelectedPath) > 2048 || len(options.FallbackPath) > 2048 ||
+		options.TLSConfig == nil || options.ObserveNetwork == nil || options.ReleaseNetwork == nil ||
+		len(options.SelectedPath) > 2048 || len(options.FallbackPath) > 2048 ||
 		(options.SelectedPath != "" && !strings.HasPrefix(options.SelectedPath, "/")) ||
 		(options.FallbackPath != "" && !strings.HasPrefix(options.FallbackPath, "/")) {
 		return errors.New("invalid MSP-04C-R2 proof binding")
@@ -239,63 +258,52 @@ func validateMSP04CR2SyntheticProofOptions(options msp04cr2SyntheticProofOptions
 	return nil
 }
 
-func msp04cr2ProofDigest(options msp04cr2SyntheticProofOptions, kind string, ordinal int, path string) [32]byte {
-	payload := fmt.Sprintf("msp04cr2:%s:%s:%d:%s:%s:%d:%s", options.Scenario, kind, ordinal, options.RemoteSKI, options.EndpointHost, options.EndpointPort, path)
-	return sha256.Sum256([]byte(payload))
+func decodeMSP04CR2Opaque(value string) ([32]byte, bool) {
+	var result [32]byte
+	if len(value) != 64 || value != strings.ToLower(value) {
+		return result, false
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != len(result) {
+		return result, false
+	}
+	copy(result[:], decoded)
+	return result, result != [32]byte{}
 }
 
-func writeMSP04CR2PrivateState(root string, state msp04cr2PrivateState) error {
-	if len(state.Attempts) > msp04cr2MaximumProofAttempts {
-		return errors.New("private state cardinality exceeded")
+func msp04cr2EquivalentPath(left, right string) bool {
+	if left == "" {
+		left = "/"
 	}
-	payload, err := json.Marshal(state)
-	if err != nil {
-		return err
+	if right == "" {
+		right = "/"
 	}
-	root = filepath.Clean(root)
-	temporary := filepath.Join(root, ".msp04cr2-state.tmp")
-	target := filepath.Join(root, ".msp04cr2-state.json")
-	file, err := os.OpenFile(temporary, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	writeErr := error(nil)
-	if _, err = file.Write(payload); err != nil {
-		writeErr = err
-	} else if err = file.Sync(); err != nil {
-		writeErr = err
-	}
-	if closeErr := file.Close(); writeErr == nil {
-		writeErr = closeErr
-	}
-	if writeErr != nil {
-		_ = os.Remove(temporary)
-		return writeErr
-	}
-	if err := os.Rename(temporary, target); err != nil {
-		_ = os.Remove(temporary)
-		return err
-	}
-	directory, err := os.Open(root)
-	if err != nil {
-		return err
-	}
-	syncErr := directory.Sync()
-	closeErr := directory.Close()
-	if syncErr != nil {
-		return syncErr
-	}
-	return closeErr
+	return left == right
 }
 
 func msp04cr2ExecutedProofStatus(proof msp04cr2SyntheticProof) string {
-	if len(proof.reservations) == 0 || len(proof.reservations) != len(proof.permits) || len(proof.permits) != len(proof.dials) || len(proof.accepts) == 0 {
+	if proof.observed == nil || proof.observed.composition != "released-eebus-go+ship-go+canonical-store" ||
+		len(proof.dials) != len(proof.observed.requests) || len(proof.accepts) != len(proof.observed.accepts) {
+		return "FAIL"
+	}
+	switch proof.scenario {
+	case "callback_only":
+		return "FAIL"
+	case "reserve_failure", "policy_denied", "backoff", "quarantined", "revoked":
+		if len(proof.reservations) == 0 && len(proof.permits) == 0 && len(proof.dials) == 0 && len(proof.accepts) == 0 {
+			return "PASS"
+		}
+		return "FAIL"
+	}
+	if len(proof.reservations) == 0 || len(proof.reservations) != len(proof.permits) ||
+		len(proof.permits) != len(proof.dials) || len(proof.accepts) == 0 {
 		return "FAIL"
 	}
 	for index := range proof.permits {
 		if proof.reservations[index].attemptID != proof.permits[index].attemptID ||
 			proof.permits[index].attemptID != proof.dials[index].attemptID ||
-			proof.permits[index].contextID == "" || proof.permits[index].contextID != proof.dials[index].contextID {
+			proof.permits[index].contextID == "" || proof.permits[index].contextID != proof.dials[index].contextID ||
+			!msp04cr2EquivalentPath(proof.dials[index].path, proof.observed.requests[index]) {
 			return "FAIL"
 		}
 	}
@@ -316,10 +324,13 @@ func buildMSP04CR2ExecutedArtifact(proofs []msp04cr2SyntheticProof) ([]byte, err
 	if permit == nil || callbackOnly == nil {
 		return nil, errors.New("incomplete MSP-04C-R2 executed proof set")
 	}
-	exactAttempt := permit.evidenceStatus == "PASS" && len(permit.reservations) == 1 && len(permit.permits) == 1 &&
+	exactAttempt := permit.evidenceStatus == "PASS" && permit.observed != nil && len(permit.observed.requests) == 1 &&
+		len(permit.observed.accepts) == 1 && len(permit.reservations) == 1 && len(permit.permits) == 1 &&
 		len(permit.dials) == 1 && len(permit.accepts) == 1 && permit.reservations[0].attemptID == permit.permits[0].attemptID &&
 		permit.permits[0].attemptID == permit.dials[0].attemptID && permit.permits[0].contextID == permit.dials[0].contextID
-	callbackRejected := callbackOnly.evidenceStatus == "FAIL" && len(callbackOnly.dials) == 0 && len(callbackOnly.accepts) == 0
+	callbackRejected := callbackOnly.evidenceStatus == "FAIL" && callbackOnly.observed != nil &&
+		callbackOnly.observed.callbackRejected && len(callbackOnly.observed.requests) == 0 && len(callbackOnly.observed.accepts) == 0 &&
+		len(callbackOnly.dials) == 0 && len(callbackOnly.accepts) == 0
 	status := func(value bool) string {
 		if value {
 			return "PASS"

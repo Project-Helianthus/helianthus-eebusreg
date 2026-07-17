@@ -25,16 +25,43 @@ func (coordinator *firstTrustCoordinator) prepareOutgoingAttempt(
 	}
 	unlock := coordinator.lockOutgoingAttemptLane(request.remoteSKI)
 	defer unlock()
+	return coordinator.prepareOutgoingAttemptLocked(ctx, request, nil)
+}
+
+func (coordinator *firstTrustCoordinator) prepareOutgoingAttemptLocked(
+	ctx context.Context,
+	request firstTrustOutgoingAttemptRequest,
+	failed *firstTrustOutgoingAttemptMetadata,
+) (*firstTrustOutgoingAttemptHandle, string) {
+	if ctx.Err() != nil || !firstTrustOutgoingAttemptRequestValid(request) {
+		return nil, "attempt_denied"
+	}
 
 	coordinator.mu.Lock()
 	if !coordinator.firstTrustOutgoingAttemptEligibleLocked(request.remoteSKI) ||
-		len(coordinator.controlView.control.attempts) >= firstTrustMaximumOutgoingAttempts ||
+		(failed == nil && len(coordinator.controlView.control.attempts) >= firstTrustMaximumOutgoingAttempts) ||
 		coordinator.controlView.control.controlEpoch == math.MaxUint64 {
 		coordinator.mu.Unlock()
 		return nil, "attempt_denied"
 	}
 	scope := firstTrustRuntimeRetryScope(firstTrustNormalizedSKI(request.remoteSKI))
-	if coordinator.firstTrustOutgoingAttemptForScopeLocked(scope) >= 0 {
+	failedIndex := -1
+	var failedRecord firstTrustOutgoingAttemptRecord
+	if failed != nil {
+		failedIndex = coordinator.firstTrustOutgoingAttemptMetadataLocked(*failed)
+		if failedIndex < 0 {
+			coordinator.mu.Unlock()
+			return nil, "attempt_denied"
+		}
+		failedRecord = coordinator.controlView.control.attempts[failedIndex]
+		failedRuntime, runtimeOK := coordinator.outgoingAttemptContexts[failed.attemptID]
+		if failedRecord.state != firstTrustAttemptLaunchAuthorized || failedRecord.scope != scope ||
+			!bytes.Equal(failedRecord.remoteSKI, request.remoteSKI) || !runtimeOK ||
+			failedRuntime.metadata != *failed || failedRuntime.cancellationGeneration != failedRecord.cancellationGeneration {
+			coordinator.mu.Unlock()
+			return nil, "attempt_denied"
+		}
+	} else if coordinator.firstTrustOutgoingAttemptForScopeLocked(scope) >= 0 {
 		coordinator.mu.Unlock()
 		return nil, "attempt_denied"
 	}
@@ -43,7 +70,7 @@ func (coordinator *firstTrustCoordinator) prepareOutgoingAttempt(
 		coordinator.mu.Unlock()
 		return nil, "attempt_denied"
 	}
-	if coordinator.retryInflight[scope] {
+	if coordinator.retryInflight[scope] != (failed != nil) {
 		coordinator.mu.Unlock()
 		return nil, "attempt_denied"
 	}
@@ -91,15 +118,25 @@ func (coordinator *firstTrustCoordinator) prepareOutgoingAttempt(
 		reservationOrder: coordinator.outgoingAttemptReservationOrder, reservationTimestamp: timestamp,
 		attemptCountBefore: quarantine.attemptCount,
 	}
+	if failedIndex >= 0 {
+		target.attempts = append(target.attempts[:failedIndex], target.attempts[failedIndex+1:]...)
+	}
 	target.attempts = append(target.attempts, record)
 	attemptContext, cancel := context.WithCancel(ctx)
 	expectedEpoch := coordinator.controlView.control.controlEpoch
 	coordinator.mu.Unlock()
 
-	publication, outcome := coordinator.publishOutgoingAttemptControl(ctx, expectedEpoch, target, publicationID, "attempt_prepare")
+	operationClass := "attempt_prepare"
+	if failed != nil {
+		operationClass = "attempt_fallback_prepare"
+	}
+	publication, outcome := coordinator.publishOutgoingAttemptControl(ctx, expectedEpoch, target, publicationID, operationClass)
 	if outcome != "durable" {
 		cancel()
 		return nil, "attempt_denied"
+	}
+	if failed != nil {
+		coordinator.cancelOutgoingAttemptRuntime(failedRecord.attemptID)
 	}
 	metadata := firstTrustOutgoingAttemptMetadata{attemptID: attemptID, scope: scope, controlEpoch: record.controlEpoch}
 	handle := &firstTrustOutgoingAttemptHandle{
@@ -241,10 +278,19 @@ func (coordinator *firstTrustCoordinator) completeOutgoingAttempt(
 	}
 	unlock := coordinator.lockOutgoingAttemptLane(remote)
 	defer unlock()
+	return coordinator.completeOutgoingAttemptLocked(ctx, metadata, remote, succeeded)
+}
 
+func (coordinator *firstTrustCoordinator) completeOutgoingAttemptLocked(
+	ctx context.Context,
+	metadata firstTrustOutgoingAttemptMetadata,
+	remote []byte,
+	succeeded bool,
+) string {
 	coordinator.mu.Lock()
 	index := coordinator.firstTrustOutgoingAttemptMetadataLocked(metadata)
 	if index < 0 || coordinator.controlView.control.attempts[index].state != firstTrustAttemptLaunchAuthorized ||
+		!bytes.Equal(coordinator.controlView.control.attempts[index].remoteSKI, remote) ||
 		coordinator.controlView.control.controlEpoch == math.MaxUint64 {
 		coordinator.mu.Unlock()
 		return "stale_attempt"
@@ -290,6 +336,23 @@ func (coordinator *firstTrustCoordinator) completeOutgoingAttempt(
 	return result
 }
 
+func (coordinator *firstTrustCoordinator) outgoingAttemptCallbackExactLocked(
+	metadata firstTrustOutgoingAttemptMetadata,
+	remote []byte,
+) bool {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	index := coordinator.firstTrustOutgoingAttemptMetadataLocked(metadata)
+	if index < 0 {
+		return false
+	}
+	record := coordinator.controlView.control.attempts[index]
+	runtime, ok := coordinator.outgoingAttemptContexts[metadata.attemptID]
+	return record.state == firstTrustAttemptLaunchAuthorized && bytes.Equal(record.remoteSKI, remote) && ok &&
+		runtime.metadata == metadata && runtime.cancellationGeneration == record.cancellationGeneration && runtime.context != nil &&
+		runtime.context.Err() == nil
+}
+
 func (coordinator *firstTrustCoordinator) outgoingAttemptConnectionClosed(
 	ctx context.Context,
 	remoteSKI string,
@@ -297,10 +360,19 @@ func (coordinator *firstTrustCoordinator) outgoingAttemptConnectionClosed(
 	metadata firstTrustOutgoingAttemptMetadata,
 ) string {
 	remote, normalized, ok := decodeFirstTrustSKI(strings.ToLower(strings.TrimSpace(remoteSKI)))
-	if !ok || normalized != firstTrustNormalizedSKI(remote) || !coordinator.firstTrustOutgoingAttemptMatchesRemote(metadata, remote) {
+	if !ok || normalized != firstTrustNormalizedSKI(remote) {
 		return "stale_attempt"
 	}
-	return coordinator.completeOutgoingAttempt(ctx, metadata, complete)
+	ctx = firstTrustContext(ctx)
+	if ctx.Err() != nil {
+		return "stale_attempt"
+	}
+	unlock := coordinator.lockOutgoingAttemptLane(remote)
+	defer unlock()
+	if !coordinator.outgoingAttemptCallbackExactLocked(metadata, remote) {
+		return "stale_attempt"
+	}
+	return coordinator.completeOutgoingAttemptLocked(ctx, metadata, remote, complete)
 }
 
 func (coordinator *firstTrustCoordinator) outgoingAttemptHandshakeStateUpdate(
@@ -309,18 +381,21 @@ func (coordinator *firstTrustCoordinator) outgoingAttemptHandshakeStateUpdate(
 	state string,
 	metadata firstTrustOutgoingAttemptMetadata,
 ) string {
-	remote, _, ok := decodeFirstTrustSKI(strings.ToLower(strings.TrimSpace(remoteSKI)))
-	if !ok || !coordinator.firstTrustOutgoingAttemptMatchesRemote(metadata, remote) {
+	remote, normalized, ok := decodeFirstTrustSKI(strings.ToLower(strings.TrimSpace(remoteSKI)))
+	if !ok || normalized != firstTrustNormalizedSKI(remote) {
 		return "stale_attempt"
 	}
-	coordinator.mu.Lock()
-	index := coordinator.firstTrustOutgoingAttemptMetadataLocked(metadata)
-	coordinator.mu.Unlock()
-	if index < 0 {
+	ctx = firstTrustContext(ctx)
+	if ctx.Err() != nil {
+		return "stale_attempt"
+	}
+	unlock := coordinator.lockOutgoingAttemptLane(remote)
+	defer unlock()
+	if !coordinator.outgoingAttemptCallbackExactLocked(metadata, remote) {
 		return "stale_attempt"
 	}
 	if strings.EqualFold(state, "error") {
-		return coordinator.completeOutgoingAttempt(ctx, metadata, false)
+		return coordinator.completeOutgoingAttemptLocked(ctx, metadata, remote, false)
 	}
 	return "attempt_observed"
 }

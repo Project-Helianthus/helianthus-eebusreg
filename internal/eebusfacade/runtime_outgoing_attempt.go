@@ -1,17 +1,21 @@
 package eebusfacade
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 	shipmodel "github.com/Project-Helianthus/helianthus-ship-go/model"
 )
 
 var errOutgoingAttemptDenied = errors.New("outgoing attempt denied")
+
+const outgoingAttemptFallbackSettleDelay = 25 * time.Millisecond
 
 type firstTrustOutgoingAttemptLifecycle interface {
 	RemoteSKIDisconnected(string)
@@ -23,6 +27,21 @@ type firstTrustOutgoingAttemptBridge struct {
 
 	mu        sync.RWMutex
 	lifecycle firstTrustOutgoingAttemptLifecycle
+	observer  firstTrustOutgoingAttemptObserver
+
+	attemptMu         sync.Mutex
+	pendingFailures   map[string]firstTrustPendingOutgoingFailure
+	handshakeObserved map[[32]byte]bool
+}
+
+type firstTrustOutgoingAttemptObserver interface {
+	prepared(firstTrustOutgoingAttemptMetadata, string, context.Context)
+	authorized(firstTrustOutgoingAttemptMetadata, context.Context)
+}
+
+type firstTrustPendingOutgoingFailure struct {
+	metadata firstTrustOutgoingAttemptMetadata
+	timer    *time.Timer
 }
 
 type runtimeOutgoingAttemptHandle struct {
@@ -38,7 +57,11 @@ func newFirstTrustOutgoingAttemptBridge(resources *runtimeFirstTrustResources) *
 	if resources == nil || resources.coordinator == nil {
 		return nil
 	}
-	return &firstTrustOutgoingAttemptBridge{coordinator: resources.coordinator}
+	return &firstTrustOutgoingAttemptBridge{
+		coordinator:       resources.coordinator,
+		pendingFailures:   make(map[string]firstTrustPendingOutgoingFailure),
+		handshakeObserved: make(map[[32]byte]bool),
+	}
 }
 
 func (bridge *firstTrustOutgoingAttemptBridge) bindLifecycle(value any) {
@@ -63,14 +86,26 @@ func (bridge *firstTrustOutgoingAttemptBridge) Prepare(request shipapi.OutgoingA
 	if !ok || normalized != strings.ToLower(strings.TrimSpace(request.RemoteSKI)) {
 		return nil, errOutgoingAttemptDenied
 	}
-	handle, outcome := bridge.coordinator.prepareOutgoingAttempt(context.Background(), firstTrustOutgoingAttemptRequest{
+	prepared := firstTrustOutgoingAttemptRequest{
 		remoteSKI: remote,
-		endpoint:  firstTrustOutgoingAttemptEndpoint{host: request.Endpoint.Host, port: request.Endpoint.Port},
+		endpoint:  firstTrustOutgoingAttemptEndpoint{host: strings.TrimSpace(request.Endpoint.Host), port: request.Endpoint.Port},
 		path:      request.Path,
-	})
+	}
+	unlock := bridge.coordinator.lockOutgoingAttemptLane(remote)
+	defer unlock()
+	failed, hasFailed := bridge.pendingFailure(normalized)
+	var failedMetadata *firstTrustOutgoingAttemptMetadata
+	if hasFailed {
+		failedMetadata = &failed.metadata
+	}
+	handle, outcome := bridge.coordinator.prepareOutgoingAttemptLocked(context.Background(), prepared, failedMetadata)
 	if outcome != "attempt_reserved" || handle == nil {
 		return nil, errOutgoingAttemptDenied
 	}
+	if hasFailed {
+		bridge.clearPendingFailure(normalized, failed.metadata)
+	}
+	bridge.observePrepared(handle.metadata, prepared.path, handle.context)
 	return &runtimeOutgoingAttemptHandle{owner: bridge, handle: handle}, nil
 }
 
@@ -90,12 +125,47 @@ func (bridge *firstTrustOutgoingAttemptBridge) AuthorizeLaunch(handle shipapi.Ou
 		}
 		return denied, nil
 	}
+	bridge.observeAuthorized(permit.metadata, permit.context)
 	return shipapi.OutgoingAttemptPermit{
 		Decision: shipapi.OutgoingAttemptDecisionPermit,
 		Reason:   shipapi.OutgoingAttemptReasonAuthorized,
 		Metadata: runtimeOutgoingAttemptMetadataToSHIP(permit.metadata),
 		Context:  permit.context,
 	}, nil
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) bindObserver(observer firstTrustOutgoingAttemptObserver) {
+	if bridge == nil {
+		return
+	}
+	bridge.mu.Lock()
+	bridge.observer = observer
+	bridge.mu.Unlock()
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) observePrepared(
+	metadata firstTrustOutgoingAttemptMetadata,
+	path string,
+	attemptContext context.Context,
+) {
+	bridge.mu.RLock()
+	observer := bridge.observer
+	bridge.mu.RUnlock()
+	if observer != nil {
+		observer.prepared(metadata, path, attemptContext)
+	}
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) observeAuthorized(
+	metadata firstTrustOutgoingAttemptMetadata,
+	attemptContext context.Context,
+) {
+	bridge.mu.RLock()
+	observer := bridge.observer
+	bridge.mu.RUnlock()
+	if observer != nil {
+		observer.authorized(metadata, attemptContext)
+	}
 }
 
 func (bridge *firstTrustOutgoingAttemptBridge) AbortPrepared(handle shipapi.OutgoingAttemptHandle) (shipapi.OutgoingAttemptAbortResult, error) {
@@ -117,17 +187,37 @@ func (bridge *firstTrustOutgoingAttemptBridge) OutgoingAttemptConnectionClosed(
 	if bridge == nil || bridge.coordinator == nil {
 		return
 	}
-	bridge.mu.RLock()
-	lifecycle := bridge.lifecycle
-	bridge.mu.RUnlock()
-	if lifecycle != nil {
-		lifecycle.RemoteSKIDisconnected(remoteSKI)
-	}
 	converted, ok := runtimeOutgoingAttemptMetadataFromSHIP(metadata)
 	if !ok {
 		return
 	}
-	bridge.coordinator.outgoingAttemptConnectionClosed(context.Background(), remoteSKI, complete, converted)
+	remote, normalized, ok := decodeFirstTrustSKI(strings.ToLower(strings.TrimSpace(remoteSKI)))
+	if !ok || normalized != strings.ToLower(strings.TrimSpace(remoteSKI)) {
+		return
+	}
+	unlock := bridge.coordinator.lockOutgoingAttemptLane(remote)
+	defer unlock()
+	if !bridge.coordinator.outgoingAttemptCallbackExactLocked(converted, remote) {
+		return
+	}
+	if !complete && !bridge.attemptObservedHandshake(converted) {
+		if !bridge.markPendingFailure(normalized, remote, converted) {
+			return
+		}
+		bridge.mutateLifecycle(func(lifecycle firstTrustOutgoingAttemptLifecycle) {
+			lifecycle.RemoteSKIDisconnected(normalized)
+		})
+		return
+	}
+	result := bridge.coordinator.completeOutgoingAttemptLocked(context.Background(), converted, remote, complete)
+	if !firstTrustOutgoingAttemptCompletionDurable(result) {
+		return
+	}
+	bridge.clearPendingFailure(normalized, converted)
+	bridge.clearHandshakeObservation(converted)
+	bridge.mutateLifecycle(func(lifecycle firstTrustOutgoingAttemptLifecycle) {
+		lifecycle.RemoteSKIDisconnected(normalized)
+	})
 }
 
 func (bridge *firstTrustOutgoingAttemptBridge) OutgoingAttemptHandshakeStateUpdate(
@@ -142,18 +232,135 @@ func (bridge *firstTrustOutgoingAttemptBridge) OutgoingAttemptHandshakeStateUpda
 	if !ok {
 		return
 	}
+	remote, normalized, ok := decodeFirstTrustSKI(strings.ToLower(strings.TrimSpace(remoteSKI)))
+	if !ok || normalized != strings.ToLower(strings.TrimSpace(remoteSKI)) {
+		return
+	}
 	stateName := "in_progress"
 	if state.State == shipmodel.SmeStateComplete {
 		stateName = "complete"
 	} else if state.State == shipmodel.SmeStateError || state.Error != nil {
 		stateName = "error"
 	}
-	bridge.coordinator.outgoingAttemptHandshakeStateUpdate(context.Background(), remoteSKI, stateName, converted)
+	unlock := bridge.coordinator.lockOutgoingAttemptLane(remote)
+	defer unlock()
+	if !bridge.coordinator.outgoingAttemptCallbackExactLocked(converted, remote) {
+		return
+	}
+	bridge.recordHandshakeObservation(converted)
+	if stateName == "error" {
+		result := bridge.coordinator.completeOutgoingAttemptLocked(context.Background(), converted, remote, false)
+		if !firstTrustOutgoingAttemptCompletionDurable(result) {
+			return
+		}
+		bridge.clearPendingFailure(normalized, converted)
+		bridge.clearHandshakeObservation(converted)
+	}
+	bridge.mutateLifecycle(func(lifecycle firstTrustOutgoingAttemptLifecycle) {
+		lifecycle.ServicePairingDetailUpdate(normalized, runtimeOutgoingAttemptPairingDetail(state))
+	})
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) mutateLifecycle(mutate func(firstTrustOutgoingAttemptLifecycle)) {
 	bridge.mu.RLock()
 	lifecycle := bridge.lifecycle
 	bridge.mu.RUnlock()
 	if lifecycle != nil {
-		lifecycle.ServicePairingDetailUpdate(remoteSKI, runtimeOutgoingAttemptPairingDetail(state))
+		mutate(lifecycle)
+	}
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) pendingFailure(remoteSKI string) (firstTrustPendingOutgoingFailure, bool) {
+	bridge.attemptMu.Lock()
+	defer bridge.attemptMu.Unlock()
+	pending, ok := bridge.pendingFailures[remoteSKI]
+	return pending, ok
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) markPendingFailure(
+	remoteSKI string,
+	remote []byte,
+	metadata firstTrustOutgoingAttemptMetadata,
+) bool {
+	bridge.attemptMu.Lock()
+	defer bridge.attemptMu.Unlock()
+	if _, ok := bridge.pendingFailures[remoteSKI]; ok {
+		return false
+	}
+	remoteCopy := bytes.Clone(remote)
+	pending := firstTrustPendingOutgoingFailure{metadata: metadata}
+	pending.timer = time.AfterFunc(outgoingAttemptFallbackSettleDelay, func() {
+		bridge.settlePendingFailure(remoteSKI, remoteCopy, metadata)
+	})
+	bridge.pendingFailures[remoteSKI] = pending
+	return true
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) clearPendingFailure(
+	remoteSKI string,
+	metadata firstTrustOutgoingAttemptMetadata,
+) {
+	bridge.attemptMu.Lock()
+	pending, ok := bridge.pendingFailures[remoteSKI]
+	if ok && pending.metadata == metadata {
+		delete(bridge.pendingFailures, remoteSKI)
+	}
+	bridge.attemptMu.Unlock()
+	if ok && pending.metadata == metadata && pending.timer != nil {
+		pending.timer.Stop()
+	}
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) settlePendingFailure(
+	remoteSKI string,
+	remote []byte,
+	metadata firstTrustOutgoingAttemptMetadata,
+) {
+	if bridge == nil || bridge.coordinator == nil {
+		return
+	}
+	unlock := bridge.coordinator.lockOutgoingAttemptLane(remote)
+	defer unlock()
+	pending, ok := bridge.pendingFailure(remoteSKI)
+	if !ok || pending.metadata != metadata {
+		return
+	}
+	if !bridge.coordinator.outgoingAttemptCallbackExactLocked(metadata, remote) {
+		bridge.clearPendingFailure(remoteSKI, metadata)
+		bridge.clearHandshakeObservation(metadata)
+		return
+	}
+	result := bridge.coordinator.completeOutgoingAttemptLocked(context.Background(), metadata, remote, false)
+	if firstTrustOutgoingAttemptCompletionDurable(result) || result == "stale_attempt" {
+		bridge.clearPendingFailure(remoteSKI, metadata)
+		bridge.clearHandshakeObservation(metadata)
+	}
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) recordHandshakeObservation(metadata firstTrustOutgoingAttemptMetadata) {
+	bridge.attemptMu.Lock()
+	bridge.handshakeObserved[metadata.attemptID] = true
+	bridge.attemptMu.Unlock()
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) attemptObservedHandshake(metadata firstTrustOutgoingAttemptMetadata) bool {
+	bridge.attemptMu.Lock()
+	defer bridge.attemptMu.Unlock()
+	return bridge.handshakeObserved[metadata.attemptID]
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) clearHandshakeObservation(metadata firstTrustOutgoingAttemptMetadata) {
+	bridge.attemptMu.Lock()
+	delete(bridge.handshakeObserved, metadata.attemptID)
+	bridge.attemptMu.Unlock()
+}
+
+func firstTrustOutgoingAttemptCompletionDurable(result string) bool {
+	switch result {
+	case "attempt_succeeded", "backoff_active", "admin_hold":
+		return true
+	default:
+		return false
 	}
 }
 

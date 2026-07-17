@@ -303,7 +303,7 @@ func runtimePendingToStore(source firstTrustPendingPublication) eebusstore.Contr
 	}
 }
 
-var runtimeOperationClasses = []string{"first_trust", "revocation", "reconcile_pending_publication", "publish_inactive_parent", "adopt_copied_current", "recover_unavailable_host_key", "release_retry_quarantine", "attempt_prepare", "attempt_authorize", "attempt_complete_success", "attempt_complete_failure", "attempt_abort", "attempt_restart_synthetic_failure"}
+var runtimeOperationClasses = []string{"first_trust", "revocation", "reconcile_pending_publication", "publish_inactive_parent", "adopt_copied_current", "recover_unavailable_host_key", "release_retry_quarantine", "attempt_prepare", "attempt_authorize", "attempt_complete_success", "attempt_complete_failure", "attempt_abort", "attempt_restart_synthetic_failure", "attempt_fallback_prepare"}
 var runtimeReceiptResults = []string{"trusted", "revoked", "repaired_unpaired", "operation_terminal", "failed_closed_unchanged", "revocation_withdrawal_incomplete"}
 var runtimeQuarantineReasons = []string{"RETRYABLE_FAILURE", "ADMIN_HOLD", "HANDSHAKE_ATTEMPT_LIMIT"}
 var runtimeQuarantineStates = []string{"BACKOFF_ACTIVE", "RETRY_READY", "ADMIN_HOLD"}

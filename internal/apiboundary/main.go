@@ -882,6 +882,9 @@ func isProtocolImplementationImport(path string) bool {
 		"github.com/Project-Helianthus/helianthus-eebus-go",
 		"github.com/Project-Helianthus/helianthus-ship-go",
 		"github.com/Project-Helianthus/helianthus-spine-go",
+		"github.com/enbility/eebus-go",
+		"github.com/enbility/ship-go",
+		"github.com/enbility/spine-go",
 	} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true
