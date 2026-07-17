@@ -36,8 +36,8 @@ func main() {
 	flag.StringVar(&cfg.repoRoot, "repo-root", ".", "repository root")
 	flag.StringVar(&cfg.maxGo, "max-go", "", "maximum supported Go toolchain version")
 	flag.StringVar(&cfg.activeGo, "active-go", "", "active go env GOVERSION value")
-	flag.StringVar(&cfg.modulePath, "module", "github.com/enbility/eebus-go", "module path to verify")
-	flag.StringVar(&cfg.moduleVersion, "version", "v0.7.0", "module version to verify")
+	flag.StringVar(&cfg.modulePath, "module", "github.com/Project-Helianthus/helianthus-eebus-go", "module path to verify")
+	flag.StringVar(&cfg.moduleVersion, "version", "v0.7.1-helianthus.1", "module version to verify")
 	flag.StringVar(&cfg.moduleJSON, "module-json", "", "optional go list -m -json file")
 	flag.Parse()
 

@@ -14,11 +14,13 @@ import (
 	"sync"
 	"time"
 
+	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
-	eebusapi "github.com/enbility/eebus-go/api"
-	shipapi "github.com/enbility/ship-go/api"
-	shipcert "github.com/enbility/ship-go/cert"
-	spineapi "github.com/enbility/spine-go/api"
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusservicebridge"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	shipcert "github.com/Project-Helianthus/helianthus-ship-go/cert"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 var (
@@ -56,10 +58,11 @@ type serviceBackend struct {
 }
 
 type runtimeMaterial struct {
-	certificate tls.Certificate
-	localSKI    string
-	pretrusted  map[string]bool
-	firstTrust  *runtimeFirstTrustAuthorization
+	certificate           tls.Certificate
+	localSKI              string
+	pretrusted            map[string]bool
+	firstTrust            *runtimeFirstTrustAuthorization
+	outgoingAttemptBridge *firstTrustOutgoingAttemptBridge
 }
 
 type runtimeMaterialLoader func(context.Context, string) (runtimeMaterial, error)
@@ -159,7 +162,7 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if config.ListenPort < 1 || config.ListenPort > 65535 {
 		return nil, errors.New("runtime listen port must be between 1 and 65535")
 	}
-	if dependencies.loadMaterial == nil || dependencies.newService == nil || dependencies.now == nil {
+	if dependencies.loadMaterial == nil || dependencies.now == nil {
 		return nil, errors.New("runtime dependencies are incomplete")
 	}
 
@@ -203,6 +206,11 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		}
 		return firstTrust.Close()
 	}
+	outgoingAttemptBridge := newFirstTrustOutgoingAttemptBridge(firstTrust)
+	material.outgoingAttemptBridge = outgoingAttemptBridge
+	if dependencies.newService == nil {
+		return nil, errors.Join(errors.New("runtime service dependency is incomplete"), closeFirstTrust())
+	}
 
 	handler, err := newRuntimeServiceHandler(config, material.localSKI, dependencies.now)
 	if err != nil {
@@ -215,6 +223,9 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	}
 	if service == nil {
 		return nil, errors.Join(errors.New("runtime service factory returned nil"), closeFirstTrust())
+	}
+	if outgoingAttemptBridge != nil {
+		outgoingAttemptBridge.bindLifecycle(service)
 	}
 	if firstTrust != nil {
 		if err := attachRuntimeFirstTrust(ctx, firstTrust, service, reader, dependencies); err != nil {
@@ -293,8 +304,31 @@ func loadProtectedRuntimeMaterial(context.Context, string) (runtimeMaterial, err
 	return runtimeMaterial{}, errors.New("protected runtime material provider is not installed")
 }
 
-func newEEBusService(RuntimeConfig, runtimeMaterial, eebusapi.ServiceReaderInterface) (runtimeService, error) {
-	return nil, fmt.Errorf("%w: ship-go v0.6.0 binds the listener on all interfaces", errScopedSHIPListenerUnavailable)
+func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebusapi.ServiceReaderInterface) (runtimeService, error) {
+	if material.outgoingAttemptBridge != nil && reader != nil {
+		configuration, configurationErr := eebusapi.NewConfiguration(
+			"Project-Helianthus", "Helianthus", "eebusreg", material.localSKI,
+			spinemodel.DeviceTypeTypeEnergyManagementSystem,
+			[]spinemodel.EntityTypeType{spinemodel.EntityTypeTypeCEM},
+			config.ListenPort, material.certificate, 4*time.Second,
+		)
+		if configurationErr != nil {
+			return nil, configurationErr
+		}
+		configuration.SetInterfaces([]string{config.Interface})
+		candidate := eebusservicebridge.NewServiceWithOutgoingAttemptBridge(
+			configuration,
+			reader,
+			eebusservicebridge.OutgoingAttemptBridgeConfiguration{
+				Gate: material.outgoingAttemptBridge,
+				Sink: material.outgoingAttemptBridge,
+			},
+		)
+		if candidate == nil {
+			return nil, errors.New("released outgoing-attempt service construction failed")
+		}
+	}
+	return nil, fmt.Errorf("%w: helianthus-ship-go v0.6.1-helianthus.1 binds the listener on all interfaces", errScopedSHIPListenerUnavailable)
 }
 
 func validateRuntimeMaterial(material runtimeMaterial) error {

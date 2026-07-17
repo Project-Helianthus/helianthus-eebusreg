@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	shipapi "github.com/enbility/ship-go/api"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 )
 
 func TestFirstTrustExpiryAndRetiredReplayNeverReopen(t *testing.T) {

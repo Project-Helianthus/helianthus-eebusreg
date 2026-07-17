@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	shipmdns "github.com/enbility/ship-go/mdns"
+	shipmdns "github.com/Project-Helianthus/helianthus-ship-go/mdns"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/sys/unix"
 )

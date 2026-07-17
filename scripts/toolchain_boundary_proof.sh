@@ -7,8 +7,8 @@ cd "$repo_root"
 export GOWORK=off
 export GOTOOLCHAIN=local
 
-module_path="github.com/enbility/eebus-go"
-module_version="v0.7.0"
+module_path="github.com/Project-Helianthus/helianthus-eebus-go"
+module_version="v0.7.1-helianthus.1"
 
 echo "==> toolchain boundary proof"
 go version

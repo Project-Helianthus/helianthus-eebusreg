@@ -101,13 +101,14 @@ func decodeGenerationV1(payload []byte) (generationV1, error) {
 		return result, err
 	}
 	version := generationSchemaVersion(payload)
-	if version != 1 && version != currentSchemaVersion {
+	if version < 1 || version > currentSchemaVersion {
 		return result, malformed("decode_generation", errors.New("schema version"))
 	}
 	var generation generationMetadataWire
 	var local *localIdentityWire
 	var remotes []remoteIdentityWire
-	var control *controlRecordV2
+	var controlV2 *controlRecordV2
+	var controlV3 *controlRecordV3
 	if version == 1 {
 		var wire generationWire
 		if err := decodeClosedJSON(payload, &wire); err != nil {
@@ -124,11 +125,20 @@ func decodeGenerationV1(payload []byte) (generationV1, error) {
 			return result, malformed("decode_generation", errors.New("missing control field"))
 		}
 		if !bytes.Equal(wire.Control, []byte("null")) {
-			decoded, err := decodeControlRecordV2(wire.Control)
-			if err != nil {
-				return result, err
+			switch version {
+			case 2:
+				decoded, err := decodeControlRecordV2(wire.Control)
+				if err != nil {
+					return result, err
+				}
+				controlV2 = &decoded
+			case 3:
+				decoded, err := decodeControlRecordV3(wire.Control)
+				if err != nil {
+					return result, err
+				}
+				controlV3 = &decoded
 			}
-			control = &decoded
 		}
 	}
 	metadata, err := decodeGenerationMetadata(generation)
@@ -139,16 +149,23 @@ func decodeGenerationV1(payload []byte) (generationV1, error) {
 	if err != nil {
 		return result, err
 	}
-	if control != nil {
-		encoded, err := encodeControlRecordV2(*control)
+	if controlV2 != nil {
+		encoded, err := encodeControlRecordV2(*controlV2)
+		if err != nil {
+			return result, err
+		}
+		state.controlEnvelope = encoded
+	}
+	if controlV3 != nil {
+		encoded, err := encodeControlRecordV3(*controlV3)
 		if err != nil {
 			return result, err
 		}
 		state.controlEnvelope = encoded
 	}
 	result = generationV1{metadata: metadata, state: state}
-	if version == currentSchemaVersion && control == nil {
-		result.schemaVersion = currentSchemaVersion
+	if version > 1 {
+		result.schemaVersion = version
 	}
 	canonical, err := encodeGenerationV1(result)
 	if err != nil {
@@ -317,28 +334,44 @@ func encodeGenerationV1(generation generationV1) ([]byte, error) {
 	if version == 0 {
 		version = 1
 		if len(generation.state.controlEnvelope) != 0 {
-			version = currentSchemaVersion
+			switch {
+			case validControlRecordV3Envelope(generation.state.controlEnvelope):
+				version = 3
+			case validControlRecordV2Envelope(generation.state.controlEnvelope):
+				version = 2
+			default:
+				return nil, malformed("encode_generation", errors.New("control record"))
+			}
 		}
 	}
-	if version != 1 && version != currentSchemaVersion || version == 1 && len(generation.state.controlEnvelope) != 0 {
+	if version < 1 || version > currentSchemaVersion || version == 1 && len(generation.state.controlEnvelope) != 0 {
 		return nil, malformed("encode_generation", errors.New("schema version"))
 	}
 	var control []byte
-	if version == currentSchemaVersion && len(generation.state.controlEnvelope) != 0 {
-		record, ok := controlRecordFromStateV1(generation.state)
-		if !ok {
-			return nil, malformed("encode_generation", errors.New("control record"))
+	if version > 1 && len(generation.state.controlEnvelope) != 0 {
+		var err error
+		switch version {
+		case 2:
+			record, ok := controlRecordFromStateV1(generation.state)
+			if !ok {
+				return nil, malformed("encode_generation", errors.New("control record"))
+			}
+			control, err = encodeControlRecordV2(record)
+		case 3:
+			record, ok := controlRecordV3FromStateV1(generation.state)
+			if !ok {
+				return nil, malformed("encode_generation", errors.New("control record"))
+			}
+			control, err = encodeControlRecordV3(record)
 		}
-		encoded, err := encodeControlRecordV2(record)
 		if err != nil {
 			return nil, err
 		}
-		control = encoded
 	}
 	var out strings.Builder
 	out.Grow(512)
 	out.WriteByte('{')
-	if version == currentSchemaVersion {
+	if version > 1 {
 		out.WriteString(`"control":`)
 		if control == nil {
 			out.WriteString("null")
@@ -807,10 +840,8 @@ func validateStateV1(state stateV1) error {
 	if len(state.remoteIdentities) > maxRemoteIdentityCount {
 		return malformed("validate_state", errors.New("remote count"))
 	}
-	if len(state.controlEnvelope) != 0 {
-		if _, err := decodeControlRecordV2(state.controlEnvelope); err != nil {
-			return err
-		}
+	if len(state.controlEnvelope) != 0 && !validControlRecordV3Envelope(state.controlEnvelope) && !validControlRecordV2Envelope(state.controlEnvelope) {
+		return malformed("validate_state", errors.New("control record"))
 	}
 	if state.localIdentity != nil {
 		identity := state.localIdentity

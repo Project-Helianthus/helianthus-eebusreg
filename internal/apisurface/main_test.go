@@ -90,7 +90,7 @@ func TestRootLifecycleSignaturesAreExact(t *testing.T) {
 
 func TestForbiddenDependencyLeakageIsRejected(t *testing.T) {
 	for _, packagePath := range []string{
-		"github.com/enbility/eebus-go/api",
+		"github.com/Project-Helianthus/helianthus-eebus-go/api",
 		modulePath + "/internal/private",
 		"example.invalid/unapproved",
 	} {

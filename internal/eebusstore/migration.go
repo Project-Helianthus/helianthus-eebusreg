@@ -109,11 +109,10 @@ func migrateMSP04BStateToMSP04C(source stateV1) (stateV1, error) {
 }
 
 func currentMigrationGraph() (migrationGraph, error) {
-	return newMigrationGraph(currentSchemaVersion, []migrationEdge{{
-		from:  1,
-		to:    2,
-		apply: migrateMSP04BStateToMSP04C,
-	}})
+	return newMigrationGraph(currentSchemaVersion, []migrationEdge{
+		{from: 1, to: 2, apply: migrateMSP04BStateToMSP04C},
+		{from: 2, to: 3, apply: migrateMSP04CStateToMSP04CR2},
+	})
 }
 
 func migrationGraphError(reason string) *storeError {

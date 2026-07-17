@@ -509,15 +509,15 @@ import "C"
 		})
 	}
 
-	t.Run("forbidden direct enbility type", func(t *testing.T) {
+	t.Run("forbidden direct protocol implementation type", func(t *testing.T) {
 		root := newSyntheticRepository(t)
 		writeFile(t, root, "eebusraw/forbidden.go", `package eebusraw
 
-import shipapi "github.com/enbility/ship-go/api"
+import shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 
 type ExternalConnection = shipapi.ShipConnectionDataReaderInterface
 `)
-		expectRejected(t, tool, root, "enbility", "internal")
+		expectRejected(t, tool, root, "protocol implementation", "internal")
 	})
 
 	t.Run("forbidden internal facade type", func(t *testing.T) {

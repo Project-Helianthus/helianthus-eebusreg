@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"sync"
 
-	eebusapi "github.com/enbility/eebus-go/api"
-	shipapi "github.com/enbility/ship-go/api"
+	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 )
 
 const firstTrustMaximumConnections = 128

@@ -107,8 +107,8 @@ func newReport(mode string, required []string, cases []caseResult, notes []strin
 			GoToolchain: commandString("go", "env", "GOTOOLCHAIN"),
 		},
 		Module: moduleEvidence{
-			Path:    "github.com/enbility/eebus-go",
-			Version: "v0.7.0",
+			Path:    "github.com/Project-Helianthus/helianthus-eebus-go",
+			Version: "v0.7.1-helianthus.1",
 		},
 		Security: securityEvidence{
 			PublicRedacted:            true,
@@ -147,7 +147,7 @@ func (r report) validate() error {
 	if r.RepoBranch == "" || !gitCommitPattern.MatchString(r.RepoCommit) || r.RepoBranch != trustedRepo.Branch || r.RepoCommit != trustedRepo.Commit {
 		return errors.New("report provenance does not match the current checkout")
 	}
-	if r.Module.Path != "github.com/enbility/eebus-go" || r.Module.Version != "v0.7.0" {
+	if r.Module.Path != "github.com/Project-Helianthus/helianthus-eebus-go" || r.Module.Version != "v0.7.1-helianthus.1" {
 		return errors.New("eebus-go module evidence mismatch")
 	}
 	if !r.Security.PublicRedacted || r.Security.ProductionTrustWritten || r.Security.PublicAPISurfaceAdded || r.Security.GatewayImportAdded || r.Security.SemanticOrConsumerSurface {

@@ -7,6 +7,30 @@ import (
 )
 
 func (coordinator *firstTrustCoordinator) revoke(ctx context.Context, request firstTrustRevocationRequest) string {
+	binding := firstTrustHashRevocation(request)
+	coordinator.mu.Lock()
+	if operation := coordinator.recoveryOperation; operation != nil {
+		coordinator.mu.Unlock()
+		if operation.operationID == request.operationID && operation.operationClass == "revocation" && operation.bindingSHA256 == binding {
+			return "operation_in_progress"
+		}
+		if operation.operationID == request.operationID {
+			return "idempotency_conflict"
+		}
+		return "operation_in_progress"
+	}
+	subject, found := coordinator.firstTrustRevocationSubjectLocked(request)
+	coordinator.mu.Unlock()
+	serializationKey := subject
+	if !found {
+		serializationKey = request.associationRef[:]
+	}
+	unlock := coordinator.lockOutgoingAttemptLane(serializationKey)
+	defer unlock()
+	return coordinator.revokeSerialized(ctx, request)
+}
+
+func (coordinator *firstTrustCoordinator) revokeSerialized(ctx context.Context, request firstTrustRevocationRequest) string {
 	ctx = firstTrustContext(ctx)
 	if ctx.Err() != nil {
 		return "request_cancelled"
@@ -81,6 +105,7 @@ func (coordinator *firstTrustCoordinator) revoke(ctx context.Context, request fi
 	working.associations[associationIndex].reconnectable = false
 	target := cloneFirstTrustControlRecord(working.control)
 	target.controlEpoch++
+	removedAttempts := coordinator.removeRevokedOutgoingAttemptsLocked(&target, working.associations[associationIndex].subject)
 	target.operationHighWater = firstTrustOperationOrdinal(request.operationID)
 	target.tombstones = append(target.tombstones, firstTrustRevocationTombstone{
 		associationRef: request.associationRef, revocationEpoch: target.controlEpoch, operationID: request.operationID,
@@ -108,6 +133,7 @@ func (coordinator *firstTrustCoordinator) revoke(ctx context.Context, request fi
 	switch publicationOutcome {
 	case "durable":
 		coordinator.controlView = cloneFirstTrustControlView(publication.target)
+		coordinator.cancelRevokedOutgoingAttemptsLocked(removedAttempts)
 		coordinator.phase = firstTrustPairingClosed
 		coordinator.recovery = "REVOKED"
 		coordinator.recoveryReasonCode = "REVOKED_ASSOCIATION"

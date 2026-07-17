@@ -147,6 +147,11 @@ type firstTrustCoordinator struct {
 	retryArms          map[[32]byte]firstTrustRetryArm
 	retryInflight      map[[32]byte]bool
 	recoveryOperation  *firstTrustRecoveryOperation
+
+	outgoingAttemptLanes                  [32]sync.Mutex
+	outgoingAttemptContexts               map[[32]byte]firstTrustOutgoingAttemptRuntime
+	outgoingAttemptReservationOrder       uint64
+	outgoingAttemptCancellationGeneration uint64
 }
 
 func newFirstTrustCoordinator(now func() time.Time, random io.Reader, store firstTrustPersistence, effects firstTrustEffects) *firstTrustCoordinator {
@@ -157,16 +162,17 @@ func newFirstTrustCoordinator(now func() time.Time, random io.Reader, store firs
 		random = rand.Reader
 	}
 	return &firstTrustCoordinator{
-		now:            now,
-		random:         random,
-		store:          store,
-		effects:        effects,
-		commitWait:     firstTrustCommitWait,
-		withdrawalWait: firstTrustWithdrawalWait,
-		phase:          firstTrustDisabled,
-		trustedRemotes: make(map[string]string),
-		replays:        make(map[string]firstTrustReplay),
-		retired:        make(map[string]firstTrustRetired),
+		now:                     now,
+		random:                  random,
+		store:                   store,
+		effects:                 effects,
+		commitWait:              firstTrustCommitWait,
+		withdrawalWait:          firstTrustWithdrawalWait,
+		phase:                   firstTrustDisabled,
+		trustedRemotes:          make(map[string]string),
+		replays:                 make(map[string]firstTrustReplay),
+		retired:                 make(map[string]firstTrustRetired),
+		outgoingAttemptContexts: make(map[[32]byte]firstTrustOutgoingAttemptRuntime),
 	}
 }
 
@@ -676,6 +682,7 @@ func (coordinator *firstTrustCoordinator) shutdown() {
 	coordinator.recoveryOperation = nil
 	coordinator.retryArms = nil
 	coordinator.retryInflight = nil
+	coordinator.cancelAllOutgoingAttemptContextsLocked()
 }
 
 func (coordinator *firstTrustCoordinator) selectedFirstTrustGenerationLocked() uint64 {

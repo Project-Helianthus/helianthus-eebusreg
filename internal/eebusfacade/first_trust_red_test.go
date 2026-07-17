@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	eebusapi "github.com/enbility/eebus-go/api"
-	shipapi "github.com/enbility/ship-go/api"
-	spineapi "github.com/enbility/spine-go/api"
+	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 )
 
 type msp04bCoordinatorContract interface {

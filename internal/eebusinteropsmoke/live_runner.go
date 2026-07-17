@@ -20,12 +20,12 @@ import (
 	"syscall"
 	"time"
 
-	eebusapi "github.com/enbility/eebus-go/api"
-	"github.com/enbility/eebus-go/service"
-	shipapi "github.com/enbility/ship-go/api"
-	"github.com/enbility/ship-go/cert"
-	shiphub "github.com/enbility/ship-go/hub"
-	"github.com/enbility/spine-go/model"
+	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/service"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	"github.com/Project-Helianthus/helianthus-ship-go/cert"
+	shiphub "github.com/Project-Helianthus/helianthus-ship-go/hub"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
 	"golang.org/x/sys/unix"
 )
 
@@ -1062,7 +1062,7 @@ func buildLiveGateEvidence(opts liveOptions, binding liveRunBinding, proof opera
 		Environment: evidenceEnvironment{
 			TimestampUTC: proof.AcceptedAt.UTC(),
 			GoVersion:    commandString("go", "env", "GOVERSION"),
-			ToolVersions: map[string]string{"eebus-go": "v0.7.0", "ship-go": "v0.6.0", "spine-go": "v0.7.0"},
+			ToolVersions: map[string]string{"eebus-go": "v0.7.1-helianthus.1", "ship-go": "v0.6.1-helianthus.1", "spine-go": "v0.7.1-helianthus.1"},
 			TopologyRef:  binding.interfaceRef,
 		},
 		TrustPreconditions: trustPreconditions{
