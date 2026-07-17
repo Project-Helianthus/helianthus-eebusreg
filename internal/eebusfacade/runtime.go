@@ -103,19 +103,20 @@ type runtimeDeviceObservation struct {
 }
 
 type runtimeGraphObservation struct {
-	RuntimeID    string
-	LocalSKI     string
-	RemoteSKI    string
-	SessionID    string
-	SessionState string
-	PairingState string
-	Visible      bool
-	Paired       bool
-	Since        time.Time
-	ServiceIDs   []string
-	Devices      []runtimeDeviceObservation
-	ShipID       string
-	SessionIndex uint64
+	RuntimeID        string
+	LocalSKI         string
+	RemoteSKI        string
+	SessionID        string
+	SessionState     string
+	PairingState     string
+	Visible          bool
+	Paired           bool
+	Since            time.Time
+	ServiceIDs       []string
+	Devices          []runtimeDeviceObservation
+	ShipID           string
+	SessionIndex     uint64
+	TrustDegradation string
 }
 
 type runtimeObservationReducer struct {
@@ -257,12 +258,15 @@ func (backend *serviceBackend) Run(ctx context.Context, publish func([]byte)) er
 	if backend.service == nil || backend.handler == nil || publish == nil {
 		return errors.New("eebus runtime service backend is incomplete")
 	}
-	if backend.firstTrust != nil && (backend.firstTrust.coordinator == nil || !backend.firstTrust.coordinator.runtimeStartAuthorized()) {
-		return errRuntimeTrustEffectsDenied
-	}
 	backend.handler.setPublisher(publish)
 	if err := backend.handler.publishCurrent(); err != nil {
 		return err
+	}
+	if backend.firstTrust != nil && (backend.firstTrust.coordinator == nil || !backend.firstTrust.coordinator.runtimeStartAuthorized()) {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return errRuntimeTrustEffectsDenied
 	}
 	backend.mu.Lock()
 	if backend.closed {
@@ -328,7 +332,7 @@ func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebu
 			return nil, errors.New("released outgoing-attempt service construction failed")
 		}
 	}
-	return nil, fmt.Errorf("%w: helianthus-ship-go v0.6.1-helianthus.1 binds the listener on all interfaces", errScopedSHIPListenerUnavailable)
+	return nil, fmt.Errorf("%w: the available service constructor cannot bind a scoped SHIP listener", errScopedSHIPListenerUnavailable)
 }
 
 func validateRuntimeMaterial(material runtimeMaterial) error {
@@ -361,11 +365,13 @@ func validRuntimeSKI(value string) bool {
 type runtimeServiceHandler struct {
 	mu sync.Mutex
 
-	reducer      *runtimeObservationReducer
-	observations map[string]runtimeGraphObservation
-	now          func() time.Time
-	publish      func([]byte)
-	errors       chan error
+	reducer           *runtimeObservationReducer
+	observations      map[string]runtimeGraphObservation
+	projectionCapture func() trustAdminProjection
+	projectionRemotes []string
+	now               func() time.Time
+	publish           func([]byte)
+	errors            chan error
 }
 
 func newRuntimeServiceHandler(config RuntimeConfig, localSKI string, now func() time.Time) (*runtimeServiceHandler, error) {
@@ -385,18 +391,12 @@ func newRuntimeServiceHandler(config RuntimeConfig, localSKI string, now func() 
 	runtimeID := "runtime:" + localSKI
 	since := handler.timestamp()
 	for _, remote := range config.Remotes {
-		paired := runtimeRemoteAdmitted(remote.Pretrusted, remote.Allowlisted)
-		pairingState := string(eebusraw.PairingStateUnpaired)
-		if paired {
-			pairingState = string(eebusraw.PairingStatePaired)
-		}
 		observation := runtimeGraphObservation{
 			RuntimeID:    runtimeID,
 			LocalSKI:     localSKI,
 			RemoteSKI:    remote.SKI,
 			SessionState: "connecting",
-			PairingState: pairingState,
-			Paired:       paired,
+			PairingState: string(eebusraw.PairingStateUnpaired),
 			Since:        since,
 			ServiceIDs:   []string{"service:" + remote.SKI},
 		}
@@ -426,9 +426,7 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		observation.SessionIndex++
 		observation.SessionID = runtimeSessionIdentity(*observation)
 		observation.SessionState = "connected"
-		observation.PairingState = string(eebusraw.PairingStatePaired)
 		observation.Visible = true
-		observation.Paired = true
 		observation.Since = handler.timestamp()
 		observation.Devices = devices
 	})
@@ -494,27 +492,16 @@ func runtimeSessionIdentity(observation runtimeGraphObservation) string {
 }
 
 func (handler *runtimeServiceHandler) ServicePairingDetailUpdate(ski string, detail *shipapi.ConnectionStateDetail) {
-	state := eebusraw.PairingStateUnknown
-	paired := false
-	sessionState := "connecting"
+	sessionState := ""
 	if detail != nil {
 		switch detail.State() {
-		case shipapi.ConnectionStateTrusted, shipapi.ConnectionStateCompleted:
-			state = eebusraw.PairingStatePaired
-			paired = true
 		case shipapi.ConnectionStateRemoteDeniedTrust:
-			state = eebusraw.PairingStateDenied
 			sessionState = "degraded"
 		case shipapi.ConnectionStateError:
-			state = eebusraw.PairingStateUnknown
 			sessionState = "degraded"
-		case shipapi.ConnectionStateNone:
-			state = eebusraw.PairingStateUnpaired
 		}
 	}
 	handler.updateRemote(strings.ToLower(strings.TrimSpace(ski)), func(observation *runtimeGraphObservation) {
-		observation.PairingState = string(state)
-		observation.Paired = paired
 		if sessionState == "degraded" {
 			observation.SessionState = sessionState
 		}
@@ -548,17 +535,40 @@ func (handler *runtimeServiceHandler) publishOrReport() {
 
 func (handler *runtimeServiceHandler) publishCurrent() error {
 	handler.mu.Lock()
+	capture := handler.projectionCapture
+	handler.mu.Unlock()
+	if capture != nil {
+		return handler.publishTrustAdminProjection(capture())
+	}
+	return handler.publishRuntimeGraph(handler.reducer.Snapshot())
+}
+
+func (handler *runtimeServiceHandler) publishTrustAdminProjection(projection trustAdminProjection) error {
+	graph, remotes := handler.runtimeGraphAndProjectionRemotes()
+	applyTrustAdminProjection(graph, remotes, projection)
+	return handler.publishRuntimeGraph(graph)
+}
+
+func (handler *runtimeServiceHandler) publishRuntimeGraph(graph []runtimeGraphObservation) error {
+	handler.mu.Lock()
 	publish := handler.publish
 	handler.mu.Unlock()
 	if publish == nil {
 		return nil
 	}
-	payload, err := marshalRuntimeSnapshot(handler.reducer.Snapshot(), handler.timestamp())
+	payload, err := marshalRuntimeSnapshot(graph, handler.timestamp())
 	if err != nil {
 		return err
 	}
 	publish(payload)
 	return nil
+}
+
+func (handler *runtimeServiceHandler) runtimeGraphAndProjectionRemotes() ([]runtimeGraphObservation, []string) {
+	handler.mu.Lock()
+	remotes := append([]string(nil), handler.projectionRemotes...)
+	handler.mu.Unlock()
+	return handler.reducer.Snapshot(), remotes
 }
 
 func (handler *runtimeServiceHandler) report(err error) {
@@ -735,6 +745,7 @@ func marshalRuntimeSnapshot(graph []runtimeGraphObservation, now time.Time) ([]b
 	visible := false
 	connected := false
 	disconnected := false
+	trustDegradation := ""
 	for _, remote := range graph {
 		remoteID, err := eebusraw.RedactID(eebusraw.IDKindRemoteSKI, remote.RemoteSKI)
 		if err != nil {
@@ -763,8 +774,14 @@ func marshalRuntimeSnapshot(graph []runtimeGraphObservation, now time.Time) ([]b
 		visible = visible || remote.Visible
 		connected = connected || remote.SessionState == "connected"
 		disconnected = disconnected || remote.SessionState == "disconnected" || remote.SessionState == "degraded"
+		if remote.TrustDegradation == "denied-trust" || trustDegradation == "" && remote.TrustDegradation == "certificate-unavailable" {
+			trustDegradation = remote.TrustDegradation
+		}
 	}
-	if connected {
+	if trustDegradation != "" {
+		payload.Status.State = "degraded"
+		payload.Status.Degradation = &runtimeDegradationPayload{Reason: trustDegradation, Since: now}
+	} else if connected {
 		payload.Status.State = "ready"
 	} else if disconnected {
 		payload.Status.State = "degraded"
@@ -879,6 +896,7 @@ func normalizeRuntimeGraphObservation(source runtimeGraphObservation) (runtimeGr
 	result.SessionID = strings.TrimSpace(result.SessionID)
 	result.SessionState = strings.TrimSpace(result.SessionState)
 	result.PairingState = strings.TrimSpace(result.PairingState)
+	result.TrustDegradation = strings.TrimSpace(result.TrustDegradation)
 	if result.RuntimeID == "" || result.LocalSKI == "" || result.RemoteSKI == "" || result.SessionID == "" {
 		return runtimeGraphObservation{}, errors.New("runtime graph identities are required")
 	}
@@ -894,6 +912,11 @@ func normalizeRuntimeGraphObservation(source runtimeGraphObservation) (runtimeGr
 	case string(eebusraw.PairingStateUnknown), string(eebusraw.PairingStateUnpaired), string(eebusraw.PairingStatePaired), string(eebusraw.PairingStateDenied):
 	default:
 		return runtimeGraphObservation{}, errors.New("runtime pairing state is unsupported")
+	}
+	switch result.TrustDegradation {
+	case "", "denied-trust", "certificate-unavailable":
+	default:
+		return runtimeGraphObservation{}, errors.New("runtime trust degradation is unsupported")
 	}
 	if result.Since.IsZero() {
 		return runtimeGraphObservation{}, errors.New("runtime observation timestamp is required")

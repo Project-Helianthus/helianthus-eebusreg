@@ -409,8 +409,11 @@ func (coordinator *firstTrustCoordinator) publishFirstTrustControl(
 	anchor firstTrustAnchorRecord,
 ) (firstTrustPreparedPublication, string, firstTrustAnchorRecord) {
 	publication, outcome := coordinator.recoveryStore.PrepareControl(ctx, cloneFirstTrustControlView(working), cloneFirstTrustControlRecord(target), operationID, operationClass)
-	if outcome != "prepared" || !firstTrustPreparedPublicationValid(publication, selected, operationID, operationClass) {
+	if outcome != "prepared" {
 		return publication, "prepare_failed", anchor
+	}
+	if !firstTrustPreparedPublicationValid(publication, selected, operationID, operationClass) {
+		return publication, "unknown", anchor
 	}
 	pending := firstTrustPendingFromPrepared(publication)
 	expectedAnchor := cloneFirstTrustAnchorRecord(anchor)
@@ -625,5 +628,6 @@ func (coordinator *firstTrustCoordinator) finishRecoveryConfirmationLocked(
 	coordinator.inflight = nil
 	close(inflight.done)
 	coordinator.mu.Unlock()
+	coordinator.notifyTrustAdminProjection()
 	return result
 }

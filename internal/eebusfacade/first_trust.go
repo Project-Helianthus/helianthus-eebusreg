@@ -135,18 +135,19 @@ type firstTrustCoordinator struct {
 	retentionTimer   *time.Timer
 	retentionToken   uint64
 
-	monotonicNow       func() time.Duration
-	recoveryStore      firstTrustControlPersistence
-	anchor             firstTrustAnchorProvider
-	identityProvider   firstTrustIdentityProvider
-	backoffPolicy      firstTrustBackoffPolicy
-	recovery           string
-	recoveryReasonCode string
-	controlView        firstTrustControlView
-	anchorRecord       firstTrustAnchorRecord
-	retryArms          map[[32]byte]firstTrustRetryArm
-	retryInflight      map[[32]byte]bool
-	recoveryOperation  *firstTrustRecoveryOperation
+	monotonicNow         func() time.Duration
+	recoveryStore        firstTrustControlPersistence
+	anchor               firstTrustAnchorProvider
+	identityProvider     firstTrustIdentityProvider
+	backoffPolicy        firstTrustBackoffPolicy
+	recovery             string
+	recoveryReasonCode   string
+	controlView          firstTrustControlView
+	anchorRecord         firstTrustAnchorRecord
+	retryArms            map[[32]byte]firstTrustRetryArm
+	retryInflight        map[[32]byte]bool
+	recoveryOperation    *firstTrustRecoveryOperation
+	trustAdminProjection *trustAdminProjectionBinding
 
 	outgoingAttemptLanes                  [32]sync.Mutex
 	outgoingAttemptContexts               map[[32]byte]firstTrustOutgoingAttemptRuntime
@@ -551,6 +552,7 @@ func (coordinator *firstTrustCoordinator) confirm(ctx context.Context, key, fing
 		}
 		fence := make(chan struct{})
 		coordinator.mu.Lock()
+		terminal := false
 		if coordinator.commitToken == token && coordinator.inflight == inflight {
 			coordinator.phase = firstTrustDisabled
 			coordinator.window = nil
@@ -563,8 +565,12 @@ func (coordinator *firstTrustCoordinator) confirm(ctx context.Context, key, fing
 			coordinator.commitFence = fence
 			coordinator.inflight = nil
 			close(inflight.done)
+			terminal = true
 		}
 		coordinator.mu.Unlock()
+		if terminal {
+			coordinator.notifyTrustAdminProjection()
+		}
 		go func() {
 			<-result
 			close(fence)
@@ -662,7 +668,8 @@ func (coordinator *firstTrustCoordinator) shutdown() {
 		return
 	}
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
+	before := coordinator.captureTrustAdminProjectionLocked()
+	defer coordinator.unlockAndNotifyTrustAdminProjectionChange(before)
 	coordinator.stopTimerLocked()
 	coordinator.stopRetentionTimerLocked()
 	if coordinator.currentCandidate != nil {
@@ -697,8 +704,8 @@ func (coordinator *firstTrustCoordinator) selectedFirstTrustGenerationLocked() u
 
 func (coordinator *firstTrustCoordinator) finishCommit(token uint64, inflight *firstTrustInflight, remote []byte, connection uint64, storeOutcome string) string {
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
 	if coordinator.commitToken != token || coordinator.inflight != inflight {
+		coordinator.mu.Unlock()
 		return "trust_outcome_unknown"
 	}
 
@@ -740,6 +747,8 @@ func (coordinator *firstTrustCoordinator) finishCommit(token uint64, inflight *f
 	}
 	coordinator.inflight = nil
 	close(inflight.done)
+	coordinator.mu.Unlock()
+	coordinator.notifyTrustAdminProjection()
 	return result
 }
 
