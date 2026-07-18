@@ -44,12 +44,12 @@ func TestMSP05PRuntimeExportInventoryIsExact(t *testing.T) {
 	)
 }
 
-func TestMSP05PV2AdditionsAreExactlyAllowlisted(t *testing.T) {
+func TestMSP05PInitialV1ContractIsExactlyAllowlisted(t *testing.T) {
 	want := []manifestExport{
-		{Kind: "const", Name: "PairingPolicyV2Closed"},
-		{Kind: "func", Name: "NewV2"},
-		{Kind: "type", Name: "ConfigV2"},
-		{Kind: "type", Name: "PairingPolicyV2"},
+		{Kind: "const", Name: "PairingPolicyClosed"},
+		{Kind: "func", Name: "New"},
+		{Kind: "type", Name: "Config"},
+		{Kind: "type", Name: "PairingPolicy"},
 	}
 	for _, exported := range want {
 		if _, ok := allowedRuntimeExports[exported]; !ok {
@@ -94,9 +94,8 @@ const ObservedSessionStateV1Degraded
 const FeatureRoleV1Unspecified
 const FeatureRoleV1Client
 const FeatureRoleV1Server
-const PairingPolicyV2Closed
+const PairingPolicyClosed
 func New
-func NewV2
 func NewSnapshotV1
 func SnapshotV1.Clone
 func SnapshotV1.ComputeDataHash
@@ -115,7 +114,7 @@ type FeatureV1
 type ObservedRuntimeStateV1
 type ObservedSessionStateV1
 type PairingObservationV1
-type PairingPolicyV2
+type PairingPolicy
 type Remote
 type Runtime
 type RuntimeObservationV1
@@ -126,7 +125,6 @@ type SnapshotMetaV1
 type SnapshotV1
 type TopologyV1
 type UseCaseClaimV1
-type ConfigV2
 var ErrRuntimeDisabled
 var ErrRuntimeShutdown
 `)

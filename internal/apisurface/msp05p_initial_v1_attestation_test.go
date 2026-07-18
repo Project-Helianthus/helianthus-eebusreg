@@ -8,33 +8,43 @@ import (
 	"testing"
 )
 
-var msp05pAdditionNames = map[string]struct{}{
+var msp05pInitialV1Names = map[string]struct{}{
+	"Config":              {},
+	"New":                 {},
+	"PairingPolicy":       {},
+	"PairingPolicyClosed": {},
+}
+
+var msp05pRemovedV2Names = map[string]struct{}{
 	"ConfigV2":              {},
 	"NewV2":                 {},
 	"PairingPolicyV2":       {},
 	"PairingPolicyV2Closed": {},
 }
 
-func TestMSP05PPublicAPIAttestationIsExactlyFourAdditions(t *testing.T) {
+func TestMSP05PPublicAPIAttestationIsInitialV1(t *testing.T) {
 	doc, err := extract(moduleRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	root := msp05pRootSurface(t, doc)
 	want := map[string]string{
-		"ConfigV2":              "type ConfigV2 struct{ Enabled bool; StateRoot string; Interface string; ListenAddress netip.AddrPort; DiscoveryEnabled bool; Remotes []Remote; PairingPolicy PairingPolicyV2 }",
-		"NewV2":                 "func NewV2(ConfigV2) (Runtime, error)",
-		"PairingPolicyV2":       "type PairingPolicyV2 string",
-		"PairingPolicyV2Closed": `const PairingPolicyV2Closed PairingPolicyV2 = "closed"`,
+		"Config":              "type Config struct{ Enabled bool; StateRoot string; Interface string; ListenAddress netip.AddrPort; DiscoveryEnabled bool; Remotes []Remote; PairingPolicy PairingPolicy }",
+		"New":                 "func New(Config) (Runtime, error)",
+		"PairingPolicy":       "type PairingPolicy string",
+		"PairingPolicyClosed": `const PairingPolicyClosed PairingPolicy = "closed"`,
 	}
 	got := make(map[string]string, len(want))
 	for _, symbol := range root.Symbols {
-		if _, additive := msp05pAdditionNames[symbol.Name]; additive {
+		if _, initialV1 := msp05pInitialV1Names[symbol.Name]; initialV1 {
 			got[symbol.Name] = symbol.Signature
+		}
+		if _, removed := msp05pRemovedV2Names[symbol.Name]; removed {
+			t.Errorf("removed pre-release V2 symbol remains public: %s", symbol.Name)
 		}
 	}
 	if len(got) != len(want) {
-		t.Fatalf("MSP-05P public additions = %v, want exactly %v", sortedMSP05PKeys(got), sortedMSP05PKeys(want))
+		t.Fatalf("MSP-05P initial v1 symbols = %v, want exactly %v", sortedMSP05PKeys(got), sortedMSP05PKeys(want))
 	}
 	for name, signature := range want {
 		if got[name] != signature {
@@ -92,9 +102,14 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 
 	symbols := root.Symbols[:0]
 	for _, symbol := range root.Symbols {
-		if _, additive := msp05pAdditionNames[symbol.Name]; !additive {
-			symbols = append(symbols, symbol)
+		if symbol.Name == "PairingPolicy" || symbol.Name == "PairingPolicyClosed" {
+			continue
 		}
+		if symbol.Name == "Config" {
+			symbol.Type = "struct{ Enabled bool; StateRoot string; Interface string; ListenPort int; Remotes []Remote }"
+			symbol.Signature = "type Config struct{ Enabled bool; StateRoot string; Interface string; ListenPort int; Remotes []Remote }"
+		}
+		symbols = append(symbols, symbol)
 	}
 	root.Symbols = symbols
 

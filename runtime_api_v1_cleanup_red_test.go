@@ -17,37 +17,29 @@ import (
 )
 
 var (
-	_ PairingPolicyV2                 = PairingPolicyV2Closed
-	_ func(ConfigV2) (Runtime, error) = NewV2
-	_ func(Config) (Runtime, error)   = New
+	_ PairingPolicy                 = PairingPolicyClosed
+	_ func(Config) (Runtime, error) = New
 )
 
-func TestMSP05PRuntimeV2PublicShapeIsExactAndV1IsFrozen(t *testing.T) {
-	assertMSP05PStructFields(t, reflect.TypeOf(ConfigV2{}), []msp05pField{
+func TestMSP05PInitialV1PublicShapeIsExact(t *testing.T) {
+	assertMSP05PStructFields(t, reflect.TypeOf(Config{}), []msp05pField{
 		{name: "Enabled", typ: reflect.TypeOf(false)},
 		{name: "StateRoot", typ: reflect.TypeOf("")},
 		{name: "Interface", typ: reflect.TypeOf("")},
 		{name: "ListenAddress", typ: reflect.TypeOf(netip.AddrPort{})},
 		{name: "DiscoveryEnabled", typ: reflect.TypeOf(false)},
 		{name: "Remotes", typ: reflect.TypeOf([]Remote(nil))},
-		{name: "PairingPolicy", typ: reflect.TypeOf(PairingPolicyV2(""))},
+		{name: "PairingPolicy", typ: reflect.TypeOf(PairingPolicy(""))},
 	})
 
-	policyType := reflect.TypeOf(PairingPolicyV2(""))
-	if policyType.Kind() != reflect.String || policyType.Name() != "PairingPolicyV2" || policyType.PkgPath() == "" {
-		t.Fatalf("PairingPolicyV2 type = %s/%s/%s, want a package-defined string", policyType.Kind(), policyType.PkgPath(), policyType.Name())
+	policyType := reflect.TypeOf(PairingPolicy(""))
+	if policyType.Kind() != reflect.String || policyType.Name() != "PairingPolicy" || policyType.PkgPath() == "" {
+		t.Fatalf("PairingPolicy type = %s/%s/%s, want a package-defined string", policyType.Kind(), policyType.PkgPath(), policyType.Name())
 	}
-	if PairingPolicyV2Closed != PairingPolicyV2("closed") {
-		t.Fatalf("PairingPolicyV2Closed = %q, want closed", PairingPolicyV2Closed)
+	if PairingPolicyClosed != PairingPolicy("closed") {
+		t.Fatalf("PairingPolicyClosed = %q, want closed", PairingPolicyClosed)
 	}
 
-	assertMSP05PStructFields(t, reflect.TypeOf(Config{}), []msp05pField{
-		{name: "Enabled", typ: reflect.TypeOf(false)},
-		{name: "StateRoot", typ: reflect.TypeOf("")},
-		{name: "Interface", typ: reflect.TypeOf("")},
-		{name: "ListenPort", typ: reflect.TypeOf(int(0))},
-		{name: "Remotes", typ: reflect.TypeOf([]Remote(nil))},
-	})
 	assertMSP05PStructFields(t, reflect.TypeOf(Remote{}), []msp05pField{
 		{name: "SKI", typ: reflect.TypeOf("")},
 	})
@@ -58,7 +50,7 @@ func TestMSP05PRuntimeV2PublicShapeIsExactAndV1IsFrozen(t *testing.T) {
 	}
 }
 
-func TestMSP05PNewV2DelegatesOnlyToTheValidatedV2Seam(t *testing.T) {
+func TestMSP05PNewDelegatesOnlyToTheValidatedInitialV1Seam(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
@@ -76,83 +68,83 @@ func TestMSP05PNewV2DelegatesOnlyToTheValidatedV2Seam(t *testing.T) {
 		}
 		for _, candidate := range file.Decls {
 			function, ok := candidate.(*ast.FuncDecl)
-			if ok && function.Recv == nil && function.Name.Name == "NewV2" {
+			if ok && function.Recv == nil && function.Name.Name == "New" {
 				if declaration != nil {
-					t.Fatal("NewV2 is declared more than once")
+					t.Fatal("New is declared more than once")
 				}
 				declaration = function
 			}
 		}
 	}
 	if declaration == nil || declaration.Body == nil {
-		t.Fatal("NewV2 production declaration is missing")
+		t.Fatal("New production declaration is missing")
 	}
 	if len(declaration.Body.List) != 1 {
-		t.Fatalf("NewV2 body has %d statements, want one validated-seam return", len(declaration.Body.List))
+		t.Fatalf("New body has %d statements, want one validated-seam return", len(declaration.Body.List))
 	}
 	result, ok := declaration.Body.List[0].(*ast.ReturnStmt)
 	if !ok || len(result.Results) != 1 {
-		t.Fatal("NewV2 must return the validated v2 seam directly")
+		t.Fatal("New must return the validated v1 seam directly")
 	}
 	call, ok := result.Results[0].(*ast.CallExpr)
 	if !ok {
-		t.Fatal("NewV2 return is not a constructor call")
+		t.Fatal("New return is not a constructor call")
 	}
 	callee, ok := call.Fun.(*ast.Ident)
-	if !ok || callee.Name != "newRuntimeV2" {
-		t.Fatalf("NewV2 delegates to %T, want newRuntimeV2", call.Fun)
+	if !ok || callee.Name != "newRuntime" {
+		t.Fatalf("New delegates to %T, want newRuntime", call.Fun)
 	}
 	if declaration.Type.Params == nil || len(declaration.Type.Params.List) != 1 || len(declaration.Type.Params.List[0].Names) != 1 {
-		t.Fatal("NewV2 must name its one ConfigV2 parameter for lossless delegation")
+		t.Fatal("New must name its one Config parameter for lossless delegation")
 	}
 	parameter := declaration.Type.Params.List[0].Names[0].Name
 	if len(call.Args) != 2 {
-		t.Fatalf("newRuntimeV2 argument count = %d, want config and private factory", len(call.Args))
+		t.Fatalf("newRuntime argument count = %d, want config and private factory", len(call.Args))
 	}
 	carried, ok := call.Args[0].(*ast.Ident)
 	if !ok || carried.Name != parameter {
-		t.Fatal("NewV2 does not pass its ConfigV2 value losslessly to newRuntimeV2")
+		t.Fatal("New does not pass its Config value losslessly to newRuntime")
 	}
 }
 
-func TestMSP05PV2EnabledValidationIsPureAndExact(t *testing.T) {
+func TestMSP05PInitialV1EnabledValidationIsPureAndExact(t *testing.T) {
 	sandbox := t.TempDir()
 	stateRoot := filepath.Join(sandbox, "runtime-state")
-	valid := validRuntimeV2Config(stateRoot, false, nil)
+	valid := validCleanupRuntimeConfig(stateRoot, false, nil)
 
 	invalid := []struct {
 		name   string
-		mutate func(*ConfigV2)
+		mutate func(*Config)
 	}{
-		{name: "missing state root", mutate: func(config *ConfigV2) { config.StateRoot = "" }},
-		{name: "relative state root", mutate: func(config *ConfigV2) { config.StateRoot = "relative/state" }},
-		{name: "filesystem root", mutate: func(config *ConfigV2) { config.StateRoot = string(filepath.Separator) }},
-		{name: "missing interface", mutate: func(config *ConfigV2) { config.Interface = "" }},
-		{name: "whitespace interface", mutate: func(config *ConfigV2) { config.Interface = "  " }},
-		{name: "star interface", mutate: func(config *ConfigV2) { config.Interface = "*" }},
-		{name: "ipv4 wildcard interface", mutate: func(config *ConfigV2) { config.Interface = "0.0.0.0" }},
-		{name: "ipv6 wildcard interface", mutate: func(config *ConfigV2) { config.Interface = "::" }},
-		{name: "bracketed ipv6 wildcard interface", mutate: func(config *ConfigV2) { config.Interface = "[::]" }},
-		{name: "zero endpoint", mutate: func(config *ConfigV2) { config.ListenAddress = netip.AddrPort{} }},
-		{name: "invalid address", mutate: func(config *ConfigV2) { config.ListenAddress = netip.AddrPortFrom(netip.Addr{}, 4711) }},
-		{name: "zero port", mutate: func(config *ConfigV2) { config.ListenAddress = netip.MustParseAddrPort("192.0.2.10:0") }},
-		{name: "unspecified ipv4", mutate: func(config *ConfigV2) { config.ListenAddress = netip.MustParseAddrPort("0.0.0.0:4711") }},
-		{name: "unspecified ipv6", mutate: func(config *ConfigV2) { config.ListenAddress = netip.MustParseAddrPort("[::]:4711") }},
-		{name: "ipv4 multicast", mutate: func(config *ConfigV2) { config.ListenAddress = netip.MustParseAddrPort("224.0.0.1:4711") }},
-		{name: "ipv6 multicast", mutate: func(config *ConfigV2) { config.ListenAddress = netip.MustParseAddrPort("[ff02::1]:4711") }},
-		{name: "ipv4 zero network", mutate: func(config *ConfigV2) { config.ListenAddress = netip.MustParseAddrPort("0.1.2.3:4711") }},
-		{name: "limited broadcast", mutate: func(config *ConfigV2) { config.ListenAddress = netip.MustParseAddrPort("255.255.255.255:4711") }},
-		{name: "ipv4 mapped ipv6", mutate: func(config *ConfigV2) { config.ListenAddress = netip.MustParseAddrPort("[::ffff:192.0.2.10]:4711") }},
-		{name: "missing pairing policy", mutate: func(config *ConfigV2) { config.PairingPolicy = "" }},
-		{name: "open pairing policy", mutate: func(config *ConfigV2) { config.PairingPolicy = PairingPolicyV2("open") }},
-		{name: "noncanonical closed policy", mutate: func(config *ConfigV2) { config.PairingPolicy = PairingPolicyV2(" closed ") }},
+		{name: "missing state root", mutate: func(config *Config) { config.StateRoot = "" }},
+		{name: "relative state root", mutate: func(config *Config) { config.StateRoot = "relative/state" }},
+		{name: "filesystem root", mutate: func(config *Config) { config.StateRoot = string(filepath.Separator) }},
+		{name: "missing interface", mutate: func(config *Config) { config.Interface = "" }},
+		{name: "whitespace interface", mutate: func(config *Config) { config.Interface = "  " }},
+		{name: "star interface", mutate: func(config *Config) { config.Interface = "*" }},
+		{name: "ipv4 wildcard interface", mutate: func(config *Config) { config.Interface = "0.0.0.0" }},
+		{name: "ipv6 wildcard interface", mutate: func(config *Config) { config.Interface = "::" }},
+		{name: "bracketed ipv6 wildcard interface", mutate: func(config *Config) { config.Interface = "[::]" }},
+		{name: "zero endpoint", mutate: func(config *Config) { config.ListenAddress = netip.AddrPort{} }},
+		{name: "invalid address", mutate: func(config *Config) { config.ListenAddress = netip.AddrPortFrom(netip.Addr{}, 4711) }},
+		{name: "zero port", mutate: func(config *Config) { config.ListenAddress = netip.MustParseAddrPort("192.0.2.10:0") }},
+		{name: "unspecified ipv4", mutate: func(config *Config) { config.ListenAddress = netip.MustParseAddrPort("0.0.0.0:4711") }},
+		{name: "unspecified ipv6", mutate: func(config *Config) { config.ListenAddress = netip.MustParseAddrPort("[::]:4711") }},
+		{name: "ipv4 multicast", mutate: func(config *Config) { config.ListenAddress = netip.MustParseAddrPort("224.0.0.1:4711") }},
+		{name: "ipv6 multicast", mutate: func(config *Config) { config.ListenAddress = netip.MustParseAddrPort("[ff02::1]:4711") }},
+		{name: "ipv4 zero network", mutate: func(config *Config) { config.ListenAddress = netip.MustParseAddrPort("0.1.2.3:4711") }},
+		{name: "limited broadcast", mutate: func(config *Config) { config.ListenAddress = netip.MustParseAddrPort("255.255.255.255:4711") }},
+		{name: "ipv4 mapped ipv6", mutate: func(config *Config) { config.ListenAddress = netip.MustParseAddrPort("[::ffff:192.0.2.10]:4711") }},
+		{name: "missing pairing policy", mutate: func(config *Config) { config.PairingPolicy = "" }},
+		{name: "open pairing policy", mutate: func(config *Config) { config.PairingPolicy = PairingPolicy("open") }},
+		{name: "noncanonical closed policy", mutate: func(config *Config) { config.PairingPolicy = PairingPolicy(" closed ") }},
 	}
 
 	for _, test := range invalid {
 		t.Run("reject "+test.name, func(t *testing.T) {
 			config := valid
 			test.mutate(&config)
-			assertMSP05PV2RejectedWithoutConstruction(t, config)
+			assertMSP05PInitialV1RejectedWithoutConstruction(t, config)
 			assertRuntimePathAbsent(t, stateRoot)
 		})
 	}
@@ -164,15 +156,15 @@ func TestMSP05PV2EnabledValidationIsPureAndExact(t *testing.T) {
 	for _, endpoint := range validEndpoints {
 		for _, discovery := range []bool{false, true} {
 			t.Run(endpoint.String()+"/discovery="+strconv.FormatBool(discovery), func(t *testing.T) {
-				config := validRuntimeV2Config(stateRoot, discovery, nil)
+				config := validCleanupRuntimeConfig(stateRoot, discovery, nil)
 				config.ListenAddress = endpoint
 				var acquisitions atomic.Int32
-				instance, err := newRuntimeV2(config, runtimeBackendFactoryV2(func(context.Context, ConfigV2) (runtimeBackend, error) {
+				instance, err := newRuntime(config, runtimeBackendFactory(func(context.Context, Config) (runtimeBackend, error) {
 					acquisitions.Add(1)
 					return newFakeRuntimeBackend(), nil
 				}))
 				if err != nil {
-					t.Fatalf("newRuntimeV2(valid) error = %v", err)
+					t.Fatalf("newRuntime(valid) error = %v", err)
 				}
 				if got := acquisitions.Load(); got != 0 {
 					t.Fatalf("constructor acquired backend %d times, want 0", got)
@@ -181,9 +173,9 @@ func TestMSP05PV2EnabledValidationIsPureAndExact(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				public, err := NewV2(config)
+				public, err := New(config)
 				if err != nil {
-					t.Fatalf("NewV2(valid) error = %v", err)
+					t.Fatalf("New(valid) error = %v", err)
 				}
 				if err := public.Shutdown(); err != nil {
 					t.Fatal(err)
@@ -195,9 +187,9 @@ func TestMSP05PV2EnabledValidationIsPureAndExact(t *testing.T) {
 	assertRuntimeDirectoryEmpty(t, sandbox)
 }
 
-func TestMSP05PV2RemotesNormalizeRejectAndRemainDefensivelyCopied(t *testing.T) {
+func TestMSP05PInitialV1RemotesNormalizeRejectAndRemainDefensivelyCopied(t *testing.T) {
 	stateRoot := filepath.Join(t.TempDir(), "runtime-state")
-	valid := validRuntimeV2Config(stateRoot, true, nil)
+	valid := validCleanupRuntimeConfig(stateRoot, true, nil)
 	invalid := []struct {
 		name    string
 		remotes []Remote
@@ -214,7 +206,7 @@ func TestMSP05PV2RemotesNormalizeRejectAndRemainDefensivelyCopied(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			config := valid
 			config.Remotes = test.remotes
-			assertMSP05PV2RejectedWithoutConstruction(t, config)
+			assertMSP05PInitialV1RejectedWithoutConstruction(t, config)
 		})
 	}
 
@@ -222,7 +214,7 @@ func TestMSP05PV2RemotesNormalizeRejectAndRemainDefensivelyCopied(t *testing.T) 
 		{SKI: " AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "},
 		{SKI: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"},
 	}
-	config := validRuntimeV2Config(stateRoot, true, input)
+	config := validCleanupRuntimeConfig(stateRoot, true, input)
 	want := config
 	want.Remotes = []Remote{
 		{SKI: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
@@ -231,9 +223,9 @@ func TestMSP05PV2RemotesNormalizeRejectAndRemainDefensivelyCopied(t *testing.T) 
 
 	firstAttempt := errors.New("fixture first acquisition failed")
 	backend := newFakeRuntimeBackend()
-	received := make(chan ConfigV2, 2)
+	received := make(chan Config, 2)
 	var attempts atomic.Int32
-	factory := runtimeBackendFactoryV2(func(_ context.Context, got ConfigV2) (runtimeBackend, error) {
+	factory := runtimeBackendFactory(func(_ context.Context, got Config) (runtimeBackend, error) {
 		captured := got
 		captured.Remotes = append([]Remote(nil), got.Remotes...)
 		received <- captured
@@ -243,12 +235,12 @@ func TestMSP05PV2RemotesNormalizeRejectAndRemainDefensivelyCopied(t *testing.T) 
 		}
 		return backend, nil
 	})
-	instance, err := newRuntimeV2(config, factory)
+	instance, err := newRuntime(config, factory)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := attempts.Load(); got != 0 {
-		t.Fatalf("newRuntimeV2 acquired backend %d times, want 0", got)
+		t.Fatalf("newRuntime acquired backend %d times, want 0", got)
 	}
 	input[0].SKI = strings.Repeat("0", 40)
 	config.Remotes[1].SKI = strings.Repeat("1", 40)
@@ -256,12 +248,12 @@ func TestMSP05PV2RemotesNormalizeRejectAndRemainDefensivelyCopied(t *testing.T) 
 	if err := instance.Start(context.Background()); !errors.Is(err, firstAttempt) {
 		t.Fatalf("first Start() error = %v, want fixture failure", err)
 	}
-	assertMSP05PConfigV2Equal(t, <-received, want)
+	assertMSP05PConfigEqual(t, <-received, want)
 	if err := instance.Start(context.Background()); err != nil {
 		t.Fatalf("second Start() error = %v", err)
 	}
-	assertMSP05PConfigV2Equal(t, <-received, want)
-	waitRuntimeSignal(t, backend.runStarted, "v2 backend Run")
+	assertMSP05PConfigEqual(t, <-received, want)
+	waitRuntimeSignal(t, backend.runStarted, "v1 backend Run")
 	if err := instance.Shutdown(); err != nil {
 		t.Fatal(err)
 	}
@@ -269,9 +261,9 @@ func TestMSP05PV2RemotesNormalizeRejectAndRemainDefensivelyCopied(t *testing.T) 
 	for _, discovery := range []bool{false, true} {
 		t.Run("empty remotes/discovery="+strconv.FormatBool(discovery), func(t *testing.T) {
 			backend := newFakeRuntimeBackend()
-			captured := make(chan ConfigV2, 1)
-			config := validRuntimeV2Config(filepath.Join(t.TempDir(), "state"), discovery, []Remote{})
-			instance, err := newRuntimeV2(config, runtimeBackendFactoryV2(func(_ context.Context, got ConfigV2) (runtimeBackend, error) {
+			captured := make(chan Config, 1)
+			config := validCleanupRuntimeConfig(filepath.Join(t.TempDir(), "state"), discovery, []Remote{})
+			instance, err := newRuntime(config, runtimeBackendFactory(func(_ context.Context, got Config) (runtimeBackend, error) {
 				captured <- got
 				return backend, nil
 			}))
@@ -293,7 +285,7 @@ func TestMSP05PV2RemotesNormalizeRejectAndRemainDefensivelyCopied(t *testing.T) 
 	}
 }
 
-func TestMSP05PV2DisabledProductIsStrictlyInert(t *testing.T) {
+func TestMSP05PInitialV1DisabledProductIsStrictlyInert(t *testing.T) {
 	sandbox := t.TempDir()
 	t.Setenv("HOME", sandbox)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(sandbox, "config"))
@@ -301,39 +293,39 @@ func TestMSP05PV2DisabledProductIsStrictlyInert(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(sandbox, "state"))
 
 	var acquisitions atomic.Int32
-	instance, err := newRuntimeV2(ConfigV2{}, runtimeBackendFactoryV2(func(context.Context, ConfigV2) (runtimeBackend, error) {
+	instance, err := newRuntime(Config{}, runtimeBackendFactory(func(context.Context, Config) (runtimeBackend, error) {
 		acquisitions.Add(1)
 		return newFakeRuntimeBackend(), nil
 	}))
 	if err != nil {
-		t.Fatalf("newRuntimeV2(zero) error = %v", err)
+		t.Fatalf("newRuntime(zero) error = %v", err)
 	}
 	assertMSP05PDisabledRuntime(t, instance)
 	if got := acquisitions.Load(); got != 0 {
-		t.Fatalf("disabled v2 acquired backend %d times, want 0", got)
+		t.Fatalf("disabled v1 acquired backend %d times, want 0", got)
 	}
 
-	public, err := NewV2(ConfigV2{})
+	public, err := New(Config{})
 	if err != nil {
-		t.Fatalf("NewV2(zero) error = %v", err)
+		t.Fatalf("New(zero) error = %v", err)
 	}
 	assertMSP05PDisabledRuntime(t, public)
 	assertRuntimeDirectoryEmpty(t, sandbox)
 
 	mixed := []struct {
 		name   string
-		config ConfigV2
+		config Config
 	}{
-		{name: "state root", config: ConfigV2{StateRoot: filepath.Join(sandbox, "runtime-state")}},
-		{name: "interface", config: ConfigV2{Interface: "en0"}},
-		{name: "listen address", config: ConfigV2{ListenAddress: netip.MustParseAddrPort("192.0.2.10:4711")}},
-		{name: "discovery", config: ConfigV2{DiscoveryEnabled: true}},
-		{name: "remotes", config: ConfigV2{Remotes: []Remote{{SKI: strings.Repeat("a", 40)}}}},
-		{name: "pairing policy", config: ConfigV2{PairingPolicy: PairingPolicyV2Closed}},
+		{name: "state root", config: Config{StateRoot: filepath.Join(sandbox, "runtime-state")}},
+		{name: "interface", config: Config{Interface: "en0"}},
+		{name: "listen address", config: Config{ListenAddress: netip.MustParseAddrPort("192.0.2.10:4711")}},
+		{name: "discovery", config: Config{DiscoveryEnabled: true}},
+		{name: "remotes", config: Config{Remotes: []Remote{{SKI: strings.Repeat("a", 40)}}}},
+		{name: "pairing policy", config: Config{PairingPolicy: PairingPolicyClosed}},
 	}
 	for _, test := range mixed {
 		t.Run(test.name, func(t *testing.T) {
-			assertMSP05PV2RejectedWithoutConstruction(t, test.config)
+			assertMSP05PInitialV1RejectedWithoutConstruction(t, test.config)
 		})
 	}
 	assertRuntimeDirectoryEmpty(t, sandbox)
@@ -360,40 +352,40 @@ func assertMSP05PStructFields(t *testing.T, typ reflect.Type, want []msp05pField
 	}
 }
 
-func validRuntimeV2Config(stateRoot string, discovery bool, remotes []Remote) ConfigV2 {
-	return ConfigV2{
+func validCleanupRuntimeConfig(stateRoot string, discovery bool, remotes []Remote) Config {
+	return Config{
 		Enabled:          true,
 		StateRoot:        stateRoot,
 		Interface:        "test-interface",
 		ListenAddress:    netip.MustParseAddrPort("192.0.2.10:4711"),
 		DiscoveryEnabled: discovery,
 		Remotes:          remotes,
-		PairingPolicy:    PairingPolicyV2Closed,
+		PairingPolicy:    PairingPolicyClosed,
 	}
 }
 
-func assertMSP05PV2RejectedWithoutConstruction(t *testing.T, config ConfigV2) {
+func assertMSP05PInitialV1RejectedWithoutConstruction(t *testing.T, config Config) {
 	t.Helper()
 	var acquisitions atomic.Int32
-	factory := runtimeBackendFactoryV2(func(context.Context, ConfigV2) (runtimeBackend, error) {
+	factory := runtimeBackendFactory(func(context.Context, Config) (runtimeBackend, error) {
 		acquisitions.Add(1)
 		return newFakeRuntimeBackend(), nil
 	})
-	if instance, err := newRuntimeV2(config, factory); err == nil || instance != nil {
-		t.Fatalf("newRuntimeV2 accepted invalid configuration: runtime=%T error=%v", instance, err)
+	if instance, err := newRuntime(config, factory); err == nil || instance != nil {
+		t.Fatalf("newRuntime accepted invalid configuration: runtime=%T error=%v", instance, err)
 	}
 	if got := acquisitions.Load(); got != 0 {
-		t.Fatalf("invalid newRuntimeV2 acquired backend %d times, want 0", got)
+		t.Fatalf("invalid newRuntime acquired backend %d times, want 0", got)
 	}
-	if instance, err := NewV2(config); err == nil || instance != nil {
-		t.Fatalf("NewV2 accepted invalid configuration: runtime=%T error=%v", instance, err)
+	if instance, err := New(config); err == nil || instance != nil {
+		t.Fatalf("New accepted invalid configuration: runtime=%T error=%v", instance, err)
 	}
 }
 
-func assertMSP05PConfigV2Equal(t *testing.T, got, want ConfigV2) {
+func assertMSP05PConfigEqual(t *testing.T, got, want Config) {
 	t.Helper()
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("backend ConfigV2 = %#v, want %#v", got, want)
+		t.Fatalf("backend Config = %#v, want %#v", got, want)
 	}
 }
 
