@@ -13,6 +13,7 @@ func TestMSP04CG16PublicGoAPIRemainsAtTheMSP04BFrozenHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	doc = msp05pProjectFrozenV1(t, doc)
 	payload, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		t.Fatal(err)
