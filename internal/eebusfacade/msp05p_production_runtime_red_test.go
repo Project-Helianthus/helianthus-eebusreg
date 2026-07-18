@@ -8,20 +8,240 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 	shipcert "github.com/Project-Helianthus/helianthus-ship-go/cert"
 	"github.com/gorilla/websocket"
 )
+
+func TestMSP05PScopedStartupRollbackClosesTrustAndPreservesPrimaryError(t *testing.T) {
+	root := canonicalRuntimeTempDir(t)
+	stateRoot := filepath.Join(root, "state")
+	remoteSKI := "1111111111111111111111111111111111111111"
+
+	initial, err := loadProtectedRuntimeMaterial(context.Background(), stateRoot)
+	if err != nil {
+		t.Fatalf("load initial protected material: %v", err)
+	}
+	trust := acquireMSP05PTrustResources(t, stateRoot, filepath.Join(root, "admin-bootstrap"), initial)
+	pairRuntimeRemote(t, trust, remoteSKI, 73)
+	if err := trust.Close(); err != nil {
+		t.Fatalf("close bootstrap trust resources: %v", err)
+	}
+
+	material, err := loadProtectedRuntimeMaterial(context.Background(), stateRoot)
+	if err != nil {
+		t.Fatalf("reload paired protected material: %v", err)
+	}
+	authorization := *material.firstTrust
+	authorization.adminRuntimeDir = filepath.Join(root, "admin-failing-start")
+	material.firstTrust = &authorization
+	primary := errors.New("synthetic scoped listener bind failure")
+	service := newMSP05PScopedService(primary)
+	dependencies := defaultRuntimeDependencies
+	dependencies.loadMaterial = func(context.Context, string) (runtimeMaterial, error) { return material, nil }
+	dependencies.newService = func(RuntimeConfig, runtimeMaterial, eebusapi.ServiceReaderInterface) (runtimeService, error) {
+		return service, nil
+	}
+
+	failed, err := acquireRuntime(context.Background(), RuntimeConfig{
+		StateRoot: stateRoot, Interface: "fixture-interface", ListenPort: 4711,
+		ListenAddress: netip.MustParseAddrPort("127.0.0.1:4711"),
+		Remotes:       []RuntimeRemote{{SKI: remoteSKI}},
+	}, dependencies)
+	if failed != nil || !errors.Is(err, primary) {
+		t.Fatalf("scoped startup result backend=%v error=%v, want primary bind error", failed, err)
+	}
+	if got, want := service.eventsSnapshot(), []string{"setup", "register:" + remoteSKI, "start-policy", "shutdown"}; !slices.Equal(got, want) {
+		t.Fatalf("scoped startup events = %v, want %v", got, want)
+	}
+	if service.shutdownCount() != 1 {
+		t.Fatalf("scoped startup shutdown count = %d, want 1", service.shutdownCount())
+	}
+	entries, readErr := os.ReadDir(authorization.adminRuntimeDir)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatalf("inspect first-trust admin directory after rollback: %v", readErr)
+	}
+	for _, entry := range entries {
+		info, statErr := entry.Info()
+		if statErr != nil {
+			t.Fatal(statErr)
+		}
+		if info.Mode()&os.ModeSocket != 0 {
+			t.Fatalf("first-trust admin socket %q survived scoped startup rollback", entry.Name())
+		}
+	}
+	reloaded, err := loadProtectedRuntimeMaterial(context.Background(), stateRoot)
+	if err != nil {
+		t.Fatalf("protected store remained owned after scoped startup rollback: %v", err)
+	}
+	if !reloaded.pretrusted[remoteSKI] {
+		t.Fatal("scoped startup rollback discarded durable trust")
+	}
+}
+
+func TestMSP05PServiceBackendReportsListenerTerminalAndClaimsPublisherOnce(t *testing.T) {
+	localSKI := "0000000000000000000000000000000000000001"
+	remoteSKI := "0000000000000000000000000000000000000002"
+	handler, err := newRuntimeServiceHandler(RuntimeConfig{
+		Remotes: []RuntimeRemote{{SKI: remoteSKI, Allowlisted: true}},
+	}, localSKI, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := newMSP05PScopedService(nil)
+	dependencies := runtimeDependencies{
+		loadMaterial: func(context.Context, string) (runtimeMaterial, error) {
+			certificate, certificateErr := shipcert.CreateCertificate("", "Helianthus", "RO", "scoped-backend-test")
+			if certificateErr != nil {
+				return runtimeMaterial{}, certificateErr
+			}
+			return runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate), pretrusted: map[string]bool{remoteSKI: true}}, nil
+		},
+		newService: func(RuntimeConfig, runtimeMaterial, eebusapi.ServiceReaderInterface) (runtimeService, error) {
+			return service, nil
+		},
+		now: time.Now,
+	}
+	backend, err := acquireRuntime(context.Background(), RuntimeConfig{
+		StateRoot: "/tmp/helianthus-eebus-runtime-scoped-owner-test", Interface: "fixture-interface", ListenPort: 4711,
+		ListenAddress: netip.MustParseAddrPort("127.0.0.1:4711"), Remotes: []RuntimeRemote{{SKI: remoteSKI}},
+	}, dependencies)
+	if err != nil {
+		t.Fatalf("acquire scoped backend: %v", err)
+	}
+	implementation := backend.(*serviceBackend)
+	implementation.handler = handler
+
+	runContext, cancelRuns := context.WithCancel(context.Background())
+	defer cancelRuns()
+	firstPublished := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- backend.Run(runContext, func([]byte) {
+			close(firstPublished)
+			<-releaseFirst
+		})
+	}()
+	select {
+	case <-firstPublished:
+	case <-time.After(time.Second):
+		t.Fatal("first Run did not publish")
+	}
+	secondPublished := make(chan struct{}, 1)
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- backend.Run(runContext, func([]byte) { secondPublished <- struct{}{} })
+	}()
+	select {
+	case <-secondPublished:
+		close(releaseFirst)
+		cancelRuns()
+		_ = backend.Close()
+		<-firstDone
+		<-secondDone
+		t.Fatal("rejected Run replaced or invoked the active publisher")
+	case secondErr := <-secondDone:
+		if secondErr == nil || !strings.Contains(secondErr.Error(), "already running") {
+			t.Fatalf("second Run error = %v, want ownership rejection", secondErr)
+		}
+	case <-time.After(time.Second):
+		close(releaseFirst)
+		cancelRuns()
+		_ = backend.Close()
+		<-firstDone
+		t.Fatal("second Run did not reject concurrent ownership")
+	}
+	select {
+	case <-secondPublished:
+		t.Fatal("rejected Run invoked the active publisher")
+	default:
+	}
+	close(releaseFirst)
+	terminal := errors.New("synthetic listener terminal")
+	service.terminal <- terminal
+	select {
+	case err := <-firstDone:
+		if !errors.Is(err, terminal) {
+			t.Fatalf("Run terminal error = %v, want %v", err, terminal)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not observe listener terminalization")
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type msp05pScopedService struct {
+	*fakeRuntimeService
+	mu             sync.Mutex
+	events         []string
+	startPolicyErr error
+	terminal       chan error
+}
+
+func newMSP05PScopedService(startErr error) *msp05pScopedService {
+	return &msp05pScopedService{
+		fakeRuntimeService: &fakeRuntimeService{started: make(chan struct{})},
+		startPolicyErr:     startErr,
+		terminal:           make(chan error, 1),
+	}
+}
+
+func (service *msp05pScopedService) Setup() error {
+	service.record("setup")
+	return service.fakeRuntimeService.Setup()
+}
+
+func (service *msp05pScopedService) RegisterRemoteSKI(ski string) {
+	service.record("register:" + ski)
+	service.fakeRuntimeService.RegisterRemoteSKI(ski)
+}
+
+func (service *msp05pScopedService) StartWithPolicy() error {
+	service.record("start-policy")
+	return service.startPolicyErr
+}
+
+func (service *msp05pScopedService) ListenerTerminal() <-chan error { return service.terminal }
+
+func (service *msp05pScopedService) Shutdown() {
+	service.record("shutdown")
+	service.fakeRuntimeService.Shutdown()
+}
+
+func (service *msp05pScopedService) record(event string) {
+	service.mu.Lock()
+	service.events = append(service.events, event)
+	service.mu.Unlock()
+}
+
+func (service *msp05pScopedService) eventsSnapshot() []string {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	return append([]string(nil), service.events...)
+}
+
+func (service *msp05pScopedService) shutdownCount() int {
+	service.fakeRuntimeService.mu.Lock()
+	defer service.fakeRuntimeService.mu.Unlock()
+	return service.fakeRuntimeService.shutdowns
+}
 
 func TestMSP05PProductionRuntimeScopesListenerDisablesDiscoveryAndDeniesUnknownTrust(t *testing.T) {
 	root := msp05pProductionTempRoot(t)
