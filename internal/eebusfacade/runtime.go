@@ -2,6 +2,7 @@ package eebusfacade
 
 import (
 	"context"
+	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -66,6 +67,20 @@ type runtimeMaterial struct {
 	pretrusted            map[string]bool
 	firstTrust            *runtimeFirstTrustAuthorization
 	outgoingAttemptBridge *firstTrustOutgoingAttemptBridge
+}
+
+const redactedRuntimeMaterial = "eebusfacade.runtime_material{redacted}"
+
+func (runtimeMaterial) String() string {
+	return redactedRuntimeMaterial
+}
+
+func (runtimeMaterial) Format(state fmt.State, verb rune) {
+	if verb == 'q' {
+		_, _ = fmt.Fprintf(state, "%q", redactedRuntimeMaterial)
+		return
+	}
+	_, _ = fmt.Fprint(state, redactedRuntimeMaterial)
 }
 
 type runtimeMaterialLoader func(context.Context, string) (runtimeMaterial, error)
@@ -307,8 +322,16 @@ func (backend *serviceBackend) Close() error {
 	return backend.closeErr
 }
 
-func loadProtectedRuntimeMaterial(context.Context, string) (runtimeMaterial, error) {
-	return runtimeMaterial{}, errors.New("protected runtime material provider is not installed")
+func loadProtectedRuntimeMaterial(ctx context.Context, stateRoot string) (runtimeMaterial, error) {
+	return loadNativeProtectedRuntimeMaterial(ctx, stateRoot)
+}
+
+func newProtectedTLSCertificate(certificateChain [][]byte, signer crypto.Signer) tls.Certificate {
+	return tls.Certificate{
+		Certificate:                  certificateChain,
+		PrivateKey:                   signer,
+		SupportedSignatureAlgorithms: []tls.SignatureScheme{tls.ECDSAWithP256AndSHA256},
+	}
 }
 
 func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebusapi.ServiceReaderInterface) (runtimeService, error) {
