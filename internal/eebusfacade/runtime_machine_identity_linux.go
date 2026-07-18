@@ -4,11 +4,9 @@ package eebusfacade
 
 import (
 	"crypto/sha256"
-	"encoding/binary"
 	"io"
 	"os"
 	"strings"
-	"syscall"
 )
 
 func nativeMachineIdentity() ([sha256.Size]byte, error) {
@@ -27,27 +25,7 @@ func nativeMachineIdentity() ([sha256.Size]byte, error) {
 		}
 	}
 
-	bootID, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
-	if err != nil || len(strings.TrimSpace(string(bootID))) < 8 {
-		return [sha256.Size]byte{}, errNativeProtectedBindingUnavailable
-	}
-	var root syscall.Stat_t
-	if err := syscall.Stat("/", &root); err != nil {
-		return [sha256.Size]byte{}, errNativeProtectedBindingUnavailable
-	}
-	hostname, _ := os.Hostname()
-	hash := sha256.New()
-	_, _ = io.WriteString(hash, "helianthus-eebusreg/linux-machine/v1\x00boot-root")
-	_, _ = hash.Write([]byte(strings.TrimSpace(string(bootID))))
-	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], uint64(root.Dev))
-	_, _ = hash.Write(encoded[:])
-	binary.BigEndian.PutUint64(encoded[:], uint64(root.Ino))
-	_, _ = hash.Write(encoded[:])
-	_, _ = io.WriteString(hash, hostname)
-	var identity [sha256.Size]byte
-	copy(identity[:], hash.Sum(nil))
-	return identity, nil
+	return [sha256.Size]byte{}, errNativeProtectedBindingUnavailable
 }
 
 func nativeMachineIdentityFile(label, path string) ([sha256.Size]byte, bool) {

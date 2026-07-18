@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusstore"
@@ -49,6 +48,7 @@ type nativeProtectedIdentityProvider struct {
 	anchorIdentity [sha256.Size]byte
 	anchor         firstTrustAnchorRecord
 	anchorReady    bool
+	witness        *nativeProtectedWitness
 }
 
 type nativeProtectedSigner struct {
@@ -256,12 +256,26 @@ func newNativeProtectedIdentityProvider(stateRoot string) (*nativeProtectedIdent
 	if err != nil {
 		return nil, errNativeProtectedBindingUnavailable
 	}
-	key := nativeProtectedDerive(machineIdentity[:], "key", rootBinding[:])
+	witness, err := openNativeProtectedWitness(stateRoot, machineIdentity)
+	if err != nil {
+		clear(machineIdentity[:])
+		return nil, errNativeProtectedBindingUnavailable
+	}
+	key := witness.keyMaterial()
 	anchorIdentity := nativeProtectedDerive(key[:], "anchor", rootBinding[:])
 	clear(machineIdentity[:])
-	return &nativeProtectedIdentityProvider{
-		key: key, rootBinding: rootBinding, anchorIdentity: anchorIdentity,
-	}, nil
+	provider := &nativeProtectedIdentityProvider{
+		key: key, rootBinding: rootBinding, anchorIdentity: anchorIdentity, witness: witness,
+	}
+	anchor, found, err := witness.loadAnchor()
+	if err != nil || found && anchor.anchorIdentity != anchorIdentity {
+		return nil, errNativeProtectedBindingUnavailable
+	}
+	if found {
+		provider.anchor = cloneFirstTrustAnchorRecord(anchor)
+		provider.anchorReady = true
+	}
+	return provider, nil
 }
 
 func nativeProtectedRootBinding(stateRoot string) ([sha256.Size]byte, error) {
@@ -287,20 +301,12 @@ func nativeProtectedRootBinding(stateRoot string) ([sha256.Size]byte, error) {
 		canonicalInfo.Mode().Perm() != 0o700 || !os.SameFile(info, canonicalInfo) {
 		return zero, errNativeProtectedBindingUnavailable
 	}
-	stat, ok := canonicalInfo.Sys().(*syscall.Stat_t)
-	if !ok {
-		return zero, errNativeProtectedBindingUnavailable
-	}
 	hash := sha256.New()
 	_, _ = io.WriteString(hash, "helianthus-eebusreg/native-root/v1\x00")
 	var encoded [8]byte
 	binary.BigEndian.PutUint64(encoded[:], uint64(len(canonical)))
 	_, _ = hash.Write(encoded[:])
 	_, _ = io.WriteString(hash, canonical)
-	binary.BigEndian.PutUint64(encoded[:], uint64(stat.Dev))
-	_, _ = hash.Write(encoded[:])
-	binary.BigEndian.PutUint64(encoded[:], uint64(stat.Ino))
-	_, _ = hash.Write(encoded[:])
 	copy(zero[:], hash.Sum(nil))
 	return zero, nil
 }
@@ -508,23 +514,39 @@ func (provider *nativeProtectedIdentityProvider) restoreAnchor(view eebusstore.C
 	}
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	provider.anchor = firstTrustAnchorRecord{
-		version:                     firstTrustAnchorVersion,
-		anchorIdentity:              provider.anchorIdentity,
-		storeInstance:               view.Control.StoreInstance,
-		manifestGenerationHighWater: view.Manifest.Current.Sequence,
-		controlEpochHighWater:       view.Control.ControlEpoch,
+	if !provider.anchorReady || provider.anchor.anchorIdentity != provider.anchorIdentity ||
+		provider.anchor.storeInstance != view.Control.StoreInstance {
+		return false
 	}
-	provider.anchorReady = true
-	return true
+	converted, ok := runtimeControlViewFromStore(view)
+	if !ok {
+		return false
+	}
+	anchor := provider.anchor
+	if anchor.pending == nil {
+		return converted.manifest.current.sequence == anchor.manifestGenerationHighWater &&
+			converted.control.controlEpoch == anchor.controlEpochHighWater
+	}
+	pending := anchor.pending
+	previousSelected := firstTrustManifestEqual(converted.manifest, pending.previousManifest) &&
+		converted.control.controlEpoch == pending.previousControlEpoch
+	targetSelected := firstTrustManifestEqual(converted.manifest, pending.targetManifest) &&
+		converted.control.controlEpoch == pending.targetControlEpoch
+	return previousSelected || targetSelected
 }
 
 func (provider *nativeProtectedIdentityProvider) Open(ctx context.Context) (firstTrustAnchorRecord, string) {
-	provider.mu.Lock()
-	defer provider.mu.Unlock()
-	if nativeProtectedContextCancelled(ctx) || !provider.anchorReady {
+	if provider == nil || provider.witness == nil || nativeProtectedContextCancelled(ctx) {
 		return firstTrustAnchorRecord{}, "anchor_unavailable"
 	}
+	durable, found, err := provider.witness.loadAnchor()
+	if err != nil || !found || durable.anchorIdentity != provider.anchorIdentity {
+		return firstTrustAnchorRecord{}, "anchor_unavailable"
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	provider.anchor = cloneFirstTrustAnchorRecord(durable)
+	provider.anchorReady = true
 	return cloneFirstTrustAnchorRecord(provider.anchor), "opened_anchor"
 }
 
@@ -539,7 +561,12 @@ func (provider *nativeProtectedIdentityProvider) CompareAndStage(
 		!firstTrustAnchorRecordEqual(provider.anchor, expected) || pending.storeInstance != provider.anchor.storeInstance {
 		return "anchor_not_published"
 	}
-	provider.anchor.pending = firstTrustPendingPointer(pending)
+	target := cloneFirstTrustAnchorRecord(provider.anchor)
+	target.pending = firstTrustPendingPointer(pending)
+	if provider.witness == nil || provider.witness.compareAndStoreAnchor(&provider.anchor, target) != nil {
+		return "anchor_not_published"
+	}
+	provider.anchor = target
 	return "anchor_durable"
 }
 
@@ -550,9 +577,14 @@ func (provider *nativeProtectedIdentityProvider) CompareAndFinalize(ctx context.
 		!firstTrustPendingPublicationEqual(*provider.anchor.pending, pending) {
 		return "anchor_not_published"
 	}
-	provider.anchor.manifestGenerationHighWater = pending.targetManifest.current.sequence
-	provider.anchor.controlEpochHighWater = pending.targetControlEpoch
-	provider.anchor.pending = nil
+	target := cloneFirstTrustAnchorRecord(provider.anchor)
+	target.manifestGenerationHighWater = pending.targetManifest.current.sequence
+	target.controlEpochHighWater = pending.targetControlEpoch
+	target.pending = nil
+	if provider.witness == nil || provider.witness.compareAndStoreAnchor(&provider.anchor, target) != nil {
+		return "anchor_not_published"
+	}
+	provider.anchor = target
 	return "anchor_durable"
 }
 
@@ -563,7 +595,12 @@ func (provider *nativeProtectedIdentityProvider) CompareAndClear(ctx context.Con
 		!firstTrustPendingPublicationEqual(*provider.anchor.pending, pending) {
 		return "anchor_not_published"
 	}
-	provider.anchor.pending = nil
+	target := cloneFirstTrustAnchorRecord(provider.anchor)
+	target.pending = nil
+	if provider.witness == nil || provider.witness.compareAndStoreAnchor(&provider.anchor, target) != nil {
+		return "anchor_not_published"
+	}
+	provider.anchor = target
 	return "anchor_durable"
 }
 
@@ -574,13 +611,25 @@ func (provider *nativeProtectedIdentityProvider) Create(
 ) (firstTrustAnchorRecord, string) {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	if nativeProtectedContextCancelled(ctx) || provider.anchorReady || version != firstTrustAnchorVersion ||
+	if nativeProtectedContextCancelled(ctx) || version != firstTrustAnchorVersion ||
 		storeInstance == [sha256.Size]byte{} || provider.anchorIdentity == [sha256.Size]byte{} {
 		return firstTrustAnchorRecord{}, "anchor_not_published"
 	}
-	provider.anchor = firstTrustAnchorRecord{
+	target := firstTrustAnchorRecord{
 		version: version, anchorIdentity: provider.anchorIdentity, storeInstance: storeInstance,
 	}
+	var expected *firstTrustAnchorRecord
+	if provider.anchorReady {
+		if provider.anchor.pending != nil || provider.anchor.manifestGenerationHighWater != 0 || provider.anchor.controlEpochHighWater != 0 {
+			return firstTrustAnchorRecord{}, "anchor_not_published"
+		}
+		current := cloneFirstTrustAnchorRecord(provider.anchor)
+		expected = &current
+	}
+	if provider.witness == nil || provider.witness.compareAndStoreAnchor(expected, target) != nil {
+		return firstTrustAnchorRecord{}, "anchor_not_published"
+	}
+	provider.anchor = target
 	provider.anchorReady = true
 	return cloneFirstTrustAnchorRecord(provider.anchor), "anchor_durable"
 }
