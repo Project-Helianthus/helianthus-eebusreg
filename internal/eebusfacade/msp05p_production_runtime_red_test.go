@@ -1,6 +1,6 @@
 //go:build linux || darwin
 
-package eebusruntime
+package eebusfacade
 
 import (
 	"bytes"
@@ -31,11 +31,12 @@ func TestMSP05PProductionRuntimeScopesListenerDisablesDiscoveryAndDeniesUnknownT
 		defer alternate.Close()
 	}
 
-	instance := msp05pProductionRuntime(t, stateRoot, endpoint)
-	if err := instance.Start(context.Background()); err != nil {
-		t.Fatalf("start production runtime: %v", err)
+	instance, err := Acquire(context.Background(), msp05pProductionConfig(stateRoot, endpoint))
+	if err != nil {
+		t.Fatalf("acquire production runtime: %v", err)
 	}
-	msp05pProductionWaitSnapshot(t, instance)
+	runCancel, runDone := msp05pProductionRun(t, instance)
+	defer runCancel()
 
 	before := msp05pProductionStateDigest(t, stateRoot)
 	peerCertificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "unknown-peer")
@@ -66,12 +67,14 @@ func TestMSP05PProductionRuntimeScopesListenerDisablesDiscoveryAndDeniesUnknownT
 	if before != after {
 		t.Fatal("closed pairing persisted trust for an unknown peer")
 	}
-	if err := instance.Shutdown(); err != nil {
-		t.Fatalf("shutdown production runtime: %v", err)
+	if err := instance.Close(); err != nil {
+		t.Fatalf("close production runtime: %v", err)
 	}
-	if err := instance.Shutdown(); err != nil {
-		t.Fatalf("repeat production runtime shutdown: %v", err)
+	if err := instance.Close(); err != nil {
+		t.Fatalf("repeat production runtime close: %v", err)
 	}
+	runCancel()
+	msp05pProductionWaitRun(t, runDone)
 
 	listener, err := net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(endpoint))
 	if err != nil {
@@ -89,32 +92,30 @@ func TestMSP05PProductionRuntimeBindFailureRollsBackAndRestartSucceeds(t *testin
 	}
 	endpoint := held.Addr().(*net.TCPAddr).AddrPort()
 
-	failed := msp05pProductionRuntime(t, stateRoot, endpoint)
-	err = failed.Start(context.Background())
+	failed, err := Acquire(context.Background(), msp05pProductionConfig(stateRoot, endpoint))
+	if failed != nil {
+		_ = failed.Close()
+	}
 	if err == nil || !strings.Contains(err.Error(), "bind SHIP listener") {
-		t.Fatalf("occupied endpoint start error = %v, want scoped bind failure", err)
-	}
-	if err := failed.Shutdown(); err != nil {
-		t.Fatalf("shutdown after failed startup: %v", err)
-	}
-	if err := failed.Shutdown(); err != nil {
-		t.Fatalf("repeat shutdown after failed startup: %v", err)
+		t.Fatalf("occupied endpoint acquire error = %v, want scoped bind failure", err)
 	}
 	if err := held.Close(); err != nil {
 		t.Fatalf("release occupied endpoint: %v", err)
 	}
 
-	restarted := msp05pProductionRuntime(t, stateRoot, endpoint)
-	if err := restarted.Start(context.Background()); err != nil {
+	restarted, err := Acquire(context.Background(), msp05pProductionConfig(stateRoot, endpoint))
+	if err != nil {
 		t.Fatalf("restart after scoped bind rollback: %v", err)
 	}
-	msp05pProductionWaitSnapshot(t, restarted)
-	if err := restarted.Shutdown(); err != nil {
-		t.Fatalf("shutdown restarted runtime: %v", err)
+	runCancel, runDone := msp05pProductionRun(t, restarted)
+	if err := restarted.Close(); err != nil {
+		t.Fatalf("close restarted runtime: %v", err)
 	}
-	if err := restarted.Shutdown(); err != nil {
-		t.Fatalf("repeat shutdown restarted runtime: %v", err)
+	if err := restarted.Close(); err != nil {
+		t.Fatalf("repeat close restarted runtime: %v", err)
 	}
+	runCancel()
+	msp05pProductionWaitRun(t, runDone)
 
 	listener, err := net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(endpoint))
 	if err != nil {
@@ -123,21 +124,15 @@ func TestMSP05PProductionRuntimeBindFailureRollsBackAndRestartSucceeds(t *testin
 	_ = listener.Close()
 }
 
-func msp05pProductionRuntime(t *testing.T, stateRoot string, endpoint netip.AddrPort) Runtime {
-	t.Helper()
-	instance, err := NewV2(ConfigV2{
-		Enabled:          true,
+func msp05pProductionConfig(stateRoot string, endpoint netip.AddrPort) RuntimeConfig {
+	return RuntimeConfig{
 		StateRoot:        stateRoot,
 		Interface:        "helianthus-msp05p-missing-interface",
+		ListenPort:       int(endpoint.Port()),
 		ListenAddress:    endpoint,
 		DiscoveryEnabled: false,
-		Remotes:          []Remote{},
-		PairingPolicy:    PairingPolicyV2Closed,
-	})
-	if err != nil {
-		t.Fatalf("construct production runtime: %v", err)
+		Remotes:          []RuntimeRemote{},
 	}
-	return instance
 }
 
 func msp05pProductionScopedEndpoint(t *testing.T) (*net.TCPListener, netip.AddrPort) {
@@ -166,18 +161,41 @@ func msp05pProductionScopedEndpoint(t *testing.T) (*net.TCPListener, netip.AddrP
 	return nil, netip.AddrPort{}
 }
 
-func msp05pProductionWaitSnapshot(t *testing.T, instance Runtime) SnapshotV1 {
+func msp05pProductionRun(t *testing.T, backend Backend) (context.CancelFunc, <-chan error) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		snapshot, err := instance.Snapshot()
-		if err == nil {
-			return snapshot
-		}
-		time.Sleep(10 * time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	updates := make(chan []byte, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- backend.Run(ctx, func(payload []byte) {
+			select {
+			case updates <- append([]byte(nil), payload...):
+			default:
+			}
+		})
+	}()
+	select {
+	case <-updates:
+	case err := <-done:
+		cancel()
+		t.Fatalf("production runtime stopped before initial snapshot: %v", err)
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("production runtime did not publish its initial snapshot")
 	}
-	t.Fatal("production runtime did not publish its initial snapshot")
-	return SnapshotV1{}
+	return cancel, done
+}
+
+func msp05pProductionWaitRun(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("production runtime Run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("production runtime Run did not stop")
+	}
 }
 
 func msp05pProductionTempRoot(t *testing.T) string {
