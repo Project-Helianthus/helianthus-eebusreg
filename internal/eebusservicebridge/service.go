@@ -30,10 +30,14 @@ type ServiceOptions struct {
 
 type Service struct {
 	*eebusservice.Service
-	monitorOnce sync.Once
-	stopOnce    sync.Once
-	stop        chan struct{}
-	terminal    chan error
+	lifecycleMu    sync.Mutex
+	shutdownOnce   sync.Once
+	monitorDone    chan struct{}
+	monitorStarted bool
+	monitorWG      sync.WaitGroup
+	stopping       bool
+	stop           chan struct{}
+	terminal       chan error
 }
 
 func NewServiceWithOptions(
@@ -59,9 +63,10 @@ func NewServiceWithOptions(
 		return nil
 	}
 	return &Service{
-		Service:  candidate,
-		stop:     make(chan struct{}),
-		terminal: make(chan error, 1),
+		Service:     candidate,
+		monitorDone: make(chan struct{}),
+		stop:        make(chan struct{}),
+		terminal:    make(chan error, 1),
 	}
 }
 
@@ -69,10 +74,27 @@ func (service *Service) StartWithPolicy() error {
 	if service == nil || service.Service == nil {
 		return errors.New("scoped service is unavailable")
 	}
+	service.lifecycleMu.Lock()
+	if service.stopping {
+		service.lifecycleMu.Unlock()
+		return errors.New("scoped service is stopping")
+	}
+	service.lifecycleMu.Unlock()
 	if err := service.Service.StartWithPolicy(); err != nil {
 		return err
 	}
-	service.monitorOnce.Do(func() { go service.monitorListener() })
+	service.lifecycleMu.Lock()
+	if service.stopping {
+		service.lifecycleMu.Unlock()
+		service.Service.Shutdown()
+		return errors.New("scoped service stopped during startup")
+	}
+	if !service.monitorStarted {
+		service.monitorStarted = true
+		service.monitorWG.Add(1)
+		go service.monitorListener()
+	}
+	service.lifecycleMu.Unlock()
 	return nil
 }
 
@@ -87,13 +109,21 @@ func (service *Service) Shutdown() {
 	if service == nil {
 		return
 	}
-	service.stopOnce.Do(func() { close(service.stop) })
-	if service.Service != nil {
-		service.Service.Shutdown()
-	}
+	service.shutdownOnce.Do(func() {
+		service.lifecycleMu.Lock()
+		service.stopping = true
+		close(service.stop)
+		service.lifecycleMu.Unlock()
+		if service.Service != nil {
+			service.Service.Shutdown()
+		}
+		service.monitorWG.Wait()
+	})
 }
 
 func (service *Service) monitorListener() {
+	defer service.monitorWG.Done()
+	defer close(service.monitorDone)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -102,10 +132,16 @@ func (service *Service) monitorListener() {
 			return
 		case <-ticker.C:
 			if err := service.Service.StartWithPolicy(); err != nil {
+				service.lifecycleMu.Lock()
+				if service.stopping {
+					service.lifecycleMu.Unlock()
+					return
+				}
 				select {
 				case service.terminal <- fmt.Errorf("scoped listener terminal: %w", err):
-				case <-service.stop:
+				default:
 				}
+				service.lifecycleMu.Unlock()
 				return
 			}
 		}

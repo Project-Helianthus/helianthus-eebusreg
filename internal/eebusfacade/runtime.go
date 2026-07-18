@@ -358,11 +358,11 @@ func (backend *serviceBackend) Close() error {
 		return backend.closeErr
 	}
 	backend.closed = true
-	if backend.firstTrust != nil {
-		backend.closeErr = backend.firstTrust.Close()
-	}
 	if backend.service != nil {
 		backend.service.Shutdown()
+	}
+	if backend.firstTrust != nil {
+		backend.closeErr = backend.firstTrust.Close()
 	}
 	return backend.closeErr
 }

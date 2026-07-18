@@ -187,12 +187,40 @@ func TestMSP05PServiceBackendReportsListenerTerminalAndClaimsPublisherOnce(t *te
 	}
 }
 
+func TestMSP05PServiceBackendQuiescesTransportBeforeClosingTrust(t *testing.T) {
+	var mu sync.Mutex
+	events := make([]string, 0, 2)
+	record := func(event string) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	}
+	service := newMSP05PScopedService(nil)
+	service.onShutdown = func() { record("transport-shutdown") }
+	backend := &serviceBackend{
+		service: service,
+		firstTrust: &runtimeFirstTrustResources{
+			admin: msp05pOrderedAdminEndpoint{close: func() { record("trust-close") }},
+		},
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	got := append([]string(nil), events...)
+	mu.Unlock()
+	if want := []string{"transport-shutdown", "trust-close"}; !slices.Equal(got, want) {
+		t.Fatalf("shutdown order = %v, want %v", got, want)
+	}
+}
+
 type msp05pScopedService struct {
 	*fakeRuntimeService
 	mu             sync.Mutex
 	events         []string
 	startPolicyErr error
 	terminal       chan error
+	onShutdown     func()
 }
 
 func newMSP05PScopedService(startErr error) *msp05pScopedService {
@@ -222,6 +250,9 @@ func (service *msp05pScopedService) ListenerTerminal() <-chan error { return ser
 
 func (service *msp05pScopedService) Shutdown() {
 	service.record("shutdown")
+	if service.onShutdown != nil {
+		service.onShutdown()
+	}
 	service.fakeRuntimeService.Shutdown()
 }
 
@@ -243,20 +274,51 @@ func (service *msp05pScopedService) shutdownCount() int {
 	return service.fakeRuntimeService.shutdowns
 }
 
+type msp05pOrderedAdminEndpoint struct {
+	close func()
+}
+
+func (msp05pOrderedAdminEndpoint) Address() string { return "ordered-admin" }
+
+func (endpoint msp05pOrderedAdminEndpoint) Close() error {
+	endpoint.close()
+	return nil
+}
+
 func TestMSP05PProductionRuntimeScopesListenerDisablesDiscoveryAndDeniesUnknownTrust(t *testing.T) {
 	root := canonicalRuntimeTempDir(t)
 	stateRoot := filepath.Join(root, "state")
+	remoteSKI := "1111111111111111111111111111111111111111"
+	initialMaterial, err := loadProtectedRuntimeMaterial(context.Background(), stateRoot)
+	if err != nil {
+		t.Fatalf("load initial protected material: %v", err)
+	}
+	trust := acquireMSP05PTrustResources(t, stateRoot, filepath.Join(root, "admin-seed"), initialMaterial)
+	pairRuntimeRemote(t, trust, remoteSKI, 101)
+	if err := trust.Close(); err != nil {
+		t.Fatalf("close seeded trust resources: %v", err)
+	}
+	pairedMaterial, err := loadProtectedRuntimeMaterial(context.Background(), stateRoot)
+	if err != nil {
+		t.Fatalf("load paired protected material: %v", err)
+	}
 	alternate, endpoint := msp05pProductionScopedEndpoint(t)
 	if alternate != nil {
 		defer alternate.Close()
 	}
 
-	instance, err := Acquire(context.Background(), msp05pProductionConfig(stateRoot, endpoint))
+	config := msp05pProductionConfig(stateRoot, endpoint)
+	config.Remotes = []RuntimeRemote{{SKI: remoteSKI}}
+	instance, err := Acquire(context.Background(), config)
 	if err != nil {
 		t.Fatalf("acquire production runtime: %v", err)
 	}
-	runCancel, runDone := msp05pProductionRun(t, instance)
+	runCancel, runDone, initialPayload := msp05pProductionRun(t, instance)
 	defer runCancel()
+	initialSnapshot := decodeRuntimePayload(t, initialPayload)
+	if len(initialSnapshot.Pairing) != 1 || initialSnapshot.Pairing[0].State != "paired" {
+		t.Fatalf("initial paired snapshot = %+v", initialSnapshot.Pairing)
+	}
 
 	before := msp05pProductionStateDigest(t, stateRoot)
 	peerCertificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "unknown-peer")
@@ -296,6 +358,28 @@ func TestMSP05PProductionRuntimeScopesListenerDisablesDiscoveryAndDeniesUnknownT
 	runCancel()
 	msp05pProductionWaitRun(t, runDone)
 
+	restartMaterial, err := loadProtectedRuntimeMaterial(context.Background(), stateRoot)
+	if err != nil {
+		t.Fatalf("reload protected material after shutdown: %v", err)
+	}
+	if restartMaterial.localSKI != pairedMaterial.localSKI || !restartMaterial.pretrusted[remoteSKI] {
+		t.Fatal("shutdown lost protected local identity or durable remote trust")
+	}
+	restarted, err := Acquire(context.Background(), config)
+	if err != nil {
+		t.Fatalf("restart same selected production runtime: %v", err)
+	}
+	restartCancel, restartDone, restartPayload := msp05pProductionRun(t, restarted)
+	restartSnapshot := decodeRuntimePayload(t, restartPayload)
+	if restartSnapshot.Meta.LocalSKI != initialSnapshot.Meta.LocalSKI || len(restartSnapshot.Pairing) != 1 || restartSnapshot.Pairing[0].Remote != initialSnapshot.Pairing[0].Remote || restartSnapshot.Pairing[0].State != initialSnapshot.Pairing[0].State {
+		t.Fatalf("restart identity/pairing changed: initial=%+v/%+v restart=%+v/%+v", initialSnapshot.Meta.LocalSKI, initialSnapshot.Pairing, restartSnapshot.Meta.LocalSKI, restartSnapshot.Pairing)
+	}
+	restartCancel()
+	if err := restarted.Close(); err != nil {
+		t.Fatalf("close restarted same selected runtime: %v", err)
+	}
+	msp05pProductionWaitRun(t, restartDone)
+
 	listener, err := net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(endpoint))
 	if err != nil {
 		t.Fatalf("exact listener address was not released: %v", err)
@@ -327,7 +411,11 @@ func TestMSP05PProductionRuntimeBindFailureRollsBackAndRestartSucceeds(t *testin
 	if err != nil {
 		t.Fatalf("restart after scoped bind rollback: %v", err)
 	}
-	runCancel, runDone := msp05pProductionRun(t, restarted)
+	runCancel, runDone, initialPayload := msp05pProductionRun(t, restarted)
+	initialSnapshot := decodeRuntimePayload(t, initialPayload)
+	if initialSnapshot.Status.State != "degraded" || initialSnapshot.Status.Degradation == nil || initialSnapshot.Status.Degradation.Reason != "no-visible-services" || len(initialSnapshot.Pairing) != 0 || len(initialSnapshot.Sessions) != 0 {
+		t.Fatalf("zero-remote startup snapshot = %+v", initialSnapshot)
+	}
 	if err := restarted.Close(); err != nil {
 		t.Fatalf("close restarted runtime: %v", err)
 	}
@@ -381,7 +469,7 @@ func msp05pProductionScopedEndpoint(t *testing.T) (*net.TCPListener, netip.AddrP
 	return nil, netip.AddrPort{}
 }
 
-func msp05pProductionRun(t *testing.T, backend Backend) (context.CancelFunc, <-chan error) {
+func msp05pProductionRun(t *testing.T, backend Backend) (context.CancelFunc, <-chan error, []byte) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	updates := make(chan []byte, 1)
@@ -395,7 +483,8 @@ func msp05pProductionRun(t *testing.T, backend Backend) (context.CancelFunc, <-c
 		})
 	}()
 	select {
-	case <-updates:
+	case payload := <-updates:
+		return cancel, done, payload
 	case err := <-done:
 		cancel()
 		t.Fatalf("production runtime stopped before initial snapshot: %v", err)
@@ -403,7 +492,7 @@ func msp05pProductionRun(t *testing.T, backend Backend) (context.CancelFunc, <-c
 		cancel()
 		t.Fatal("production runtime did not publish its initial snapshot")
 	}
-	return cancel, done
+	return cancel, done, nil
 }
 
 func msp05pProductionWaitRun(t *testing.T, done <-chan error) {
