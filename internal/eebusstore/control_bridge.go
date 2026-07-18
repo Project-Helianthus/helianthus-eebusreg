@@ -361,6 +361,18 @@ func controlRecordFromStore(state stateV1) ControlRecord {
 		copy(publication.StoreInstance[:], record.publication.storeInstance)
 		result.Publication = &publication
 	}
+	if state.localIdentity != nil {
+		identity := state.localIdentity
+		result.LocalCertificateChainDER = make([][]byte, len(identity.certificateChainDER))
+		for index, certificate := range identity.certificateChainDER {
+			result.LocalCertificateChainDER[index] = bytes.Clone(certificate)
+		}
+		result.LocalProviderID = identity.keyReference.providerID
+		result.LocalProviderVersion = identity.keyReference.providerVersion
+		result.LocalSealedBlob = bytes.Clone(identity.keyReference.sealedBlob)
+		result.LocalCertificateSPKISHA256 = digestArray(identity.keyReference.certificateSPKISHA256)
+		result.LocalSKI = bytes.Clone(identity.localSKI)
+	}
 	return result
 }
 
