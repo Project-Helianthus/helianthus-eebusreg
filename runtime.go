@@ -29,26 +29,18 @@ type Runtime interface {
 }
 
 type Config struct {
-	Enabled    bool
-	StateRoot  string
-	Interface  string
-	ListenPort int
-	Remotes    []Remote
-}
-
-type PairingPolicyV2 string
-
-const PairingPolicyV2Closed PairingPolicyV2 = "closed"
-
-type ConfigV2 struct {
 	Enabled          bool
 	StateRoot        string
 	Interface        string
 	ListenAddress    netip.AddrPort
 	DiscoveryEnabled bool
 	Remotes          []Remote
-	PairingPolicy    PairingPolicyV2
+	PairingPolicy    PairingPolicy
 }
+
+type PairingPolicy string
+
+const PairingPolicyClosed PairingPolicy = "closed"
 
 type Remote struct {
 	SKI string
@@ -65,8 +57,6 @@ type runtimeTerminalSnapshotProvider interface {
 
 type runtimeBackendFactory func(context.Context, Config) (runtimeBackend, error)
 
-type runtimeBackendFactoryV2 func(context.Context, ConfigV2) (runtimeBackend, error)
-
 type runtimeStartAttempt struct {
 	done   chan struct{}
 	cancel context.CancelFunc
@@ -78,10 +68,8 @@ type runtimeImplementation struct {
 
 	enabled bool
 
-	config    Config
-	factory   runtimeBackendFactory
-	configV2  ConfigV2
-	factoryV2 runtimeBackendFactoryV2
+	config  Config
+	factory runtimeBackendFactory
 
 	starting *runtimeStartAttempt
 	started  bool
@@ -111,10 +99,6 @@ func New(config Config) (Runtime, error) {
 	return newRuntime(config, newFacadeRuntimeBackend)
 }
 
-func NewV2(config ConfigV2) (Runtime, error) {
-	return newRuntimeV2(config, newFacadeRuntimeBackendV2)
-}
-
 func newRuntime(config Config, factory runtimeBackendFactory) (Runtime, error) {
 	normalized, err := normalizeRuntimeConfig(config)
 	if err != nil {
@@ -127,21 +111,6 @@ func newRuntime(config Config, factory runtimeBackendFactory) (Runtime, error) {
 		enabled: normalized.Enabled,
 		config:  normalized,
 		factory: factory,
-	}, nil
-}
-
-func newRuntimeV2(config ConfigV2, factory runtimeBackendFactoryV2) (Runtime, error) {
-	normalized, err := normalizeRuntimeConfigV2(config)
-	if err != nil {
-		return nil, err
-	}
-	if normalized.Enabled && factory == nil {
-		return nil, errors.New("runtime backend factory is required")
-	}
-	return &runtimeImplementation{
-		enabled:   normalized.Enabled,
-		configV2:  normalized,
-		factoryV2: factory,
 	}, nil
 }
 
@@ -191,17 +160,9 @@ func (runtime *runtimeImplementation) Start(ctx context.Context) error {
 	runtime.starting = attempt
 	config := cloneRuntimeConfig(runtime.config)
 	factory := runtime.factory
-	configV2 := cloneRuntimeConfigV2(runtime.configV2)
-	factoryV2 := runtime.factoryV2
 	runtime.mu.Unlock()
 
-	var backend runtimeBackend
-	var acquireErr error
-	if factoryV2 != nil {
-		backend, acquireErr = factoryV2(acquireCtx, configV2)
-	} else {
-		backend, acquireErr = factory(acquireCtx, config)
-	}
+	backend, acquireErr := factory(acquireCtx, config)
 	contextErr := acquireCtx.Err()
 	cancel()
 	if acquireErr == nil && contextErr != nil {
@@ -426,26 +387,6 @@ func newFacadeRuntimeBackend(ctx context.Context, config Config) (runtimeBackend
 		}
 	}
 	backend, err := eebusfacade.Acquire(ctx, eebusfacade.RuntimeConfig{
-		StateRoot:  config.StateRoot,
-		Interface:  config.Interface,
-		ListenPort: config.ListenPort,
-		Remotes:    remotes,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &facadeRuntimeBackend{backend: backend}, nil
-}
-
-func newFacadeRuntimeBackendV2(ctx context.Context, config ConfigV2) (runtimeBackend, error) {
-	remotes := make([]eebusfacade.RuntimeRemote, len(config.Remotes))
-	for index, remote := range config.Remotes {
-		remotes[index] = eebusfacade.RuntimeRemote{
-			SKI:         remote.SKI,
-			Allowlisted: true,
-		}
-	}
-	backend, err := eebusfacade.Acquire(ctx, eebusfacade.RuntimeConfig{
 		StateRoot:        config.StateRoot,
 		Interface:        config.Interface,
 		ListenPort:       int(config.ListenAddress.Port()),
@@ -506,6 +447,11 @@ func (backend *facadeRuntimeBackend) TerminalSnapshot() (SnapshotV1, bool) {
 
 func normalizeRuntimeConfig(config Config) (Config, error) {
 	if !config.Enabled {
+		if config.StateRoot != "" || config.Interface != "" ||
+			config.ListenAddress != (netip.AddrPort{}) || config.DiscoveryEnabled ||
+			config.Remotes != nil || config.PairingPolicy != "" {
+			return Config{}, errors.New("disabled runtime configuration must be empty")
+		}
 		return Config{}, nil
 	}
 
@@ -525,61 +471,11 @@ func normalizeRuntimeConfig(config Config) (Config, error) {
 	if runtimeWildcard(config.Interface) {
 		return Config{}, errors.New("runtime interface must be explicit")
 	}
-	if config.ListenPort < 1 || config.ListenPort > 65535 {
-		return Config{}, errors.New("runtime listen port must be between 1 and 65535")
-	}
-	if len(config.Remotes) == 0 {
-		return Config{}, errors.New("at least one runtime remote is required")
-	}
-
-	remotes := make([]Remote, len(config.Remotes))
-	seen := make(map[string]struct{}, len(config.Remotes))
-	for index, source := range config.Remotes {
-		remote, err := normalizeRuntimeRemote(source)
-		if err != nil {
-			return Config{}, fmt.Errorf("runtime remote %d: %w", index, err)
-		}
-		if _, exists := seen[remote.SKI]; exists {
-			return Config{}, fmt.Errorf("runtime remote %d duplicates remote SKI", index)
-		}
-		seen[remote.SKI] = struct{}{}
-		remotes[index] = remote
-	}
-	config.Remotes = remotes
-	return config, nil
-}
-
-func normalizeRuntimeConfigV2(config ConfigV2) (ConfigV2, error) {
-	if !config.Enabled {
-		if config.StateRoot != "" || config.Interface != "" ||
-			config.ListenAddress != (netip.AddrPort{}) || config.DiscoveryEnabled ||
-			config.Remotes != nil || config.PairingPolicy != "" {
-			return ConfigV2{}, errors.New("disabled runtime configuration must be empty")
-		}
-		return ConfigV2{}, nil
-	}
-
-	config.StateRoot = filepath.Clean(strings.TrimSpace(config.StateRoot))
-	if config.StateRoot == "." || config.StateRoot == "" {
-		return ConfigV2{}, errors.New("runtime state root is required")
-	}
-	if !filepath.IsAbs(config.StateRoot) {
-		return ConfigV2{}, errors.New("runtime state root must be absolute")
-	}
-	volumeRoot := filepath.VolumeName(config.StateRoot) + string(filepath.Separator)
-	if config.StateRoot == volumeRoot {
-		return ConfigV2{}, errors.New("runtime state root must not be the filesystem root")
-	}
-
-	config.Interface = strings.TrimSpace(config.Interface)
-	if runtimeWildcard(config.Interface) {
-		return ConfigV2{}, errors.New("runtime interface must be explicit")
-	}
 	if err := validateRuntimeListenAddress(config.ListenAddress); err != nil {
-		return ConfigV2{}, err
+		return Config{}, err
 	}
-	if config.PairingPolicy != PairingPolicyV2Closed {
-		return ConfigV2{}, errors.New("runtime pairing policy must be closed")
+	if config.PairingPolicy != PairingPolicyClosed {
+		return Config{}, errors.New("runtime pairing policy must be closed")
 	}
 
 	if config.Remotes != nil {
@@ -588,10 +484,10 @@ func normalizeRuntimeConfigV2(config ConfigV2) (ConfigV2, error) {
 		for index, source := range config.Remotes {
 			remote, err := normalizeRuntimeRemote(source)
 			if err != nil {
-				return ConfigV2{}, fmt.Errorf("runtime remote %d: %w", index, err)
+				return Config{}, fmt.Errorf("runtime remote %d: %w", index, err)
 			}
 			if _, exists := seen[remote.SKI]; exists {
-				return ConfigV2{}, fmt.Errorf("runtime remote %d duplicates remote SKI", index)
+				return Config{}, fmt.Errorf("runtime remote %d duplicates remote SKI", index)
 			}
 			seen[remote.SKI] = struct{}{}
 			remotes[index] = remote
@@ -637,11 +533,6 @@ func normalizeRuntimeRemote(remote Remote) (Remote, error) {
 }
 
 func cloneRuntimeConfig(config Config) Config {
-	config.Remotes = append([]Remote(nil), config.Remotes...)
-	return config
-}
-
-func cloneRuntimeConfigV2(config ConfigV2) ConfigV2 {
 	if config.Remotes != nil {
 		config.Remotes = append([]Remote{}, config.Remotes...)
 	}

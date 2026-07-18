@@ -3,6 +3,7 @@ package eebusruntime
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -60,7 +61,7 @@ func TestRuntimeConfigurationUsesOnlyPlainTypes(t *testing.T) {
 	}
 }
 
-func TestRuntimeDisabledDefaultAndMixedConfigRemainInert(t *testing.T) {
+func TestRuntimeDisabledDefaultRemainsInert(t *testing.T) {
 	tests := []struct {
 		name   string
 		config func(string) Config
@@ -69,17 +70,6 @@ func TestRuntimeDisabledDefaultAndMixedConfigRemainInert(t *testing.T) {
 			name: "zero default",
 			config: func(string) Config {
 				return Config{}
-			},
-		},
-		{
-			name: "disabled wins over active fields",
-			config: func(stateRoot string) Config {
-				return Config{
-					Enabled:   false,
-					StateRoot: stateRoot,
-					Interface: "",
-					Remotes:   []Remote{{SKI: "not-a-valid-ski"}},
-				}
 			},
 		},
 	}
@@ -134,9 +124,8 @@ func TestRuntimeEnabledNewValidatesWithoutIO(t *testing.T) {
 	}{
 		{name: "missing state root", mutate: func(config *Config) { config.StateRoot = "" }},
 		{name: "missing interface", mutate: func(config *Config) { config.Interface = "" }},
-		{name: "missing listen port", mutate: func(config *Config) { config.ListenPort = 0 }},
-		{name: "invalid listen port", mutate: func(config *Config) { config.ListenPort = 65536 }},
-		{name: "missing remote", mutate: func(config *Config) { config.Remotes = nil }},
+		{name: "missing listen address", mutate: func(config *Config) { config.ListenAddress = netip.AddrPort{} }},
+		{name: "missing pairing policy", mutate: func(config *Config) { config.PairingPolicy = "" }},
 		{name: "missing remote ski", mutate: func(config *Config) { config.Remotes[0].SKI = "" }},
 		{name: "duplicate remote", mutate: func(config *Config) { config.Remotes = append(config.Remotes, config.Remotes[0]) }},
 	}
@@ -168,11 +157,12 @@ func TestRuntimeEnabledNewValidatesWithoutIO(t *testing.T) {
 
 func validRuntimeConfig(stateRoot string) Config {
 	return Config{
-		Enabled:    true,
-		StateRoot:  stateRoot,
-		Interface:  "test-interface",
-		ListenPort: 4711,
-		Remotes:    []Remote{{SKI: "0000000000000000000000000000000000000001"}},
+		Enabled:       true,
+		StateRoot:     stateRoot,
+		Interface:     "test-interface",
+		ListenAddress: netip.MustParseAddrPort("192.0.2.10:4711"),
+		Remotes:       []Remote{{SKI: "0000000000000000000000000000000000000001"}},
+		PairingPolicy: PairingPolicyClosed,
 	}
 }
 
