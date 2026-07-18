@@ -8,12 +8,11 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"go/ast"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -832,18 +831,23 @@ func TestMSP045AdminWireAndInternalDeclarationBoundaryRemainUnchanged(t *testing
 	}
 }
 
-func TestMSP045ScopedListenerDiagnosticIsVersionNeutral(t *testing.T) {
-	_, err := newEEBusService(RuntimeConfig{}, runtimeMaterial{}, nil)
-	if !errors.Is(err, errScopedSHIPListenerUnavailable) {
-		t.Fatalf("listener error = %v", err)
+func TestMSP045ScopedListenerLifecycleIsAvailableThroughTheInternalFacade(t *testing.T) {
+	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "scoped-listener-contract")
+	if err != nil {
+		t.Fatal(err)
 	}
-	message := err.Error()
-	if !strings.Contains(message, "scoped SH"+"IP listener") {
-		t.Fatalf("listener diagnostic is not truthful: %q", message)
+	service, err := newEEBusService(RuntimeConfig{
+		Interface: "fixture-interface", ListenPort: 4711,
+		ListenAddress: netip.MustParseAddrPort("127.0.0.1:4711"),
+	}, runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate)}, nil)
+	if err != nil {
+		t.Fatalf("construct scoped listener service: %v", err)
 	}
-	if regexp.MustCompile(`v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?`).MatchString(message) {
-		t.Fatalf("listener diagnostic is pinned to a dependency version: %q", message)
+	scoped, ok := service.(runtimeScopedService)
+	if !ok || scoped.ListenerTerminal() == nil {
+		t.Fatal("released service lacks the internal scoped lifecycle contract")
 	}
+	service.Shutdown()
 }
 
 type msp045ProductSetup struct {
