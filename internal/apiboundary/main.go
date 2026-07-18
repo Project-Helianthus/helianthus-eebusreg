@@ -118,7 +118,9 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "const", Name: "FeatureRoleV1Unspecified"}:                  {},
 	{Kind: "const", Name: "FeatureRoleV1Client"}:                       {},
 	{Kind: "const", Name: "FeatureRoleV1Server"}:                       {},
+	{Kind: "const", Name: "PairingPolicyV2Closed"}:                     {},
 	{Kind: "func", Name: "New"}:                                        {},
+	{Kind: "func", Name: "NewV2"}:                                      {},
 	{Kind: "func", Name: "NewSnapshotV1"}:                              {},
 	{Kind: "func", Name: "SnapshotV1.Clone"}:                           {},
 	{Kind: "func", Name: "SnapshotV1.ComputeDataHash"}:                 {},
@@ -136,6 +138,7 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "type", Name: "ObservedRuntimeStateV1"}:                     {},
 	{Kind: "type", Name: "ObservedSessionStateV1"}:                     {},
 	{Kind: "type", Name: "PairingObservationV1"}:                       {},
+	{Kind: "type", Name: "PairingPolicyV2"}:                            {},
 	{Kind: "type", Name: "Remote"}:                                     {},
 	{Kind: "type", Name: "Runtime"}:                                    {},
 	{Kind: "type", Name: "RuntimeObservationV1"}:                       {},
@@ -147,17 +150,22 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "type", Name: "TopologyV1"}:                                 {},
 	{Kind: "type", Name: "UseCaseClaimV1"}:                             {},
 	{Kind: "type", Name: "Config"}:                                     {},
+	{Kind: "type", Name: "ConfigV2"}:                                   {},
 	{Kind: "var", Name: "ErrRuntimeDisabled"}:                          {},
 	{Kind: "var", Name: "ErrRuntimeShutdown"}:                          {},
 }
 
 var msp055RuntimeExports = map[manifestExport]struct{}{
-	{Kind: "func", Name: "New"}:               {},
-	{Kind: "type", Name: "Config"}:            {},
-	{Kind: "type", Name: "Remote"}:            {},
-	{Kind: "type", Name: "Runtime"}:           {},
-	{Kind: "var", Name: "ErrRuntimeDisabled"}: {},
-	{Kind: "var", Name: "ErrRuntimeShutdown"}: {},
+	{Kind: "const", Name: "PairingPolicyV2Closed"}: {},
+	{Kind: "func", Name: "New"}:                    {},
+	{Kind: "func", Name: "NewV2"}:                  {},
+	{Kind: "type", Name: "Config"}:                 {},
+	{Kind: "type", Name: "ConfigV2"}:               {},
+	{Kind: "type", Name: "PairingPolicyV2"}:        {},
+	{Kind: "type", Name: "Remote"}:                 {},
+	{Kind: "type", Name: "Runtime"}:                {},
+	{Kind: "var", Name: "ErrRuntimeDisabled"}:      {},
+	{Kind: "var", Name: "ErrRuntimeShutdown"}:      {},
 }
 
 var allowedMSP035RawExports = frozenExportInventory(`

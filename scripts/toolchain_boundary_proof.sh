@@ -7,8 +7,10 @@ cd "$repo_root"
 export GOWORK=off
 export GOTOOLCHAIN=local
 
-module_path="github.com/Project-Helianthus/helianthus-eebus-go"
-module_version="v0.7.1-helianthus.1"
+eebus_module_path="github.com/Project-Helianthus/helianthus-eebus-go"
+eebus_module_version="v0.7.1-helianthus.2"
+ship_module_path="github.com/Project-Helianthus/helianthus-ship-go"
+ship_module_version="v0.6.1-helianthus.3"
 
 echo "==> toolchain boundary proof"
 go version
@@ -42,24 +44,33 @@ if [ -n "$replace_matches" ]; then
   exit 1
 fi
 
-module_json="$(mktemp)"
+eebus_module_json="$(mktemp)"
+ship_module_json="$(mktemp)"
 module_graph="$(mktemp)"
 cleanup() {
-  rm -f "$module_json" "$module_graph"
+  rm -f "$eebus_module_json" "$ship_module_json" "$module_graph"
 }
 trap cleanup EXIT
 
 echo "==> module pin"
-go list -m -json "$module_path" | tee "$module_json"
+go list -m -json "$eebus_module_path" | tee "$eebus_module_json"
+go list -m -json "$ship_module_path" | tee "$ship_module_json"
 
 echo "==> go.mod boundary"
 go run -mod=readonly ./internal/toolchainproof \
   -repo-root "$repo_root" \
   -max-go "$max_go" \
   -active-go "$active_go" \
-  -module "$module_path" \
-  -version "$module_version" \
-  -module-json "$module_json"
+  -module "$eebus_module_path" \
+  -version "$eebus_module_version" \
+  -module-json "$eebus_module_json"
+go run -mod=readonly ./internal/toolchainproof \
+  -repo-root "$repo_root" \
+  -max-go "$max_go" \
+  -active-go "$active_go" \
+  -module "$ship_module_path" \
+  -version "$ship_module_version" \
+  -module-json "$ship_module_json"
 
 echo "==> public boundary"
 ./scripts/api_boundary_gate.sh

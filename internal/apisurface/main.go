@@ -31,7 +31,7 @@ const (
 var publicPackages = []string{modulePath, modulePath + "/eebusraw", modulePath + "/eebusevidence"}
 
 var stdlibApproval = map[string]struct{}{
-	"context": {}, "fmt": {}, "time": {}, "unsafe": {},
+	"context": {}, "fmt": {}, "net/netip": {}, "time": {}, "unsafe": {},
 }
 
 var publicApproval = map[string]struct{}{
