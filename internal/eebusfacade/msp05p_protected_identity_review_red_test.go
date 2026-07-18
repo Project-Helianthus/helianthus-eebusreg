@@ -17,8 +17,8 @@ import (
 
 func TestMSP05PProtectedIdentityReviewDurableAnchorSurvivesProviderRestart(t *testing.T) {
 	stateRoot := filepath.Join(canonicalRuntimeTempDir(t), "state")
-	if _, err := loadProtectedRuntimeMaterial(context.Background(), stateRoot); err != nil {
-		t.Fatalf("bootstrap protected material: %v", err)
+	if err := os.Mkdir(stateRoot, 0o700); err != nil {
+		t.Fatalf("create protected state root: %v", err)
 	}
 
 	storeInstance := msp05pReviewDigest("store-instance")
