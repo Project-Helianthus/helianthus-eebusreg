@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,10 +36,12 @@ type Backend interface {
 }
 
 type RuntimeConfig struct {
-	StateRoot  string
-	Interface  string
-	ListenPort int
-	Remotes    []RuntimeRemote
+	StateRoot        string
+	Interface        string
+	ListenPort       int
+	ListenAddress    netip.AddrPort
+	DiscoveryEnabled bool
+	Remotes          []RuntimeRemote
 }
 
 type RuntimeRemote struct {
@@ -157,7 +160,7 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if stateRoot == volumeRoot {
 		return nil, errors.New("runtime state root must not be the filesystem root")
 	}
-	if len(config.Remotes) == 0 {
+	if len(config.Remotes) == 0 && !config.ListenAddress.IsValid() {
 		return nil, errors.New("at least one runtime remote is required")
 	}
 	if config.ListenPort < 1 || config.ListenPort > 65535 {

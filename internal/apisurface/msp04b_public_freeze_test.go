@@ -15,6 +15,7 @@ func TestMSP04BPublicAPIRemainsExactlyFrozen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	doc = msp05pProjectFrozenV1(t, doc)
 	payload, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		t.Fatal(err)
