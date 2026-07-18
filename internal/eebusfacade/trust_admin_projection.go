@@ -117,7 +117,7 @@ func applyTrustAdminProjection(graph []runtimeGraphObservation, remotes []string
 }
 
 func (coordinator *firstTrustCoordinator) bindTrustAdminProjection(remotes [][]byte, observer func(trustAdminProjection)) error {
-	if coordinator == nil || len(remotes) == 0 || observer == nil {
+	if coordinator == nil || observer == nil {
 		return errors.New("trust admin projection binding is incomplete")
 	}
 	cloned := make([][]byte, len(remotes))

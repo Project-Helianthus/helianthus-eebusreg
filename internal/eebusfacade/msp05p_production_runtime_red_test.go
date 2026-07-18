@@ -117,7 +117,7 @@ func TestMSP05PServiceBackendReportsListenerTerminalAndClaimsPublisherOnce(t *te
 		now: time.Now,
 	}
 	backend, err := acquireRuntime(context.Background(), RuntimeConfig{
-		StateRoot: "/tmp/helianthus-eebus-runtime-scoped-owner-test", Interface: "fixture-interface", ListenPort: 4711,
+		StateRoot: filepath.Join(canonicalRuntimeTempDir(t), "state"), Interface: "fixture-interface", ListenPort: 4711,
 		ListenAddress: netip.MustParseAddrPort("127.0.0.1:4711"), Remotes: []RuntimeRemote{{SKI: remoteSKI}},
 	}, dependencies)
 	if err != nil {
@@ -244,7 +244,7 @@ func (service *msp05pScopedService) shutdownCount() int {
 }
 
 func TestMSP05PProductionRuntimeScopesListenerDisablesDiscoveryAndDeniesUnknownTrust(t *testing.T) {
-	root := msp05pProductionTempRoot(t)
+	root := canonicalRuntimeTempDir(t)
 	stateRoot := filepath.Join(root, "state")
 	alternate, endpoint := msp05pProductionScopedEndpoint(t)
 	if alternate != nil {
@@ -304,7 +304,7 @@ func TestMSP05PProductionRuntimeScopesListenerDisablesDiscoveryAndDeniesUnknownT
 }
 
 func TestMSP05PProductionRuntimeBindFailureRollsBackAndRestartSucceeds(t *testing.T) {
-	root := msp05pProductionTempRoot(t)
+	root := canonicalRuntimeTempDir(t)
 	stateRoot := filepath.Join(root, "state")
 	held, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
@@ -416,24 +416,6 @@ func msp05pProductionWaitRun(t *testing.T, done <-chan error) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("production runtime Run did not stop")
 	}
-}
-
-func msp05pProductionTempRoot(t *testing.T) string {
-	t.Helper()
-	base, err := filepath.EvalSymlinks(os.TempDir())
-	if err != nil {
-		t.Fatalf("resolve temporary directory: %v", err)
-	}
-	root, err := os.MkdirTemp(base, "eebusreg-msp05p-runtime-")
-	if err != nil {
-		t.Fatalf("create production runtime root: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.RemoveAll(root); err != nil {
-			t.Errorf("remove production runtime root: %v", err)
-		}
-	})
-	return root
 }
 
 func msp05pProductionStateDigest(t *testing.T, root string) [sha256.Size]byte {

@@ -26,9 +26,8 @@ import (
 )
 
 var (
-	errProtectedRuntimeCredentials   = errors.New("eebus runtime protected credentials are unavailable")
-	errScopedSHIPListenerUnavailable = errors.New("scoped SHIP listener is unavailable")
-	errRuntimeTrustEffectsDenied     = errors.New("eebus runtime trust classification denies transport effects")
+	errProtectedRuntimeCredentials = errors.New("eebus runtime protected credentials are unavailable")
+	errRuntimeTrustEffectsDenied   = errors.New("eebus runtime trust classification denies transport effects")
 )
 
 type Backend interface {
@@ -52,13 +51,15 @@ type RuntimeRemote struct {
 }
 
 type serviceBackend struct {
-	mu         sync.Mutex
-	service    runtimeService
-	handler    *runtimeServiceHandler
-	firstTrust *runtimeFirstTrustResources
-	started    bool
-	closed     bool
-	closeErr   error
+	mu               sync.Mutex
+	service          runtimeService
+	handler          *runtimeServiceHandler
+	firstTrust       *runtimeFirstTrustResources
+	listenerTerminal <-chan error
+	runClaimed       bool
+	serviceStarted   bool
+	closed           bool
+	closeErr         error
 }
 
 type runtimeMaterial struct {
@@ -92,6 +93,11 @@ type runtimeService interface {
 	RegisterRemoteSKI(string)
 	LocalService() *shipapi.ServiceDetails
 	LocalDevice() spineapi.DeviceLocalInterface
+}
+
+type runtimeScopedService interface {
+	StartWithPolicy() error
+	ListenerTerminal() <-chan error
 }
 
 type runtimeServiceFactory func(RuntimeConfig, runtimeMaterial, eebusapi.ServiceReaderInterface) (runtimeService, error)
@@ -246,15 +252,15 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if outgoingAttemptBridge != nil {
 		outgoingAttemptBridge.bindLifecycle(service)
 	}
+	if err := service.Setup(); err != nil {
+		service.Shutdown()
+		return nil, errors.Join(fmt.Errorf("setup eebus runtime service: %w", err), closeFirstTrust())
+	}
 	if firstTrust != nil {
 		if err := attachRuntimeFirstTrust(ctx, firstTrust, service, reader, dependencies); err != nil {
 			service.Shutdown()
 			return nil, errors.Join(err, closeFirstTrust())
 		}
-	}
-	if err := service.Setup(); err != nil {
-		service.Shutdown()
-		return nil, errors.Join(fmt.Errorf("setup eebus runtime service: %w", err), closeFirstTrust())
 	}
 	for _, remote := range config.Remotes {
 		if firstTrust == nil {
@@ -263,7 +269,25 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		}
 		firstTrust.coordinator.registerConfiguredRemote(remote.SKI, service.RegisterRemoteSKI)
 	}
-	return &serviceBackend{service: service, handler: handler, firstTrust: firstTrust}, nil
+	backend := &serviceBackend{service: service, handler: handler, firstTrust: firstTrust}
+	if scoped, ok := service.(runtimeScopedService); ok {
+		if !backend.runtimeStartAuthorized() {
+			service.Shutdown()
+			return nil, errors.Join(errRuntimeTrustEffectsDenied, closeFirstTrust())
+		}
+		if err := scoped.StartWithPolicy(); err != nil {
+			service.Shutdown()
+			return nil, errors.Join(fmt.Errorf("start scoped eebus runtime service: %w", err), closeFirstTrust())
+		}
+		terminal := scoped.ListenerTerminal()
+		if terminal == nil {
+			service.Shutdown()
+			return nil, errors.Join(errors.New("scoped eebus runtime service omitted listener terminal signal"), closeFirstTrust())
+		}
+		backend.listenerTerminal = terminal
+		backend.serviceStarted = true
+	}
+	return backend, nil
 }
 
 func (backend *serviceBackend) Run(ctx context.Context, publish func([]byte)) error {
@@ -276,34 +300,55 @@ func (backend *serviceBackend) Run(ctx context.Context, publish func([]byte)) er
 	if backend.service == nil || backend.handler == nil || publish == nil {
 		return errors.New("eebus runtime service backend is incomplete")
 	}
-	backend.handler.setPublisher(publish)
-	if err := backend.handler.publishCurrent(); err != nil {
-		return err
-	}
-	if backend.firstTrust != nil && (backend.firstTrust.coordinator == nil || !backend.firstTrust.coordinator.runtimeStartAuthorized()) {
-		if ctx.Err() != nil {
-			return nil
-		}
-		return errRuntimeTrustEffectsDenied
-	}
 	backend.mu.Lock()
 	if backend.closed {
 		backend.mu.Unlock()
 		return nil
 	}
-	if backend.started {
+	if backend.runClaimed {
 		backend.mu.Unlock()
 		return errors.New("eebus runtime service is already running")
 	}
-	backend.started = true
-	backend.service.Start()
+	backend.runClaimed = true
+	serviceStarted := backend.serviceStarted
+	listenerTerminal := backend.listenerTerminal
 	backend.mu.Unlock()
+	backend.handler.setPublisher(publish)
+	if err := backend.handler.publishCurrent(); err != nil {
+		return err
+	}
+	if !serviceStarted {
+		backend.mu.Lock()
+		if backend.closed {
+			backend.mu.Unlock()
+			return nil
+		}
+		if !backend.runtimeStartAuthorized() {
+			backend.mu.Unlock()
+			if ctx.Err() != nil {
+				return nil
+			}
+			return errRuntimeTrustEffectsDenied
+		}
+		backend.serviceStarted = true
+		backend.service.Start()
+		backend.mu.Unlock()
+	}
 	select {
 	case <-ctx.Done():
 		return nil
 	case err := <-backend.handler.errors:
 		return err
+	case err, ok := <-listenerTerminal:
+		if !ok || err == nil {
+			return errors.New("scoped eebus runtime listener terminated")
+		}
+		return err
 	}
+}
+
+func (backend *serviceBackend) runtimeStartAuthorized() bool {
+	return backend.firstTrust == nil || backend.firstTrust.coordinator != nil && backend.firstTrust.coordinator.runtimeStartAuthorized()
 }
 
 func (backend *serviceBackend) Close() error {
@@ -335,30 +380,33 @@ func newProtectedTLSCertificate(certificateChain [][]byte, signer crypto.Signer)
 }
 
 func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebusapi.ServiceReaderInterface) (runtimeService, error) {
-	if material.outgoingAttemptBridge != nil && reader != nil {
-		configuration, configurationErr := eebusapi.NewConfiguration(
-			"Project-Helianthus", "Helianthus", "eebusreg", material.localSKI,
-			spinemodel.DeviceTypeTypeEnergyManagementSystem,
-			[]spinemodel.EntityTypeType{spinemodel.EntityTypeTypeCEM},
-			config.ListenPort, material.certificate, 4*time.Second,
-		)
-		if configurationErr != nil {
-			return nil, configurationErr
-		}
-		configuration.SetInterfaces([]string{config.Interface})
-		candidate := eebusservicebridge.NewServiceWithOutgoingAttemptBridge(
-			configuration,
-			reader,
-			eebusservicebridge.OutgoingAttemptBridgeConfiguration{
-				Gate: material.outgoingAttemptBridge,
-				Sink: material.outgoingAttemptBridge,
-			},
-		)
-		if candidate == nil {
-			return nil, errors.New("released outgoing-attempt service construction failed")
+	configuration, err := eebusapi.NewConfiguration(
+		"Project-Helianthus", "Helianthus", "eebusreg", material.localSKI,
+		spinemodel.DeviceTypeTypeEnergyManagementSystem,
+		[]spinemodel.EntityTypeType{spinemodel.EntityTypeTypeCEM},
+		config.ListenPort, material.certificate, 4*time.Second,
+	)
+	if err != nil {
+		return nil, err
+	}
+	configuration.SetInterfaces([]string{config.Interface})
+	options := eebusservicebridge.ServiceOptions{
+		ListenerPolicy: &eebusservicebridge.ListenerPolicy{
+			ListenAddress:    config.ListenAddress,
+			DiscoveryEnabled: config.DiscoveryEnabled,
+		},
+	}
+	if material.outgoingAttemptBridge != nil {
+		options.OutgoingAttemptBridge = &eebusservicebridge.OutgoingAttemptBridgeConfiguration{
+			Gate: material.outgoingAttemptBridge,
+			Sink: material.outgoingAttemptBridge,
 		}
 	}
-	return nil, fmt.Errorf("%w: the available service constructor cannot bind a scoped SHIP listener", errScopedSHIPListenerUnavailable)
+	candidate := eebusservicebridge.NewServiceWithOptions(configuration, reader, options)
+	if candidate == nil {
+		return nil, errors.New("released scoped service construction failed")
+	}
+	return candidate, nil
 }
 
 func validateRuntimeMaterial(material runtimeMaterial) error {
@@ -392,6 +440,8 @@ type runtimeServiceHandler struct {
 	mu        sync.Mutex
 	publishMu sync.Mutex
 
+	runtimeID                 string
+	localSKI                  string
 	reducer                   *runtimeObservationReducer
 	observations              map[string]runtimeGraphObservation
 	projectionCapture         func() trustAdminProjection
@@ -412,16 +462,17 @@ func newRuntimeServiceHandler(config RuntimeConfig, localSKI string, now func() 
 		return nil, errors.New("runtime service clock is required")
 	}
 	handler := &runtimeServiceHandler{
+		runtimeID:    "runtime:" + localSKI,
+		localSKI:     localSKI,
 		reducer:      newRuntimeObservationReducer(),
 		observations: make(map[string]runtimeGraphObservation, len(config.Remotes)),
 		now:          now,
 		errors:       make(chan error, 1),
 	}
-	runtimeID := "runtime:" + localSKI
 	since := handler.timestamp()
 	for _, remote := range config.Remotes {
 		observation := runtimeGraphObservation{
-			RuntimeID:    runtimeID,
+			RuntimeID:    handler.runtimeID,
 			LocalSKI:     localSKI,
 			RemoteSKI:    remote.SKI,
 			SessionState: "connecting",
@@ -619,7 +670,7 @@ func (handler *runtimeServiceHandler) publishRuntimeGraph(graph []runtimeGraphOb
 	if publish == nil {
 		return nil
 	}
-	payload, err := marshalRuntimeSnapshot(graph, handler.timestamp())
+	payload, err := marshalRuntimeSnapshotWithIdentity(handler.runtimeID, handler.localSKI, graph, handler.timestamp())
 	if err != nil {
 		return err
 	}
@@ -785,11 +836,15 @@ func marshalRuntimeSnapshot(graph []runtimeGraphObservation, now time.Time) ([]b
 		return nil, errors.New("runtime graph is empty")
 	}
 	first := graph[0]
-	runtimeID, err := eebusraw.RedactID(eebusraw.IDKindPeer, first.RuntimeID)
+	return marshalRuntimeSnapshotWithIdentity(first.RuntimeID, first.LocalSKI, graph, now)
+}
+
+func marshalRuntimeSnapshotWithIdentity(runtimeIdentity, localIdentity string, graph []runtimeGraphObservation, now time.Time) ([]byte, error) {
+	runtimeID, err := eebusraw.RedactID(eebusraw.IDKindPeer, runtimeIdentity)
 	if err != nil {
 		return nil, err
 	}
-	localSKI, err := eebusraw.RedactID(eebusraw.IDKindLocalSKI, first.LocalSKI)
+	localSKI, err := eebusraw.RedactID(eebusraw.IDKindLocalSKI, localIdentity)
 	if err != nil {
 		return nil, err
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -408,11 +409,23 @@ func TestAcquireRuntimeFailsClosedBeforeServiceSetupWithoutProtectedMaterial(t *
 	}
 }
 
-func TestPinnedEEBusServiceFailsClosedWithoutScopedSHIPListener(t *testing.T) {
-	_, err := newEEBusService(RuntimeConfig{}, runtimeMaterial{}, nil)
-	if !errors.Is(err, errScopedSHIPListenerUnavailable) {
-		t.Fatalf("newEEBusService() error = %v, want scoped-listener failure", err)
+func TestPinnedEEBusServiceProvidesScopedSHIPLifecycle(t *testing.T) {
+	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "pinned-scoped-service")
+	if err != nil {
+		t.Fatal(err)
 	}
+	service, err := newEEBusService(RuntimeConfig{
+		Interface: "fixture-interface", ListenPort: 4711,
+		ListenAddress: netip.MustParseAddrPort("127.0.0.1:4711"),
+	}, runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate)}, nil)
+	if err != nil {
+		t.Fatalf("newEEBusService() error = %v", err)
+	}
+	scoped, ok := service.(runtimeScopedService)
+	if !ok || scoped.ListenerTerminal() == nil {
+		t.Fatal("newEEBusService() omitted scoped lifecycle")
+	}
+	service.Shutdown()
 }
 
 func TestServiceBackendCloseBeforeStartCannotReopenTransport(t *testing.T) {

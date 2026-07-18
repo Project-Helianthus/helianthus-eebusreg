@@ -20,11 +20,11 @@ func TestMSP04CR2RuntimeInstallsReleasedOutgoingBridgeBeforeServiceSetup(t *test
 	if serviceFactory < 0 || setup < 0 || bridge > serviceFactory || serviceFactory > setup {
 		t.Fatalf("runtime bridge/service/setup order = %d/%d/%d, want bridge < service < setup", bridge, serviceFactory, setup)
 	}
-	if !strings.Contains(allSource, "NewServiceWithOutgoingAttemptBridge") {
-		t.Fatal("production runtime does not use the released eebus-go outgoing-attempt constructor")
+	if !strings.Contains(allSource, "NewServiceWithOptions") {
+		t.Fatal("production runtime does not use the released scoped service constructor")
 	}
-	if !strings.Contains(allSource, "OutgoingAttemptBridgeConfiguration") {
-		t.Fatal("production runtime does not bind both the released gate and attempt-aware sink")
+	if !strings.Contains(allSource, "ListenerPolicy") || !strings.Contains(allSource, "OutgoingAttemptBridgeConfiguration") {
+		t.Fatal("production runtime does not bind the listener and outgoing-attempt policies together")
 	}
 	outgoingSource := readOptionalMSP04CR2ProductionFile(t, "runtime_outgoing_attempt.go")
 	if strings.Contains(outgoingSource, "internal/eebusstore") {
