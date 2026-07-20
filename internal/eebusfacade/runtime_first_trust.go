@@ -231,7 +231,10 @@ func attachRuntimeFirstTrust(
 	if !ok {
 		return errors.New("runtime service does not support first trust controls")
 	}
-	facade := newFirstTrustFacade(trustService, resources.coordinator)
+	facade, err := newFirstTrustFacade(trustService, resources.coordinator)
+	if err != nil {
+		return fmt.Errorf("initialize first trust pairing registration: %w", err)
+	}
 	resources.reader = reader
 	resources.facade = facade
 	resources.coordinator.mu.Lock()
@@ -301,14 +304,15 @@ func (resources *runtimeFirstTrustResources) Close() error {
 		if resources.coordinator != nil {
 			checkpointErr = resources.coordinator.checkpointActiveRetries(context.Background())
 		}
+		var registrationErr error
 		if resources.coordinator != nil {
-			resources.coordinator.shutdown()
+			registrationErr = resources.coordinator.shutdown()
 		}
 		var storeErr error
 		if resources.store != nil {
 			storeErr = resources.store.Close()
 		}
-		resources.closeErr = errors.Join(adminErr, checkpointErr, storeErr)
+		resources.closeErr = errors.Join(adminErr, checkpointErr, registrationErr, storeErr)
 	})
 	return resources.closeErr
 }

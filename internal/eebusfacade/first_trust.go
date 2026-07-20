@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -25,6 +26,8 @@ const (
 	firstTrustWithdrawalWait       = 2 * time.Second
 )
 
+var errFirstTrustPairingRegistrationFailed = errors.New("pairing registration failed")
+
 type firstTrustPersistence interface {
 	Reload(context.Context) (uint64, map[string]string, string)
 	SelectedGeneration() uint64
@@ -32,7 +35,7 @@ type firstTrustPersistence interface {
 }
 
 type firstTrustEffects interface {
-	setWaiting(bool)
+	setWaiting(bool) error
 	cancelRemote([]byte, uint64)
 	connectionAlive([]byte, uint64) bool
 	registerRemoteSKI([]byte, uint64)
@@ -135,6 +138,10 @@ type firstTrustCoordinator struct {
 	retentionTimer   *time.Timer
 	retentionToken   uint64
 
+	pairingRegistrationKnown   bool
+	pairingRegistrationEnabled bool
+	pairingRegistrationFault   bool
+
 	monotonicNow         func() time.Duration
 	recoveryStore        firstTrustControlPersistence
 	anchor               firstTrustAnchorProvider
@@ -180,7 +187,17 @@ func newFirstTrustCoordinator(now func() time.Time, random io.Reader, store firs
 
 func (coordinator *firstTrustCoordinator) reopen(ctx context.Context) string {
 	if coordinator.recoveryStore != nil {
-		return coordinator.reopenWithRecovery(ctx)
+		if outcome := coordinator.preparePairingRegistrationReopen(); outcome != "" {
+			return outcome
+		}
+		outcome := coordinator.reopenWithRecovery(ctx)
+		coordinator.mu.Lock()
+		defer coordinator.mu.Unlock()
+		if coordinator.pairingRegistrationFault {
+			coordinator.failPairingRegistrationLocked()
+			return "pairing_registration_failed"
+		}
+		return outcome
 	}
 	ctx = firstTrustContext(ctx)
 	coordinator.mu.Lock()
@@ -191,6 +208,11 @@ func (coordinator *firstTrustCoordinator) reopen(ctx context.Context) string {
 	if coordinator.phase != firstTrustDisabled {
 		coordinator.mu.Unlock()
 		return "reopen_not_required"
+	}
+	if coordinator.pairingRegistrationFault {
+		coordinator.failPairingRegistrationLocked()
+		coordinator.mu.Unlock()
+		return "pairing_registration_failed"
 	}
 	if coordinator.commitFence != nil {
 		select {
@@ -214,7 +236,11 @@ func (coordinator *firstTrustCoordinator) reopen(ctx context.Context) string {
 	coordinator.retired = make(map[string]firstTrustRetired)
 	coordinator.stopTimerLocked()
 	coordinator.stopRetentionTimerLocked()
-	coordinator.setWaitingLocked(false)
+	if err := coordinator.setWaitingLocked(false); err != nil {
+		coordinator.reopening = false
+		coordinator.mu.Unlock()
+		return "pairing_registration_failed"
+	}
 	coordinator.mu.Unlock()
 
 	generation, associations, outcome := coordinator.store.Reload(ctx)
@@ -222,6 +248,10 @@ func (coordinator *firstTrustCoordinator) reopen(ctx context.Context) string {
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 	coordinator.reopening = false
+	if coordinator.pairingRegistrationFault {
+		coordinator.failPairingRegistrationLocked()
+		return "pairing_registration_failed"
+	}
 	if ctx.Err() != nil {
 		return "reopen_cancelled"
 	}
@@ -288,7 +318,10 @@ func (coordinator *firstTrustCoordinator) openPairingWindow(ctx context.Context,
 	}
 	coordinator.window = &firstTrustWindow{key: key, duration: duration, deadline: now.Add(duration)}
 	coordinator.phase = firstTrustOpenEmpty
-	coordinator.setWaitingLocked(true)
+	if err := coordinator.setWaitingLocked(true); err != nil {
+		coordinator.recordReplayLocked(key, request, "pairing_registration_failed", now)
+		return "pairing_registration_failed"
+	}
 	coordinator.scheduleExpiryLocked(coordinator.window.deadline)
 	return "open_empty"
 }
@@ -325,7 +358,10 @@ func (coordinator *firstTrustCoordinator) closePairingWindow(ctx context.Context
 		coordinator.recordReplayLocked(key, request, "pairing_closed", now)
 		return "pairing_closed"
 	}
-	coordinator.closeWindowLocked("pairing_closed", now, true)
+	if err := coordinator.closeWindowLocked("pairing_closed", now, true); err != nil {
+		coordinator.recordReplayLocked(key, request, "pairing_registration_failed", now)
+		return "pairing_registration_failed"
+	}
 	coordinator.recordReplayLocked(key, request, "pairing_closed", now)
 	return "pairing_closed"
 }
@@ -434,7 +470,9 @@ func (coordinator *firstTrustCoordinator) connectionClosed(remote []byte, connec
 		coordinator.scheduleExpiryLocked(coordinator.window.deadline)
 		return "open_empty"
 	}
-	coordinator.closeWindowLocked("pairing_closed", now, false)
+	if err := coordinator.closeWindowLocked("pairing_closed", now, false); err != nil {
+		return "pairing_registration_failed"
+	}
 	return "pairing_closed"
 }
 
@@ -531,7 +569,15 @@ func (coordinator *firstTrustCoordinator) confirm(ctx context.Context, key, fing
 	remote := bytes.Clone(candidate.remote)
 	shipID := candidate.shipID
 	if coordinator.recoveryStore != nil {
-		return coordinator.confirmWithRecoveryLocked(ctx, token, inflight, remote, shipID, connection)
+		result := coordinator.confirmWithRecoveryLocked(ctx, token, inflight, remote, shipID, connection)
+		coordinator.mu.Lock()
+		defer coordinator.mu.Unlock()
+		if coordinator.pairingRegistrationFault {
+			coordinator.failPairingRegistrationLocked()
+			coordinator.recordReplayLocked(key, request, "pairing_registration_failed", coordinator.now())
+			return "pairing_registration_failed"
+		}
+		return result
 	}
 	coordinator.mu.Unlock()
 
@@ -554,15 +600,18 @@ func (coordinator *firstTrustCoordinator) confirm(ctx context.Context, key, fing
 		fence := make(chan struct{})
 		coordinator.mu.Lock()
 		terminal := false
+		terminalResult := "trust_outcome_unknown"
 		if coordinator.commitToken == token && coordinator.inflight == inflight {
 			coordinator.phase = firstTrustDisabled
 			coordinator.window = nil
 			coordinator.finishCandidateRequestsExceptLocked(key, "stale_request", coordinator.now())
 			coordinator.currentCandidate = nil
 			coordinator.stopTimerLocked()
-			coordinator.setWaitingLocked(false)
+			if err := coordinator.setWaitingLocked(false); err != nil {
+				terminalResult = "pairing_registration_failed"
+			}
 			coordinator.cancelRemoteLocked(remote, connection)
-			coordinator.recordReplayLocked(key, request, "trust_outcome_unknown", coordinator.now())
+			coordinator.recordReplayLocked(key, request, terminalResult, coordinator.now())
 			coordinator.commitFence = fence
 			coordinator.inflight = nil
 			close(inflight.done)
@@ -576,7 +625,7 @@ func (coordinator *firstTrustCoordinator) confirm(ctx context.Context, key, fing
 			<-result
 			close(fence)
 		}()
-		return "trust_outcome_unknown"
+		return terminalResult
 	}
 }
 
@@ -615,17 +664,20 @@ func (coordinator *firstTrustCoordinator) cancel(ctx context.Context, key, nonce
 	if nonce != candidate.nonce || connection != candidate.connection || storeGeneration != candidate.storeGeneration {
 		return "confirmation_mismatch"
 	}
-	coordinator.finishCandidateRequestsLocked("cancelled", now)
-	coordinator.recordReplayLocked(key, request, "cancelled", now)
+	result := "cancelled"
+	coordinator.finishCandidateRequestsLocked(result, now)
 	coordinator.cancelRemoteLocked(candidate.remote, candidate.connection)
 	coordinator.currentCandidate = nil
 	if coordinator.window != nil && now.Before(coordinator.window.deadline) {
 		coordinator.phase = firstTrustOpenEmpty
 		coordinator.scheduleExpiryLocked(coordinator.window.deadline)
 	} else {
-		coordinator.closeWindowLocked("pairing_closed", now, false)
+		if err := coordinator.closeWindowLocked("pairing_closed", now, false); err != nil {
+			result = "pairing_registration_failed"
+		}
 	}
-	return "cancelled"
+	coordinator.recordReplayLocked(key, request, result, now)
+	return result
 }
 
 func (coordinator *firstTrustCoordinator) candidate() (string, string, time.Time, uint64, uint64, bool, bool) {
@@ -643,6 +695,9 @@ func (coordinator *firstTrustCoordinator) state() string {
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 	coordinator.expireLocked(coordinator.now())
+	if coordinator.pairingRegistrationFault {
+		return "DISABLED"
+	}
 	switch coordinator.phase {
 	case firstTrustPairingClosed:
 		return "PAIRING_CLOSED"
@@ -664,9 +719,9 @@ func (coordinator *firstTrustCoordinator) trusted(remote []byte) bool {
 	return ok
 }
 
-func (coordinator *firstTrustCoordinator) shutdown() {
+func (coordinator *firstTrustCoordinator) shutdown() error {
 	if coordinator == nil {
-		return
+		return nil
 	}
 	coordinator.mu.Lock()
 	before := coordinator.captureTrustAdminProjectionLocked()
@@ -676,7 +731,7 @@ func (coordinator *firstTrustCoordinator) shutdown() {
 	if coordinator.currentCandidate != nil {
 		coordinator.cancelRemoteLocked(coordinator.currentCandidate.remote, coordinator.currentCandidate.connection)
 	}
-	coordinator.setWaitingLocked(false)
+	registrationErr := coordinator.setWaitingLocked(false)
 	coordinator.phase = firstTrustDisabled
 	coordinator.window = nil
 	coordinator.currentCandidate = nil
@@ -691,6 +746,7 @@ func (coordinator *firstTrustCoordinator) shutdown() {
 	coordinator.retryArms = nil
 	coordinator.retryInflight = nil
 	coordinator.cancelAllOutgoingAttemptContextsLocked()
+	return registrationErr
 }
 
 func (coordinator *firstTrustCoordinator) selectedFirstTrustGenerationLocked() uint64 {
@@ -734,11 +790,13 @@ func (coordinator *firstTrustCoordinator) finishCommit(token uint64, inflight *f
 
 	now := coordinator.now()
 	coordinator.finishCandidateRequestsExceptLocked(inflight.key, "stale_request", now)
-	coordinator.recordReplayLocked(inflight.key, inflight.request, result, now)
 	coordinator.currentCandidate = nil
 	coordinator.window = nil
 	coordinator.stopTimerLocked()
-	coordinator.setWaitingLocked(false)
+	if err := coordinator.setWaitingLocked(false); err != nil {
+		result = "pairing_registration_failed"
+	}
+	coordinator.recordReplayLocked(inflight.key, inflight.request, result, now)
 	if result == "trusted" {
 		if coordinator.effects != nil && coordinator.effects.connectionAlive(remote, connection) {
 			coordinator.effects.registerRemoteSKI(remote, connection)
@@ -923,15 +981,15 @@ func (coordinator *firstTrustCoordinator) expireLocked(now time.Time) {
 			coordinator.phase = firstTrustOpenEmpty
 			coordinator.scheduleExpiryLocked(coordinator.window.deadline)
 		} else {
-			coordinator.closeWindowLocked("pairing_closed", now, false)
+			_ = coordinator.closeWindowLocked("pairing_closed", now, false)
 		}
 	}
 	if coordinator.window != nil && !now.Before(coordinator.window.deadline) && coordinator.phase != firstTrustCommitting {
-		coordinator.closeWindowLocked("pairing_closed", now, true)
+		_ = coordinator.closeWindowLocked("pairing_closed", now, true)
 	}
 }
 
-func (coordinator *firstTrustCoordinator) closeWindowLocked(result string, now time.Time, cancelCandidate bool) {
+func (coordinator *firstTrustCoordinator) closeWindowLocked(result string, now time.Time, cancelCandidate bool) error {
 	if coordinator.window != nil {
 		openRequest := firstTrustRequest{operation: "open", duration: coordinator.window.duration}
 		coordinator.recordReplayLocked(coordinator.window.key, openRequest, result, now)
@@ -945,7 +1003,7 @@ func (coordinator *firstTrustCoordinator) closeWindowLocked(result string, now t
 	coordinator.currentCandidate = nil
 	coordinator.phase = firstTrustPairingClosed
 	coordinator.stopTimerLocked()
-	coordinator.setWaitingLocked(false)
+	return coordinator.setWaitingLocked(false)
 }
 
 func (coordinator *firstTrustCoordinator) scheduleExpiryLocked(deadline time.Time) {
@@ -1002,10 +1060,69 @@ func (coordinator *firstTrustCoordinator) openStateLocked() string {
 	return "open_empty"
 }
 
-func (coordinator *firstTrustCoordinator) setWaitingLocked(value bool) {
-	if coordinator.effects != nil {
-		coordinator.effects.setWaiting(value)
+func (coordinator *firstTrustCoordinator) setWaitingLocked(value bool) error {
+	if coordinator.pairingRegistrationFault {
+		coordinator.failPairingRegistrationLocked()
+		return errFirstTrustPairingRegistrationFailed
 	}
+	if coordinator.effects == nil {
+		return nil
+	}
+	if coordinator.pairingRegistrationKnown && coordinator.pairingRegistrationEnabled == value {
+		return nil
+	}
+	if err := coordinator.effects.setWaiting(value); err != nil {
+		coordinator.failPairingRegistrationLocked()
+		return err
+	}
+	coordinator.pairingRegistrationKnown = true
+	coordinator.pairingRegistrationEnabled = value
+	return nil
+}
+
+func (coordinator *firstTrustCoordinator) pairingRegistrationInitialized(value bool) {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.pairingRegistrationFault {
+		return
+	}
+	coordinator.pairingRegistrationKnown = true
+	coordinator.pairingRegistrationEnabled = value
+}
+
+func (coordinator *firstTrustCoordinator) pairingRegistrationFailed() {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	coordinator.failPairingRegistrationLocked()
+}
+
+func (coordinator *firstTrustCoordinator) preparePairingRegistrationReopen() string {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.pairingRegistrationFault {
+		coordinator.failPairingRegistrationLocked()
+		return "pairing_registration_failed"
+	}
+	if coordinator.reopening || coordinator.phase != firstTrustDisabled || coordinator.recoveryStore == nil {
+		return ""
+	}
+	if err := coordinator.setWaitingLocked(false); err != nil {
+		coordinator.reopening = false
+		return "pairing_registration_failed"
+	}
+	return ""
+}
+
+func (coordinator *firstTrustCoordinator) failPairingRegistrationLocked() {
+	coordinator.pairingRegistrationFault = true
+	coordinator.phase = firstTrustDisabled
+	coordinator.window = nil
+	coordinator.currentCandidate = nil
+	coordinator.reopening = false
+	coordinator.recovery = "QUARANTINED"
+	coordinator.recoveryReasonCode = "PAIRING_REGISTRATION_FAILED"
+	coordinator.trustedRemotes = make(map[string]string)
+	coordinator.stopTimerLocked()
 }
 
 func (coordinator *firstTrustCoordinator) cancelRemoteLocked(remote []byte, connection uint64) {

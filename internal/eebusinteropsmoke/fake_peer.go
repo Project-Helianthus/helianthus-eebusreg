@@ -146,7 +146,10 @@ func newPeerService(name string, port int, certificate tls.Certificate, iface st
 		return nil, err
 	}
 	h.service.SetAutoAccept(true)
-	h.service.UserIsAbleToApproveOrCancelPairingRequests(true)
+	if err := h.service.SetPairingRegistration(true); err != nil {
+		h.service.Shutdown()
+		return nil, fmt.Errorf("enable peer pairing registration: %w", err)
+	}
 	return h, nil
 }
 

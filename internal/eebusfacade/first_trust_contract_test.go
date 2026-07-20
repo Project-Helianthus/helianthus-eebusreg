@@ -225,7 +225,9 @@ func TestFirstTrustLateCommitIsFencedUntilReopen(t *testing.T) {
 func TestFirstTrustFacadeForcesAutoAcceptFalse(t *testing.T) {
 	fixture := newMSP04BFixture(t, "commit_durable")
 	service := &msp04bServiceSpy{}
-	_ = newFirstTrustFacade(service, fixture.coordinator)
+	if _, err := newFirstTrustFacade(service, fixture.coordinator); err != nil {
+		t.Fatal(err)
+	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	if len(service.auto) != 1 || service.auto[0] {
@@ -237,7 +239,10 @@ func TestFirstTrustFacadeKeepsWinnerOnDuplicateCallbackDuringCommit(t *testing.T
 	fixture := newMSP04BFixture(t, "commit_durable")
 	fixture.store.blockCommit()
 	service := &msp04bServiceSpy{}
-	adapter := newFirstTrustFacade(service, fixture.coordinator)
+	adapter, err := newFirstTrustFacade(service, fixture.coordinator)
+	if err != nil {
+		t.Fatal(err)
+	}
 	coordinator, ok := fixture.coordinator.(*firstTrustCoordinator)
 	if !ok {
 		t.Fatal("fixture coordinator type changed")
@@ -301,7 +306,10 @@ func TestFirstTrustFacadeSameSKIOverlapAndDelayedCallbacksFailClosed(t *testing.
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newMSP04BFixture(t, "commit_durable")
 			service := &msp04bServiceSpy{}
-			adapter := newFirstTrustFacade(service, fixture.coordinator)
+			adapter, err := newFirstTrustFacade(service, fixture.coordinator)
+			if err != nil {
+				t.Fatal(err)
+			}
 			coordinator, ok := fixture.coordinator.(*firstTrustCoordinator)
 			if !ok {
 				t.Fatal("fixture coordinator type changed")

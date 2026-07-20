@@ -1222,11 +1222,11 @@ func (service *msp045Service) RegisterRemoteSKI(ski string) {
 	service.mu.Unlock()
 }
 
-func (*msp045Service) LocalService() *shipapi.ServiceDetails           { return nil }
-func (*msp045Service) LocalDevice() spineapi.DeviceLocalInterface      { return nil }
-func (*msp045Service) SetAutoAccept(bool)                              {}
-func (*msp045Service) CancelPairingWithSKI(string)                     {}
-func (*msp045Service) UserIsAbleToApproveOrCancelPairingRequests(bool) {}
+func (*msp045Service) LocalService() *shipapi.ServiceDetails      { return nil }
+func (*msp045Service) LocalDevice() spineapi.DeviceLocalInterface { return nil }
+func (*msp045Service) SetAutoAccept(bool)                         {}
+func (*msp045Service) CancelPairingWithSKI(string)                {}
+func (*msp045Service) SetPairingRegistration(bool) error          { return nil }
 
 type msp045AdminEndpoint struct{}
 

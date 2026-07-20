@@ -520,12 +520,12 @@ func (service *msp04crService) Setup() error {
 	return nil
 }
 
-func (service *msp04crService) Start()                                          { service.record("listener_start") }
-func (service *msp04crService) Shutdown()                                       { service.record("shutdown") }
-func (service *msp04crService) SetAutoAccept(bool)                              {}
-func (service *msp04crService) UserIsAbleToApproveOrCancelPairingRequests(bool) {}
-func (*msp04crService) LocalService() *shipapi.ServiceDetails                   { return nil }
-func (*msp04crService) LocalDevice() spineapi.DeviceLocalInterface              { return nil }
+func (service *msp04crService) Start()                             { service.record("listener_start") }
+func (service *msp04crService) Shutdown()                          { service.record("shutdown") }
+func (service *msp04crService) SetAutoAccept(bool)                 {}
+func (service *msp04crService) SetPairingRegistration(bool) error  { return nil }
+func (*msp04crService) LocalService() *shipapi.ServiceDetails      { return nil }
+func (*msp04crService) LocalDevice() spineapi.DeviceLocalInterface { return nil }
 
 func (service *msp04crService) RegisterRemoteSKI(ski string) {
 	service.recordExactSKI("register_remote", ski)

@@ -384,6 +384,28 @@ func TestAcquireRuntimeFailsClosedAndReleasesStoreWhenAdminStartFails(t *testing
 	}
 }
 
+func TestAttachRuntimeFirstTrustFailsClosedWhenInitialPairingRegistrationFails(t *testing.T) {
+	wantErr := errors.New("pairing registration unavailable")
+	service := &fakeRuntimeService{
+		started:                make(chan struct{}),
+		pairingRegistrationErr: wantErr,
+	}
+	coordinator := newFirstTrustCoordinator(time.Now, nil, nil, nil)
+	resources := &runtimeFirstTrustResources{coordinator: coordinator}
+	reader := newRuntimeServiceReader(nil)
+
+	err := attachRuntimeFirstTrust(context.Background(), resources, service, reader, runtimeDependencies{})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("attach error = %v, want %v", err, wantErr)
+	}
+	if coordinator.state() != "DISABLED" || coordinator.recoveryState() != "QUARANTINED" || coordinator.recoveryReason() != "PAIRING_REGISTRATION_FAILED" {
+		t.Fatalf("initial activation fault = %s/%s/%s", coordinator.state(), coordinator.recoveryState(), coordinator.recoveryReason())
+	}
+	if resources.facade != nil || resources.reader != nil || coordinator.effects != nil {
+		t.Fatal("failed initial pairing registration partially attached first trust")
+	}
+}
+
 func TestAcquireRuntimeFailsClosedBeforeServiceSetupWithoutProtectedMaterial(t *testing.T) {
 	serviceCreated := false
 	_, err := acquireRuntime(context.Background(), RuntimeConfig{
@@ -471,15 +493,16 @@ func TestServiceBackendCloseBeforeStartCannotReopenTransport(t *testing.T) {
 }
 
 type fakeRuntimeService struct {
-	mu           sync.Mutex
-	setup        bool
-	started      chan struct{}
-	shutdowns    int
-	registered   []string
-	autoAccept   []bool
-	waiting      []bool
-	cancels      int
-	disconnected func(string)
+	mu                     sync.Mutex
+	setup                  bool
+	started                chan struct{}
+	shutdowns              int
+	registered             []string
+	autoAccept             []bool
+	waiting                []bool
+	pairingRegistrationErr error
+	cancels                int
+	disconnected           func(string)
 }
 
 func (service *fakeRuntimeService) Setup() error {
@@ -519,10 +542,12 @@ func (service *fakeRuntimeService) CancelPairingWithSKI(string) {
 	service.mu.Unlock()
 }
 
-func (service *fakeRuntimeService) UserIsAbleToApproveOrCancelPairingRequests(value bool) {
+func (service *fakeRuntimeService) SetPairingRegistration(value bool) error {
 	service.mu.Lock()
 	service.waiting = append(service.waiting, value)
+	err := service.pairingRegistrationErr
 	service.mu.Unlock()
+	return err
 }
 
 func (*fakeRuntimeService) LocalService() *shipapi.ServiceDetails { return nil }

@@ -120,7 +120,10 @@ func RunMSP04CR2ProductionProof(
 		return nil, fmt.Errorf("initialize canonical proof identity: %s", outcome)
 	}
 	trustService := &msp04cr2ProofTrustService{}
-	trustFacade := newFirstTrustFacade(trustService, coordinator)
+	trustFacade, err := newFirstTrustFacade(trustService, coordinator)
+	if err != nil {
+		return nil, fmt.Errorf("initialize proof pairing registration: %w", err)
+	}
 	coordinator.mu.Lock()
 	coordinator.effects = trustFacade
 	coordinator.mu.Unlock()
@@ -516,10 +519,10 @@ func (clock *msp04cr2ProofClock) advance(duration time.Duration) {
 
 type msp04cr2ProofTrustService struct{}
 
-func (*msp04cr2ProofTrustService) SetAutoAccept(bool)                              {}
-func (*msp04cr2ProofTrustService) RegisterRemoteSKI(string)                        {}
-func (*msp04cr2ProofTrustService) CancelPairingWithSKI(string)                     {}
-func (*msp04cr2ProofTrustService) UserIsAbleToApproveOrCancelPairingRequests(bool) {}
+func (*msp04cr2ProofTrustService) SetAutoAccept(bool)                {}
+func (*msp04cr2ProofTrustService) RegisterRemoteSKI(string)          {}
+func (*msp04cr2ProofTrustService) CancelPairingWithSKI(string)       {}
+func (*msp04cr2ProofTrustService) SetPairingRegistration(bool) error { return nil }
 
 type msp04cr2ProofServiceReader struct{}
 

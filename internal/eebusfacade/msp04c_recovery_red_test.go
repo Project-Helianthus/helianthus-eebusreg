@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"io"
 	"reflect"
 	"slices"
@@ -207,6 +208,57 @@ func TestMSP04CStartupClassificationUsesFirstMatchingReason(t *testing.T) {
 	coordinator = fixture.newCoordinator()
 	_ = coordinator.reopen(context.Background())
 	assertMSP04CState(t, coordinator, "QUARANTINED", "CONTROL_EPOCH_ROLLBACK")
+}
+
+func TestMSP04CActiveReopenRegistrationResetFailureStaysQuarantined(t *testing.T) {
+	fixture := newMSP04CFixture(t)
+	coordinator := fixture.newCoordinator()
+	if got := coordinator.reopen(context.Background()); got != "pairing_closed" {
+		t.Fatalf("initial reopen = %q", got)
+	}
+	if got := coordinator.openPairingWindow(context.Background(), msp04cText(210), time.Minute); got != "open_empty" {
+		t.Fatalf("open pairing window = %q", got)
+	}
+
+	coordinator.mu.Lock()
+	coordinator.phase = firstTrustDisabled
+	coordinator.mu.Unlock()
+	fixture.effects.setPairingRegistrationError(errors.New("registration reset failed"))
+
+	if got := coordinator.reopen(context.Background()); got != "pairing_registration_failed" {
+		t.Fatalf("active reopen = %q, want pairing_registration_failed", got)
+	}
+	if got := coordinator.state(); got != "DISABLED" {
+		t.Fatalf("active reopen phase = %q, want DISABLED", got)
+	}
+	assertMSP04CState(t, coordinator, "QUARANTINED", "PAIRING_REGISTRATION_FAILED")
+
+	fixture.effects.setPairingRegistrationError(nil)
+	if got := coordinator.reopen(context.Background()); got != "pairing_registration_failed" {
+		t.Fatalf("later reopen replaced registration fault: %q", got)
+	}
+	assertMSP04CState(t, coordinator, "QUARANTINED", "PAIRING_REGISTRATION_FAILED")
+}
+
+func TestMSP04CRecoveryConfirmationPropagatesPairingRegistrationFailure(t *testing.T) {
+	fixture := newMSP04CFixture(t)
+	coordinator := fixture.newCoordinator()
+	if got := coordinator.reopen(context.Background()); got != "pairing_closed" {
+		t.Fatalf("reopen = %q", got)
+	}
+	binding := openMSP04CCandidate(t, coordinator, 220)
+	fixture.effects.setPairingRegistrationError(errors.New("registration close failed"))
+
+	if got := confirmMSP04C(coordinator, binding); got != "pairing_registration_failed" {
+		t.Fatalf("recovery confirmation = %q", got)
+	}
+	if got := coordinator.state(); got != "DISABLED" {
+		t.Fatalf("recovery confirmation phase = %q, want DISABLED", got)
+	}
+	assertMSP04CState(t, coordinator, "QUARANTINED", "PAIRING_REGISTRATION_FAILED")
+	if got := fixture.effects.registerCount(); got != 0 {
+		t.Fatalf("registration count = %d after recovery withdrawal failure", got)
+	}
 }
 
 func TestMSP04CConfirmationPublishesOnlyAfterBothDurabilityDomains(t *testing.T) {
@@ -1045,22 +1097,35 @@ func (anchor *msp04cAnchorSpy) Create(_ context.Context, version uint64, storeIn
 }
 
 type msp04cEffectsSpy struct {
-	mu        sync.Mutex
-	waiting   bool
-	cancels   int
-	registers int
-	events    *msp04cEventLog
+	mu                     sync.Mutex
+	waiting                bool
+	pairingRegistrationErr error
+	pairingRegistrationBad bool
+	cancels                int
+	registers              int
+	events                 *msp04cEventLog
 }
 
 func newMSP04CEffectsSpy(events *msp04cEventLog) *msp04cEffectsSpy {
 	return &msp04cEffectsSpy{events: events}
 }
 
-func (effects *msp04cEffectsSpy) setWaiting(value bool) {
+func (effects *msp04cEffectsSpy) setWaiting(value bool) error {
 	effects.mu.Lock()
 	effects.waiting = value
+	err := effects.pairingRegistrationErr
+	if err != nil {
+		effects.pairingRegistrationBad = true
+	}
 	effects.mu.Unlock()
 	effects.events.add("waiting:" + map[bool]string{true: "true", false: "false"}[value])
+	return err
+}
+
+func (effects *msp04cEffectsSpy) setPairingRegistrationError(err error) {
+	effects.mu.Lock()
+	effects.pairingRegistrationErr = err
+	effects.mu.Unlock()
 }
 
 func (effects *msp04cEffectsSpy) cancelRemote([]byte, uint64) {
@@ -1070,7 +1135,11 @@ func (effects *msp04cEffectsSpy) cancelRemote([]byte, uint64) {
 	effects.events.add("cancel")
 }
 
-func (*msp04cEffectsSpy) connectionAlive([]byte, uint64) bool { return true }
+func (effects *msp04cEffectsSpy) connectionAlive([]byte, uint64) bool {
+	effects.mu.Lock()
+	defer effects.mu.Unlock()
+	return !effects.pairingRegistrationBad
+}
 
 func (effects *msp04cEffectsSpy) registerRemoteSKI([]byte, uint64) {
 	effects.mu.Lock()

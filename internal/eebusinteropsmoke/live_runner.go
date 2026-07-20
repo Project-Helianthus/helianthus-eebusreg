@@ -389,7 +389,9 @@ func (h *liveServiceHandler) approveExpectedRemote() error {
 		return errors.New("expected remote approval configuration invalid")
 	}
 	h.service.SetAutoAccept(false)
-	h.service.UserIsAbleToApproveOrCancelPairingRequests(false)
+	if err := h.service.SetPairingRegistration(false); err != nil {
+		return fmt.Errorf("close expected remote pairing registration: %w", err)
+	}
 	h.service.RegisterRemoteSKI(h.expectedSKI)
 	h.hub.SetAutoAccept(false)
 	h.hub.RegisterRemoteSKI(h.expectedSKI)
@@ -435,7 +437,14 @@ func (h *liveServiceHandler) RemoteSKIConnected(_ eebusapi.ServiceInterface, ski
 	h.states = append(h.states, connectionStateName(shipapi.ConnectionStateCompleted))
 	h.mu.Unlock()
 	h.service.SetAutoAccept(false)
-	h.service.UserIsAbleToApproveOrCancelPairingRequests(false)
+	if err := h.service.SetPairingRegistration(false); err != nil {
+		h.mu.Lock()
+		h.connected = false
+		h.states = append(h.states, "pairing-registration-failed")
+		h.mu.Unlock()
+		go h.hub.CancelPairingWithSKI(ski)
+		return
+	}
 	h.hub.SetAutoAccept(false)
 }
 
