@@ -118,11 +118,11 @@ func TestExpectedControlSurfaceIsStableAndSorted(t *testing.T) {
 		"RegisterRemoteSKI",
 		"SetAutoAccept",
 		"SetLogging",
+		"SetPairingRegistration",
 		"Setup",
 		"Shutdown",
 		"Start",
 		"UnregisterRemoteSKI",
-		"UserIsAbleToApproveOrCancelPairingRequests",
 	}
 	assertEqualSlice(t, "service readers", surface.RequiredServiceReaders, wantServiceReaders)
 	assertEqualSlice(t, "reader callbacks", surface.RequiredReaderCallbacks, wantReaderCallbacks)

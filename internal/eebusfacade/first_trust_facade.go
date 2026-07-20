@@ -16,7 +16,7 @@ type firstTrustService interface {
 	SetAutoAccept(bool)
 	RegisterRemoteSKI(string)
 	CancelPairingWithSKI(string)
-	UserIsAbleToApproveOrCancelPairingRequests(bool)
+	SetPairingRegistration(bool) error
 }
 
 type firstTrustWithdrawalService interface {
@@ -40,6 +40,11 @@ type firstTrustEventSink interface {
 	admit([]byte, uint64) string
 	serviceShipIDUpdate([]byte, uint64, string) string
 	connectionClosed([]byte, uint64) string
+}
+
+type firstTrustPairingRegistrationSink interface {
+	pairingRegistrationInitialized(bool)
+	pairingRegistrationFailed()
 }
 
 type firstTrustConnection struct {
@@ -66,11 +71,13 @@ type firstTrustFacade struct {
 	next        uint64
 	connections map[string]*firstTrustConnection
 	withdrawals map[string]chan struct{}
+
+	pairingRegistrationFault bool
 }
 
 var _ eebusapi.ServiceReaderInterface = (*firstTrustFacade)(nil)
 
-func newFirstTrustFacade(service firstTrustService, coordinator firstTrustEventSink) *firstTrustFacade {
+func newFirstTrustFacade(service firstTrustService, coordinator firstTrustEventSink) (*firstTrustFacade, error) {
 	facade := &firstTrustFacade{
 		service:     service,
 		coordinator: coordinator,
@@ -79,9 +86,17 @@ func newFirstTrustFacade(service firstTrustService, coordinator firstTrustEventS
 	}
 	if service != nil {
 		service.SetAutoAccept(false)
-		service.UserIsAbleToApproveOrCancelPairingRequests(false)
+		if err := service.SetPairingRegistration(false); err != nil {
+			if sink, ok := coordinator.(firstTrustPairingRegistrationSink); ok {
+				sink.pairingRegistrationFailed()
+			}
+			return nil, err
+		}
+		if sink, ok := coordinator.(firstTrustPairingRegistrationSink); ok {
+			sink.pairingRegistrationInitialized(false)
+		}
 	}
-	return facade
+	return facade, nil
 }
 
 func (facade *firstTrustFacade) RemoteSKIConnected(_ eebusapi.ServiceInterface, ski string) {
@@ -350,10 +365,16 @@ func (facade *firstTrustFacade) retrySink() (firstTrustRetryEventSink, bool) {
 	return retry, ok && retry.retryRuntimeEnabled()
 }
 
-func (facade *firstTrustFacade) setWaiting(value bool) {
+func (facade *firstTrustFacade) setWaiting(value bool) error {
 	if facade.service != nil {
-		facade.service.UserIsAbleToApproveOrCancelPairingRequests(value)
+		if err := facade.service.SetPairingRegistration(value); err != nil {
+			facade.mu.Lock()
+			facade.pairingRegistrationFault = true
+			facade.mu.Unlock()
+			return err
+		}
 	}
+	return nil
 }
 
 func (facade *firstTrustFacade) cancelRemote(remote []byte, generation uint64) {
@@ -365,14 +386,14 @@ func (facade *firstTrustFacade) connectionAlive(remote []byte, generation uint64
 	facade.mu.Lock()
 	defer facade.mu.Unlock()
 	connection := facade.connections[normalized]
-	return connection != nil && connection.generation == generation && connection.active && !connection.cancelled && !connection.blocked
+	return !facade.pairingRegistrationFault && connection != nil && connection.generation == generation && connection.active && !connection.cancelled && !connection.blocked
 }
 
 func (facade *firstTrustFacade) registerRemoteSKI(remote []byte, generation uint64) {
 	normalized := hex.EncodeToString(remote)
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
-	if connection == nil || connection.generation != generation || !connection.active || connection.cancelled || connection.blocked || connection.registered {
+	if facade.pairingRegistrationFault || connection == nil || connection.generation != generation || !connection.active || connection.cancelled || connection.blocked || connection.registered {
 		facade.mu.Unlock()
 		return
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -246,7 +247,10 @@ func TestMSP04BRestartDropsVolatileStateAndReloadsOnlyDurableTrust(t *testing.T)
 func TestMSP04BFacadeAssignsOnlyAnUnambiguousInitialGeneration(t *testing.T) {
 	fixture := newMSP04BFixture(t, "commit_durable")
 	service := &msp04bServiceSpy{}
-	adapter := newFirstTrustFacade(service, fixture.coordinator)
+	adapter, err := newFirstTrustFacade(service, fixture.coordinator)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var _ eebusapi.ServiceReaderInterface = adapter
 
 	remote := msp04bRemote(t)
@@ -273,6 +277,79 @@ func TestMSP04BFacadeAssignsOnlyAnUnambiguousInitialGeneration(t *testing.T) {
 	}
 	if service.cancelCount() != 2 {
 		t.Fatalf("facade cancellation count = %d, want busy peer and ambiguous reconnect", service.cancelCount())
+	}
+}
+
+func TestFirstTrustFacadePropagatesInitialPairingRegistrationFailure(t *testing.T) {
+	fixture := newMSP04BFixture(t, "commit_durable")
+	wantErr := errors.New("registration unavailable")
+	service := &msp04bServiceSpy{waitingErr: wantErr}
+	if _, err := newFirstTrustFacade(service, fixture.coordinator); !errors.Is(err, wantErr) {
+		t.Fatalf("constructor error = %v, want %v", err, wantErr)
+	}
+	assertMSP04BPairingRegistrationFault(t, fixture.coordinator)
+	if got := fixture.coordinator.reopen(context.Background()); got != "pairing_registration_failed" {
+		t.Fatalf("reopen after constructor fault = %q", got)
+	}
+	assertMSP04BPairingRegistrationFault(t, fixture.coordinator)
+}
+
+func TestFirstTrustPairingRegistrationFailuresAreFailClosed(t *testing.T) {
+	t.Run("open", func(t *testing.T) {
+		fixture := newMSP04BFixture(t, "commit_durable")
+		fixture.effects.enableErr = errors.New("announce failed")
+		if got := fixture.coordinator.openPairingWindow(context.Background(), msp04bLabel(t), time.Minute); got != "pairing_registration_failed" {
+			t.Fatalf("open outcome = %q", got)
+		}
+		if got := fixture.coordinator.state(); got != "DISABLED" {
+			t.Fatalf("state = %q, want DISABLED", got)
+		}
+		assertMSP04BPairingRegistrationFault(t, fixture.coordinator)
+	})
+
+	t.Run("close", func(t *testing.T) {
+		fixture := newMSP04BFixture(t, "commit_durable")
+		if got := fixture.coordinator.openPairingWindow(context.Background(), msp04bLabel(t), time.Minute); got != "open_empty" {
+			t.Fatalf("open outcome = %q", got)
+		}
+		fixture.effects.disableErr = errors.New("withdraw failed")
+		if got := fixture.coordinator.closePairingWindow(context.Background(), msp04bLabel(t)); got != "pairing_registration_failed" {
+			t.Fatalf("close outcome = %q", got)
+		}
+		if got := fixture.coordinator.state(); got != "DISABLED" {
+			t.Fatalf("state = %q, want DISABLED", got)
+		}
+		assertMSP04BPairingRegistrationFault(t, fixture.coordinator)
+	})
+
+	t.Run("durable confirmation close", func(t *testing.T) {
+		fixture := newMSP04BFixture(t, "commit_durable")
+		binding := openMSP04BCandidate(t, fixture, msp04bRemote(t), 43, true)
+		fixture.effects.disableErr = errors.New("withdraw after commit failed")
+		if got := confirmMSP04B(fixture.coordinator, msp04bLabel(t), binding); got != "pairing_registration_failed" {
+			t.Fatalf("confirmation outcome = %q", got)
+		}
+		assertMSP04BPairingRegistrationFault(t, fixture.coordinator)
+		if got := fixture.effects.registerCount(); got != 0 {
+			t.Fatalf("registration count = %d after withdrawal failure", got)
+		}
+	})
+}
+
+func assertMSP04BPairingRegistrationFault(t *testing.T, contract msp04bCoordinatorContract) {
+	t.Helper()
+	coordinator, ok := contract.(*firstTrustCoordinator)
+	if !ok {
+		t.Fatal("coordinator implementation changed")
+	}
+	if got := coordinator.state(); got != "DISABLED" {
+		t.Fatalf("pairing registration fault phase = %q, want DISABLED", got)
+	}
+	if got := coordinator.recoveryState(); got != "QUARANTINED" {
+		t.Fatalf("pairing registration fault recovery = %q, want QUARANTINED", got)
+	}
+	if got := coordinator.recoveryReason(); got != "PAIRING_REGISTRATION_FAILED" {
+		t.Fatalf("pairing registration fault reason = %q, want PAIRING_REGISTRATION_FAILED", got)
 	}
 }
 
@@ -463,23 +540,29 @@ func assertMSP04BCommitCount(t *testing.T, store *msp04bStoreSpy, want int) {
 }
 
 type msp04bEffectsSpy struct {
-	mu        sync.Mutex
-	waiting   bool
-	cancels   int
-	registers int
-	live      bool
-	eventLog  *msp04bEventLog
+	mu         sync.Mutex
+	waiting    bool
+	cancels    int
+	registers  int
+	live       bool
+	eventLog   *msp04bEventLog
+	enableErr  error
+	disableErr error
 }
 
 func newMSP04BEffectsSpy(events *msp04bEventLog) *msp04bEffectsSpy {
 	return &msp04bEffectsSpy{live: true, eventLog: events}
 }
 
-func (effects *msp04bEffectsSpy) setWaiting(value bool) {
+func (effects *msp04bEffectsSpy) setWaiting(value bool) error {
 	effects.mu.Lock()
 	effects.waiting = value
 	effects.mu.Unlock()
 	effects.eventLog.add("waiting:" + map[bool]string{true: "true", false: "false"}[value])
+	if value {
+		return effects.enableErr
+	}
+	return effects.disableErr
 }
 
 func (effects *msp04bEffectsSpy) cancelRemote([]byte, uint64) {
@@ -540,11 +623,12 @@ func (effects *msp04bEffectsSpy) assertOrder(t *testing.T, ordered ...string) {
 }
 
 type msp04bServiceSpy struct {
-	mu        sync.Mutex
-	cancels   int
-	registers int
-	waiting   []bool
-	auto      []bool
+	mu         sync.Mutex
+	cancels    int
+	registers  int
+	waiting    []bool
+	auto       []bool
+	waitingErr error
 }
 
 func (*msp04bServiceSpy) Setup() error                               { return nil }
@@ -571,10 +655,11 @@ func (service *msp04bServiceSpy) CancelPairingWithSKI(string) {
 	service.mu.Unlock()
 }
 
-func (service *msp04bServiceSpy) UserIsAbleToApproveOrCancelPairingRequests(value bool) {
+func (service *msp04bServiceSpy) SetPairingRegistration(value bool) error {
 	service.mu.Lock()
 	service.waiting = append(service.waiting, value)
 	service.mu.Unlock()
+	return service.waitingErr
 }
 
 func (service *msp04bServiceSpy) cancelCount() int {

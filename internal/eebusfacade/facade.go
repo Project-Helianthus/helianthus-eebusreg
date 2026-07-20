@@ -12,7 +12,7 @@ import (
 
 const (
 	EEBusGoModulePath = "github.com/Project-Helianthus/helianthus-eebus-go"
-	EEBusGoVersion    = "v0.7.1-helianthus.2"
+	EEBusGoVersion    = "v0.7.1-helianthus.3"
 	apiImportPath     = EEBusGoModulePath + "/api"
 )
 
@@ -91,11 +91,11 @@ func ExpectedControlSurface() APIShapeEvidence {
 			"RegisterRemoteSKI",
 			"SetAutoAccept",
 			"SetLogging",
+			"SetPairingRegistration",
 			"Setup",
 			"Shutdown",
 			"Start",
 			"UnregisterRemoteSKI",
-			"UserIsAbleToApproveOrCancelPairingRequests",
 		}),
 		ServiceReaderShapeBound:       serviceReaderShapeBound,
 		ConfigurationConstructorBound: configurationConstructorBound,

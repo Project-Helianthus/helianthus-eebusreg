@@ -344,27 +344,26 @@ func (coordinator *firstTrustCoordinator) runtimeStartAuthorized() bool {
 	return coordinator.recovery == "UNPAIRED_LOCKED" || coordinator.recovery == "PAIRED_TRUSTED"
 }
 
-func (coordinator *firstTrustCoordinator) registerConfiguredRemote(ski string, register func(string)) string {
-	remote, err := hex.DecodeString(ski)
-	if err != nil || len(remote) != 20 || register == nil {
-		return "registration_denied"
+func (coordinator *firstTrustCoordinator) registerConfiguredRemote(remoteConfig RuntimeRemote) (string, <-chan error) {
+	remote, err := hex.DecodeString(remoteConfig.SKI)
+	if err != nil || len(remote) != 20 {
+		return "registration_denied", nil
 	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 	if coordinator.phase != firstTrustPairingClosed || coordinator.recovery != "PAIRED_TRUSTED" || coordinator.recoveryOperation != nil || coordinator.reconciliationRequiredLocked() {
-		return "registration_denied"
+		return "registration_denied", nil
 	}
 	for _, association := range coordinator.controlView.associations {
 		if !bytes.Equal(association.subject, remote) || !firstTrustAssociationUsable(association, coordinator.controlView.control.associationLineage) || coordinator.firstTrustTombstonedLocked(association) {
 			continue
 		}
 		if _, trusted := coordinator.trustedRemotes[string(remote)]; !trusted {
-			return "registration_denied"
+			return "registration_denied", nil
 		}
-		register(ski)
-		return "registered"
+		return "registered", coordinator.outbound.enqueueTrustedLocked(remoteConfig)
 	}
-	return "registration_denied"
+	return "registration_denied", nil
 }
 
 func (coordinator *firstTrustCoordinator) phaseNameLocked() string {
