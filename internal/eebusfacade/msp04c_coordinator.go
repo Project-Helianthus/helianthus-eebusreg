@@ -640,9 +640,7 @@ func (coordinator *firstTrustCoordinator) finishRecoveryConfirmationLocked(
 	coordinator.stopTimerLocked()
 	coordinator.setWaitingLocked(false)
 	if result == "trusted" {
-		if coordinator.effects != nil && coordinator.effects.connectionAlive(remote, connection) {
-			coordinator.effects.registerRemoteSKI(remote, connection)
-		}
+		coordinator.registerRemoteLocked(remote, connection)
 	} else {
 		coordinator.cancelRemoteLocked(remote, connection)
 	}

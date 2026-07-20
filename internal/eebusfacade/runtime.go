@@ -257,17 +257,20 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if service == nil {
 		return nil, errors.Join(errors.New("runtime service factory returned nil"), closeFirstTrust())
 	}
+	closeRuntime := func(cause error) error {
+		trustErr := closeFirstTrust()
+		service.Shutdown()
+		return errors.Join(cause, trustErr)
+	}
 	if outgoingAttemptBridge != nil {
 		outgoingAttemptBridge.bindLifecycle(service)
 	}
 	if err := service.Setup(); err != nil {
-		service.Shutdown()
-		return nil, errors.Join(fmt.Errorf("setup eebus runtime service: %w", err), closeFirstTrust())
+		return nil, closeRuntime(fmt.Errorf("setup eebus runtime service: %w", err))
 	}
 	if firstTrust != nil {
 		if err := attachRuntimeFirstTrust(ctx, firstTrust, service, reader, dependencies); err != nil {
-			service.Shutdown()
-			return nil, errors.Join(err, closeFirstTrust())
+			return nil, closeRuntime(err)
 		}
 	}
 	for _, remote := range config.Remotes {
@@ -280,28 +283,23 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 			continue
 		}
 		if outbound == nil {
-			service.Shutdown()
-			return nil, errors.Join(errRuntimeOutboundEndpointFailed, closeFirstTrust())
+			return nil, closeRuntime(errRuntimeOutboundEndpointFailed)
 		}
 		if err := <-outbound; err != nil {
-			service.Shutdown()
-			return nil, errors.Join(errRuntimeOutboundEndpointFailed, closeFirstTrust())
+			return nil, closeRuntime(errRuntimeOutboundEndpointFailed)
 		}
 	}
 	backend := &serviceBackend{service: service, handler: handler, firstTrust: firstTrust}
 	if scoped, ok := service.(runtimeScopedService); ok {
 		if !backend.runtimeStartAuthorized() {
-			service.Shutdown()
-			return nil, errors.Join(errRuntimeTrustEffectsDenied, closeFirstTrust())
+			return nil, closeRuntime(errRuntimeTrustEffectsDenied)
 		}
 		if err := scoped.StartWithPolicy(); err != nil {
-			service.Shutdown()
-			return nil, errors.Join(fmt.Errorf("start scoped eebus runtime service: %w", err), closeFirstTrust())
+			return nil, closeRuntime(fmt.Errorf("start scoped eebus runtime service: %w", err))
 		}
 		terminal := scoped.ListenerTerminal()
 		if terminal == nil {
-			service.Shutdown()
-			return nil, errors.Join(errors.New("scoped eebus runtime service omitted listener terminal signal"), closeFirstTrust())
+			return nil, closeRuntime(errors.New("scoped eebus runtime service omitted listener terminal signal"))
 		}
 		backend.listenerTerminal = terminal
 		backend.serviceStarted = true
@@ -412,11 +410,11 @@ func (backend *serviceBackend) Close() error {
 		return backend.closeErr
 	}
 	backend.closed = true
-	if backend.service != nil {
-		backend.service.Shutdown()
-	}
 	if backend.firstTrust != nil {
 		backend.closeErr = backend.firstTrust.Close()
+	}
+	if backend.service != nil {
+		backend.service.Shutdown()
 	}
 	return backend.closeErr
 }

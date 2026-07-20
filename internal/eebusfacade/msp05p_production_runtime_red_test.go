@@ -187,7 +187,7 @@ func TestMSP05PServiceBackendReportsListenerTerminalAndClaimsPublisherOnce(t *te
 	}
 }
 
-func TestMSP05PServiceBackendQuiescesTransportBeforeClosingTrust(t *testing.T) {
+func TestMSP05PServiceBackendClosesTrustBeforeQuiescingTransport(t *testing.T) {
 	var mu sync.Mutex
 	events := make([]string, 0, 2)
 	record := func(event string) {
@@ -209,7 +209,7 @@ func TestMSP05PServiceBackendQuiescesTransportBeforeClosingTrust(t *testing.T) {
 	mu.Lock()
 	got := append([]string(nil), events...)
 	mu.Unlock()
-	if want := []string{"transport-shutdown", "trust-close"}; !slices.Equal(got, want) {
+	if want := []string{"trust-close", "transport-shutdown"}; !slices.Equal(got, want) {
 		t.Fatalf("shutdown order = %v, want %v", got, want)
 	}
 }
