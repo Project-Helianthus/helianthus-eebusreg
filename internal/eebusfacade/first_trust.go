@@ -41,6 +41,50 @@ type firstTrustEffects interface {
 	registerRemoteSKI([]byte, uint64)
 }
 
+type firstTrustEffectKind uint8
+
+const (
+	firstTrustEffectCancel firstTrustEffectKind = iota
+	firstTrustEffectRegister
+)
+
+type firstTrustEffect struct {
+	kind       firstTrustEffectKind
+	target     firstTrustEffects
+	remote     []byte
+	connection uint64
+}
+
+type firstTrustCoordinatorMutex struct {
+	sync.Mutex
+	coordinator *firstTrustCoordinator
+}
+
+func (mutex *firstTrustCoordinatorMutex) Unlock() {
+	coordinator := mutex.coordinator
+	if coordinator == nil {
+		mutex.Mutex.Unlock()
+		return
+	}
+
+	effects := coordinator.pendingEffects
+	coordinator.pendingEffects = nil
+	startDrain := false
+	if len(effects) != 0 {
+		coordinator.effectMu.Lock()
+		coordinator.effectQueue = append(coordinator.effectQueue, effects...)
+		if !coordinator.effectDraining {
+			coordinator.effectDraining = true
+			startDrain = true
+		}
+		coordinator.effectMu.Unlock()
+	}
+	mutex.Mutex.Unlock()
+	if startDrain {
+		coordinator.drainEffects()
+	}
+}
+
 type firstTrustWithdrawalEffects interface {
 	disconnectRemote([]byte) (<-chan struct{}, bool)
 	cancelDisconnect([]byte, <-chan struct{})
@@ -112,7 +156,12 @@ type firstTrustInflight struct {
 }
 
 type firstTrustCoordinator struct {
-	mu sync.Mutex
+	mu firstTrustCoordinatorMutex
+
+	pendingEffects []firstTrustEffect
+	effectMu       sync.Mutex
+	effectQueue    []firstTrustEffect
+	effectDraining bool
 
 	now            func() time.Time
 	random         io.Reader
@@ -171,7 +220,7 @@ func newFirstTrustCoordinator(now func() time.Time, random io.Reader, store firs
 	if random == nil {
 		random = rand.Reader
 	}
-	return &firstTrustCoordinator{
+	coordinator := &firstTrustCoordinator{
 		now:                     now,
 		random:                  random,
 		store:                   store,
@@ -184,6 +233,8 @@ func newFirstTrustCoordinator(now func() time.Time, random io.Reader, store firs
 		retired:                 make(map[string]firstTrustRetired),
 		outgoingAttemptContexts: make(map[[32]byte]firstTrustOutgoingAttemptRuntime),
 	}
+	coordinator.mu.coordinator = coordinator
+	return coordinator
 }
 
 func (coordinator *firstTrustCoordinator) reopen(ctx context.Context) string {
@@ -758,6 +809,7 @@ func (coordinator *firstTrustCoordinator) shutdown() error {
 	coordinator.retryInflight = nil
 	coordinator.cancelAllOutgoingAttemptContextsLocked()
 	outbound := coordinator.outbound.enqueueCloseLocked()
+	coordinator.effects = nil
 	coordinator.unlockAndNotifyTrustAdminProjectionChange(before)
 	var outboundErr error
 	if outbound != nil {
@@ -815,9 +867,7 @@ func (coordinator *firstTrustCoordinator) finishCommit(token uint64, inflight *f
 	}
 	coordinator.recordReplayLocked(inflight.key, inflight.request, result, now)
 	if result == "trusted" {
-		if coordinator.effects != nil && coordinator.effects.connectionAlive(remote, connection) {
-			coordinator.effects.registerRemoteSKI(remote, connection)
-		}
+		coordinator.registerRemoteLocked(remote, connection)
 	} else {
 		coordinator.cancelRemoteLocked(remote, connection)
 	}
@@ -1165,7 +1215,47 @@ func (coordinator *firstTrustCoordinator) outboundEndpointFailed() {
 
 func (coordinator *firstTrustCoordinator) cancelRemoteLocked(remote []byte, connection uint64) {
 	if coordinator.effects != nil {
-		coordinator.effects.cancelRemote(bytes.Clone(remote), connection)
+		coordinator.pendingEffects = append(coordinator.pendingEffects, firstTrustEffect{
+			kind:       firstTrustEffectCancel,
+			target:     coordinator.effects,
+			remote:     bytes.Clone(remote),
+			connection: connection,
+		})
+	}
+}
+
+func (coordinator *firstTrustCoordinator) registerRemoteLocked(remote []byte, connection uint64) {
+	if coordinator.effects != nil {
+		coordinator.pendingEffects = append(coordinator.pendingEffects, firstTrustEffect{
+			kind:       firstTrustEffectRegister,
+			target:     coordinator.effects,
+			remote:     bytes.Clone(remote),
+			connection: connection,
+		})
+	}
+}
+
+func (coordinator *firstTrustCoordinator) drainEffects() {
+	for {
+		coordinator.effectMu.Lock()
+		if len(coordinator.effectQueue) == 0 {
+			coordinator.effectDraining = false
+			coordinator.effectMu.Unlock()
+			return
+		}
+		effect := coordinator.effectQueue[0]
+		coordinator.effectQueue[0] = firstTrustEffect{}
+		coordinator.effectQueue = coordinator.effectQueue[1:]
+		coordinator.effectMu.Unlock()
+
+		switch effect.kind {
+		case firstTrustEffectCancel:
+			effect.target.cancelRemote(effect.remote, effect.connection)
+		case firstTrustEffectRegister:
+			if effect.target.connectionAlive(effect.remote, effect.connection) {
+				effect.target.registerRemoteSKI(effect.remote, effect.connection)
+			}
+		}
 	}
 }
 

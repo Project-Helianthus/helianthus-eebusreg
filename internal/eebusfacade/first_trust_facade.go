@@ -398,10 +398,11 @@ func (facade *firstTrustFacade) registerRemoteSKI(remote []byte, generation uint
 		return
 	}
 	connection.registered = true
-	if facade.service != nil {
-		facade.service.RegisterRemoteSKI(normalized)
-	}
+	service := facade.service
 	facade.mu.Unlock()
+	if service != nil {
+		service.RegisterRemoteSKI(normalized)
+	}
 }
 
 func (facade *firstTrustFacade) disconnectRemote(remote []byte) (acknowledged <-chan struct{}, started bool) {
