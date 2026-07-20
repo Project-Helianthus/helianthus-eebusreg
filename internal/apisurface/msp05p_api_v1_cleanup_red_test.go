@@ -18,7 +18,7 @@ func TestMSP05PInitialV1ReplacesEveryUnreleasedV2Export(t *testing.T) {
 		"New":                 "func New(Config) (Runtime, error)",
 		"PairingPolicy":       "type PairingPolicy string",
 		"PairingPolicyClosed": `const PairingPolicyClosed PairingPolicy = "closed"`,
-		"Remote":              "type Remote struct{ SKI string; Endpoint netip.AddrPort; SHIPPath string }",
+		"Remote":              "type Remote struct{ SKI string; Endpoint netip.AddrPort; EndpointPath string }",
 	}
 	forbidden := map[string]struct{}{
 		"ConfigV2":              {},

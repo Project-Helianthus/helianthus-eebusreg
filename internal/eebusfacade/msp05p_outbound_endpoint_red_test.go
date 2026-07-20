@@ -3,13 +3,16 @@ package eebusfacade
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/netip"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 )
 
 var msp05pOutboundEndpoint = netip.MustParseAddrPort("192.0.2.201:54981")
@@ -179,6 +182,156 @@ func TestMSP05PConfiguredEndpointNeverReachesSnapshotOrRawEvidence(t *testing.T)
 			t.Fatalf("runtime snapshot/raw evidence leaks %s", label)
 		}
 	}
+}
+
+func TestMSP05POutboundFailuresQuarantineWithoutEndpointDisclosure(t *testing.T) {
+	tests := []struct {
+		name             string
+		mutate           func(*msp045ProductSetup)
+		wantCancellation bool
+	}{
+		{
+			name: "capability absent",
+			mutate: func(setup *msp045ProductSetup) {
+				setup.withoutOutbound = true
+			},
+		},
+		{
+			name: "queue failure",
+			mutate: func(setup *msp045ProductSetup) {
+				setup.configureService = func(service *msp045Service) {
+					service.queueErr = errors.New("synthetic queue failure")
+				}
+			},
+		},
+		{
+			name: "report failure",
+			mutate: func(setup *msp045ProductSetup) {
+				setup.configureService = func(service *msp045Service) {
+					service.reportErr = errors.New("synthetic report failure")
+				}
+			},
+			wantCancellation: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pretrusted := false
+			harness := newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
+				setup.view.associations = nil
+				setup.remotePretrusted = &pretrusted
+				setup.configureRemote = configureMSP05POutboundEndpoint
+				test.mutate(setup)
+			})
+
+			outcome := harness.resources.coordinator.openPairingWindow(
+				context.Background(), msp045RunToken(t, "outbound-failure"), time.Minute,
+			)
+			if outcome != "outbound_endpoint_failed" {
+				t.Fatalf("open pairing window = %q", outcome)
+			}
+			state := snapshotMSP05POutboundState(harness.service)
+			if harness.resources.coordinator.recoveryState() != "QUARANTINED" {
+				t.Fatalf("recovery = %q", harness.resources.coordinator.recoveryState())
+			}
+			if len(state.pairingRegistration) == 0 || state.pairingRegistration[len(state.pairingRegistration)-1] {
+				t.Fatal("outbound failure left pairing registration open")
+			}
+			if (len(state.cancelled) == 1) != test.wantCancellation {
+				t.Fatalf("cancellations = %v", state.cancelled)
+			}
+			for _, secret := range []string{
+				msp05pOutboundEndpoint.Addr().String(), strconv.Itoa(int(msp05pOutboundEndpoint.Port())), msp05pOutboundPath,
+			} {
+				if bytes.Contains([]byte(outcome), []byte(secret)) || strings.Contains(harness.resources.coordinator.recoveryReason(), secret) {
+					t.Fatal("outbound failure disclosed configured endpoint")
+				}
+			}
+		})
+	}
+}
+
+func TestMSP05POutboundOpenCloseOrderingSuppressesStaleReport(t *testing.T) {
+	queueStarted := make(chan struct{})
+	queueRelease := make(chan struct{})
+	pretrusted := false
+	harness := newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
+		setup.view.associations = nil
+		setup.remotePretrusted = &pretrusted
+		setup.configureRemote = configureMSP05POutboundEndpoint
+		setup.configureService = func(service *msp045Service) {
+			service.queueStarted = queueStarted
+			service.queueRelease = queueRelease
+		}
+	})
+
+	openResult := make(chan string, 1)
+	go func() {
+		openResult <- harness.resources.coordinator.openPairingWindow(
+			context.Background(), msp045RunToken(t, "ordered-open"), time.Minute,
+		)
+	}()
+	select {
+	case <-queueStarted:
+	case <-time.After(time.Second):
+		t.Fatal("outbound queue did not start")
+	}
+	if got := harness.resources.coordinator.closePairingWindow(context.Background(), msp045RunToken(t, "ordered-close")); got != "pairing_closed" {
+		t.Fatalf("close pairing window = %q", got)
+	}
+	close(queueRelease)
+	if got := <-openResult; got != "open_empty" {
+		t.Fatalf("open pairing window = %q", got)
+	}
+	state := waitMSP05POutboundState(t, harness.service, func(state msp05pOutboundState) bool {
+		return len(state.cancelled) == 1 && len(state.queued) == 0
+	}, "ordered stale cleanup")
+	if len(state.reported) != 0 || state.cancelled[0] != harness.remoteSKI {
+		t.Fatalf("stale outbound state = queued %v reported %v cancelled %v", state.queued, state.reported, state.cancelled)
+	}
+}
+
+func TestMSP05POutboundShutdownCancelsEphemeralRemote(t *testing.T) {
+	harness := newMSP05POutboundHarness(t, true, false)
+	if got := harness.resources.coordinator.openPairingWindow(context.Background(), msp045RunToken(t, "shutdown-open"), time.Minute); got != "open_empty" {
+		t.Fatalf("open pairing window = %q", got)
+	}
+	waitMSP05POutboundState(t, harness.service, func(state msp05pOutboundState) bool {
+		return len(state.queued) == 1 && len(state.reported) == 1
+	}, "shutdown admission")
+	if err := harness.backend.Close(); err != nil {
+		t.Fatalf("runtime shutdown = %v", err)
+	}
+	state := snapshotMSP05POutboundState(harness.service)
+	if len(state.queued) != 0 || len(state.cancelled) != 1 || state.cancelled[0] != harness.remoteSKI {
+		t.Fatalf("shutdown outbound state = queued %v cancelled %v", state.queued, state.cancelled)
+	}
+}
+
+type msp05pServiceWithoutOutbound struct {
+	service *msp045Service
+}
+
+func (service *msp05pServiceWithoutOutbound) Setup() error { return service.service.Setup() }
+func (service *msp05pServiceWithoutOutbound) Start()       { service.service.Start() }
+func (service *msp05pServiceWithoutOutbound) Shutdown()    { service.service.Shutdown() }
+func (service *msp05pServiceWithoutOutbound) RegisterRemoteSKI(ski string) {
+	service.service.RegisterRemoteSKI(ski)
+}
+func (service *msp05pServiceWithoutOutbound) LocalService() *shipapi.ServiceDetails {
+	return service.service.LocalService()
+}
+func (service *msp05pServiceWithoutOutbound) LocalDevice() spineapi.DeviceLocalInterface {
+	return service.service.LocalDevice()
+}
+func (service *msp05pServiceWithoutOutbound) SetAutoAccept(value bool) {
+	service.service.SetAutoAccept(value)
+}
+func (service *msp05pServiceWithoutOutbound) CancelPairingWithSKI(ski string) {
+	service.service.CancelPairingWithSKI(ski)
+}
+func (service *msp05pServiceWithoutOutbound) SetPairingRegistration(value bool) error {
+	return service.service.SetPairingRegistration(value)
 }
 
 func newMSP05POutboundHarness(t *testing.T, endpoint, discovery bool) *msp045RuntimeHarness {

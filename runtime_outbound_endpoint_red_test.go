@@ -14,7 +14,7 @@ func TestRuntimeRemoteEndpointV1UsesLiteralStdlibTypes(t *testing.T) {
 	want := []fieldContract{
 		{name: "SKI", typ: reflect.TypeOf("")},
 		{name: "Endpoint", typ: reflect.TypeOf(netip.AddrPort{})},
-		{name: "SHIPPath", typ: reflect.TypeOf("")},
+		{name: "EndpointPath", typ: reflect.TypeOf("")},
 	}
 
 	typ := reflect.TypeOf(Remote{})
@@ -97,7 +97,7 @@ func TestRuntimeRemoteEndpointV1Validation(t *testing.T) {
 func setRuntimeRemoteEndpointForTest(remote *Remote, endpoint netip.AddrPort, path string) bool {
 	value := reflect.ValueOf(remote).Elem()
 	endpointField := value.FieldByName("Endpoint")
-	pathField := value.FieldByName("SHIPPath")
+	pathField := value.FieldByName("EndpointPath")
 	if !endpointField.IsValid() || endpointField.Type() != reflect.TypeOf(netip.AddrPort{}) ||
 		!pathField.IsValid() || pathField.Kind() != reflect.String {
 		return false

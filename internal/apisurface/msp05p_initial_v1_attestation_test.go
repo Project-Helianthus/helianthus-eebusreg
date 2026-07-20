@@ -109,6 +109,10 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 			symbol.Type = "struct{ Enabled bool; StateRoot string; Interface string; ListenPort int; Remotes []Remote }"
 			symbol.Signature = "type Config struct{ Enabled bool; StateRoot string; Interface string; ListenPort int; Remotes []Remote }"
 		}
+		if symbol.Name == "Remote" {
+			symbol.Type = "struct{ SKI string }"
+			symbol.Signature = "type Remote struct{ SKI string }"
+		}
 		symbols = append(symbols, symbol)
 	}
 	root.Symbols = symbols

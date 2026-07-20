@@ -867,6 +867,8 @@ type msp045ProductSetup struct {
 	remoteSKI             string
 	remotePretrusted      *bool
 	configureRemote       func(*RuntimeRemote)
+	configureService      func(*msp045Service)
+	withoutOutbound       bool
 	discoveryEnabled      bool
 }
 
@@ -935,6 +937,7 @@ func newMSP045ProductHarness(t *testing.T, mutate func(*msp045ProductSetup)) *ms
 		stateRoot: filepath.Join(root, "state"), adminRoot: filepath.Join(root, "admin"),
 		remote: setup.remote, bridge: bridge, anchor: anchor, identityProvider: anchor,
 		remotePretrusted: setup.remotePretrusted, configureRemote: setup.configureRemote,
+		configureService: setup.configureService, withoutOutbound: setup.withoutOutbound,
 		discoveryEnabled: setup.discoveryEnabled,
 	})
 }
@@ -951,6 +954,8 @@ type msp045AcquireOptions struct {
 	keyProviders     []eebusstore.KeyProviderBinding
 	remotePretrusted *bool
 	configureRemote  func(*RuntimeRemote)
+	configureService func(*msp045Service)
+	withoutOutbound  bool
 	discoveryEnabled bool
 }
 
@@ -989,9 +994,16 @@ func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045Run
 			},
 		}, nil
 	}
+	if options.configureService != nil {
+		options.configureService(service)
+	}
+	var runtime runtimeService = service
+	if options.withoutOutbound {
+		runtime = &msp05pServiceWithoutOutbound{service: service}
+	}
 	dependencies.newService = func(_ RuntimeConfig, _ runtimeMaterial, callback eebusapi.ServiceReaderInterface) (runtimeService, error) {
 		reader = callback.(*runtimeServiceReader)
-		return service, nil
+		return runtime, nil
 	}
 	if options.bridge != nil {
 		dependencies.openAssociationBridge = func(string, []eebusstore.KeyProviderBinding) (runtimeAssociationBridge, string) {
@@ -1220,6 +1232,11 @@ type msp045Service struct {
 	endpointOperationLocked bool
 	coordinatorLockIsHeld   func() bool
 	events                  []string
+	queueErr                error
+	reportErr               error
+	queueStarted            chan struct{}
+	queueRelease            <-chan struct{}
+	queueStartOnce          sync.Once
 }
 
 type msp045EndpointReport struct {
@@ -1261,6 +1278,20 @@ func (service *msp045Service) RegisterRemoteSKI(ski string) {
 func (service *msp045Service) QueueRemoteSKI(ski string) error {
 	service.recordEndpointLockState()
 	service.mu.Lock()
+	err := service.queueErr
+	started := service.queueStarted
+	release := service.queueRelease
+	service.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if started != nil {
+		service.queueStartOnce.Do(func() { close(started) })
+	}
+	if release != nil {
+		<-release
+	}
+	service.mu.Lock()
 	service.queued = append(service.queued, ski)
 	service.events = append(service.events, "queue")
 	service.mu.Unlock()
@@ -1270,9 +1301,12 @@ func (service *msp045Service) QueueRemoteSKI(ski string) error {
 func (service *msp045Service) ReportRemoteEndpoint(ski string, endpoint shipapi.RemoteEndpoint) error {
 	service.recordEndpointLockState()
 	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.reportErr != nil {
+		return service.reportErr
+	}
 	service.reported = append(service.reported, msp045EndpointReport{ski: ski, endpoint: endpoint})
 	service.events = append(service.events, "report")
-	service.mu.Unlock()
 	return nil
 }
 
