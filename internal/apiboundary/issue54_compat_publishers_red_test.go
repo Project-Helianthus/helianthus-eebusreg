@@ -22,10 +22,31 @@ func TestIssue54ProductionHasNoCompatibilityPublisherOrOutboundFabricator(t *tes
 		[]byte("startLAN" + "SHIPPublisher"),
 		[]byte("lan" + "SHIPPublisher"),
 		[]byte("newLAN" + "SHIPMDNSProvider"),
+		[]byte("Raw" + "Probe"),
 		[]byte("QueueRemote" + "SKI("),
 		[]byte("ReportRemote" + "Endpoint("),
+		[]byte("current" + "MigrationGraph"),
+		[]byte("migration" + "Graph"),
+		[]byte("opened_" + "migrated"),
+		[]byte("migrate" + "MSP04"),
 	}
-	bannedNames := []string{"compatmdns", "compat_mdns", "compat-mdns", "lanshippublisher"}
+	bannedFacade := [][]byte{
+		[]byte("Outgoing" + "Attempt"),
+		[]byte("outgoing" + "Attempt"),
+		[]byte("pre" + "dial"),
+		[]byte("pre" + "Dial"),
+	}
+	bannedNames := []string{
+		"compatmdns",
+		"compat_mdns",
+		"compat-mdns",
+		"lanshippublisher",
+		"raw" + "probe",
+		"runtime_" + "outgoing_attempt",
+		"msp04cr2_" + "predial",
+		"migration.go",
+		"control_v2.go",
+	}
 	pythonPublisherIndicators := [][]byte{
 		[]byte("_ship._tcp"),
 		[]byte("zeroconf"),
@@ -57,6 +78,18 @@ func TestIssue54ProductionHasNoCompatibilityPublisherOrOutboundFabricator(t *tes
 					return relErr
 				}
 				findings = append(findings, relative+":"+string(token))
+			}
+		}
+		relative, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		if strings.HasPrefix(relative, filepath.Join("internal", "eebusfacade")+string(filepath.Separator)) ||
+			strings.HasPrefix(relative, filepath.Join("internal", "eebusservicebridge")+string(filepath.Separator)) {
+			for _, token := range bannedFacade {
+				if bytes.Contains(payload, token) {
+					findings = append(findings, relative+":"+string(token))
+				}
 			}
 		}
 		lowerName := strings.ToLower(entry.Name())
@@ -95,6 +128,44 @@ func TestIssue54ProductionHasNoCompatibilityPublisherOrOutboundFabricator(t *tes
 	}
 	if len(findings) != 0 {
 		t.Fatalf("obsolete compatibility/outbound publisher paths remain: %v", findings)
+	}
+}
+
+func TestIssue54ProductionComposesExactlyOneCanonicalPublisher(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalConstructor := []byte("eebusservicebridge.NewServiceWith" + "Options")
+	directPublisher := []byte("shipmdns.New" + "MDNS")
+	canonicalCount := 0
+	directCount := 0
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !issue55ProductionSource(entry.Name()) {
+			return nil
+		}
+		payload, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		canonicalCount += bytes.Count(payload, canonicalConstructor)
+		directCount += bytes.Count(payload, directPublisher)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directCount != 0 || canonicalCount != 1 {
+		t.Fatalf("publisher composition direct=%d canonical=%d, want 0/1", directCount, canonicalCount)
 	}
 }
 
