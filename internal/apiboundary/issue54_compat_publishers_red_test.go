@@ -7,7 +7,9 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -136,10 +138,7 @@ func TestIssue54ProductionComposesExactlyOneCanonicalPublisher(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonicalConstructor := []byte("eebusservicebridge.NewServiceWith" + "Options")
-	directPublisher := []byte("shipmdns.New" + "MDNS")
-	canonicalCount := 0
-	directCount := 0
+	result := issue55PublisherScan{}
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -150,23 +149,166 @@ func TestIssue54ProductionComposesExactlyOneCanonicalPublisher(t *testing.T) {
 			}
 			return nil
 		}
-		if !issue55ProductionSource(entry.Name()) {
+		if filepath.Ext(entry.Name()) != ".go" || !issue55ProductionSource(entry.Name()) {
 			return nil
 		}
 		payload, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return readErr
 		}
-		canonicalCount += bytes.Count(payload, canonicalConstructor)
-		directCount += bytes.Count(payload, directPublisher)
-		return nil
+		return inspectIssue55PublisherSource(root, path, payload, &result)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if directCount != 0 || canonicalCount != 1 {
-		t.Fatalf("publisher composition direct=%d canonical=%d, want 0/1", directCount, canonicalCount)
+	if len(result.findings) != 0 || result.upstreamCanonical != 1 || result.runtimeCanonical != 1 {
+		t.Fatalf("publisher composition findings=%v upstream_canonical=%d runtime_canonical=%d, want []/1/1", result.findings, result.upstreamCanonical, result.runtimeCanonical)
 	}
+}
+
+func TestIssue55PublisherGuardRejectsAliasedAndRenamedConstructors(t *testing.T) {
+	mutations := []struct {
+		name   string
+		path   string
+		source string
+		want   string
+	}{
+		{
+			name: "aliased upstream constructor",
+			path: filepath.Join("internal", "mutation", "main.go"),
+			source: `package main
+
+import factory "github.com/Project-Helianthus/helianthus-eebus-go/service"
+
+func main() { factory.ConstructPeer() }
+`,
+			want: "calls-upstream-service.ConstructPeer",
+		},
+		{
+			name: "renamed fake peer dispatch",
+			path: filepath.Join("internal", "mutation", "main.go"),
+			source: `package main
+
+func main() { runFakePeerSmoke(fakePeerOptions{}) }
+`,
+			want: "fake-peer-executable",
+		},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			result := issue55PublisherScan{}
+			if err := inspectIssue55PublisherSource(".", mutation.path, []byte(mutation.source), &result); err != nil {
+				t.Fatal(err)
+			}
+			if !issue55ContainsFinding(result.findings, mutation.want) {
+				t.Fatalf("findings = %v, want one containing %q", result.findings, mutation.want)
+			}
+		})
+	}
+}
+
+const (
+	issue55UpstreamServicePath = "github.com/Project-Helianthus/helianthus-eebus-go/service"
+	issue55ServiceBridgePath   = "github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusservicebridge"
+	issue55ShipMDNSPath        = "github.com/Project-Helianthus/helianthus-ship-go/mdns"
+	issue55CanonicalBridgeFile = "internal/eebusservicebridge/service.go"
+	issue55CanonicalRuntime    = "internal/eebusfacade/runtime.go"
+)
+
+type issue55PublisherScan struct {
+	findings          []string
+	upstreamCanonical int
+	runtimeCanonical  int
+}
+
+func inspectIssue55PublisherSource(root, filename string, source []byte, result *issue55PublisherScan) error {
+	parsed, err := parser.ParseFile(token.NewFileSet(), filename, source, 0)
+	if err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(root, filename)
+	if err != nil {
+		return err
+	}
+	relative = filepath.ToSlash(relative)
+	imports := make(map[string]string, len(parsed.Imports))
+	for _, spec := range parsed.Imports {
+		importPath, unquoteErr := strconv.Unquote(spec.Path.Value)
+		if unquoteErr != nil {
+			return unquoteErr
+		}
+		alias := path.Base(importPath)
+		if spec.Name != nil {
+			alias = spec.Name.Name
+		}
+		imports[alias] = importPath
+		if importPath == issue55UpstreamServicePath && relative != issue55CanonicalBridgeFile {
+			result.findings = append(result.findings, relative+":imports-upstream-service")
+		}
+		if importPath == issue55ShipMDNSPath {
+			result.findings = append(result.findings, relative+":imports-ship-mdns")
+		}
+	}
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		qualifier, ok := selector.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		switch imports[qualifier.Name] {
+		case issue55UpstreamServicePath:
+			if relative == issue55CanonicalBridgeFile && selector.Sel.Name == "NewServiceWithOptions" {
+				result.upstreamCanonical++
+			} else {
+				result.findings = append(result.findings, relative+":calls-upstream-service."+selector.Sel.Name)
+			}
+		case issue55ServiceBridgePath:
+			if relative == issue55CanonicalRuntime && selector.Sel.Name == "NewServiceWithOptions" {
+				result.runtimeCanonical++
+			} else {
+				result.findings = append(result.findings, relative+":calls-service-bridge."+selector.Sel.Name)
+			}
+		case issue55ShipMDNSPath:
+			result.findings = append(result.findings, relative+":calls-ship-mdns."+selector.Sel.Name)
+		}
+		return true
+	})
+	if parsed.Name.Name == "main" {
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.Ident:
+				normalized := strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(typed.Name))
+				if strings.Contains(normalized, "fakepeer") {
+					result.findings = append(result.findings, relative+":fake-peer-executable-ident:"+typed.Name)
+				}
+			case *ast.BasicLit:
+				if typed.Kind == token.STRING {
+					value, unquoteErr := strconv.Unquote(typed.Value)
+					if unquoteErr == nil && strings.Contains(strings.ToLower(value), "fake-peer") {
+						result.findings = append(result.findings, relative+":fake-peer-executable-literal")
+					}
+				}
+			}
+			return true
+		})
+	}
+	return nil
+}
+
+func issue55ContainsFinding(findings []string, want string) bool {
+	for _, finding := range findings {
+		if strings.Contains(finding, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestIssue55RuntimeRemoteTypesContainPolicyOnly(t *testing.T) {
