@@ -49,6 +49,7 @@ type firstTrustPairingRegistrationSink interface {
 
 type firstTrustConnection struct {
 	generation      uint64
+	pairingEpoch    uint64
 	retryScope      [32]byte
 	shipID          string
 	attemptClass    string
@@ -66,11 +67,13 @@ type firstTrustFacade struct {
 	mu        sync.Mutex
 	attemptMu sync.Mutex
 
-	service     firstTrustService
-	coordinator firstTrustEventSink
-	next        uint64
-	connections map[string]*firstTrustConnection
-	withdrawals map[string]chan struct{}
+	service             firstTrustService
+	coordinator         firstTrustEventSink
+	next                uint64
+	pairingEpoch        uint64
+	pairingRegistration bool
+	connections         map[string]*firstTrustConnection
+	withdrawals         map[string]chan struct{}
 
 	pairingRegistrationFault bool
 }
@@ -148,7 +151,13 @@ func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterfac
 		close(acknowledgment)
 	}
 	connection := facade.connections[normalized]
-	if connection != nil && !connection.blocked {
+	if connection != nil && connection.cancelled && connection.blocked {
+		connection.connected = false
+		if !facade.pairingRegistration || connection.pairingEpoch != facade.pairingEpoch {
+			delete(facade.connections, normalized)
+		}
+		connection = nil
+	} else if connection != nil && !connection.blocked {
 		connection.active = false
 		connection.cancelled = true
 		connection.blocked = true
@@ -374,6 +383,21 @@ func (facade *firstTrustFacade) setWaiting(value bool) error {
 			return err
 		}
 	}
+	facade.mu.Lock()
+	facade.pairingRegistration = value
+	if value {
+		facade.pairingEpoch++
+		if facade.pairingEpoch == 0 {
+			facade.pairingEpoch++
+		}
+	} else {
+		for normalized, connection := range facade.connections {
+			if connection.cancelled && connection.blocked && !connection.connected {
+				delete(facade.connections, normalized)
+			}
+		}
+	}
+	facade.mu.Unlock()
 	return nil
 }
 
@@ -478,6 +502,9 @@ func (facade *firstTrustFacade) cancelGeneration(remote []byte, generation uint6
 	connection.active = false
 	connection.blocked = true
 	connection.shipID = ""
+	if !connection.connected {
+		delete(facade.connections, normalized)
+	}
 	facade.mu.Unlock()
 	facade.cancelBySKI(normalized)
 }
@@ -497,9 +524,10 @@ func (facade *firstTrustFacade) newConnectionLocked(normalized string, connected
 		facade.next++
 	}
 	connection := &firstTrustConnection{
-		generation: facade.next,
-		active:     true,
-		connected:  connected,
+		generation:   facade.next,
+		pairingEpoch: facade.pairingEpoch,
+		active:       true,
+		connected:    connected,
 	}
 	facade.connections[normalized] = connection
 	return connection
