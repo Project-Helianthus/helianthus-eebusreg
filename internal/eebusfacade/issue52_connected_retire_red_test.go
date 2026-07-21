@@ -245,6 +245,10 @@ func (service *issue52RuntimeService) connect(ski string) {
 	service.connections[ski] = true
 	service.stateMu.Unlock()
 	service.reader.RemoteSKIConnected(nil, ski)
+	service.reader.ServicePairingDetailUpdate(
+		ski,
+		shipapi.NewConnectionStateDetail(shipapi.ConnectionStateCompleted, nil),
+	)
 }
 
 func (service *issue52RuntimeService) connected(ski string) bool {

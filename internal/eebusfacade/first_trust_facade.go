@@ -502,17 +502,32 @@ func (facade *firstTrustFacade) cancelGeneration(remote []byte, generation uint6
 	connection.active = false
 	connection.blocked = true
 	connection.shipID = ""
-	if !connection.connected {
+	connected := connection.connected
+	if !connected {
 		delete(facade.connections, normalized)
 	}
 	facade.mu.Unlock()
 	facade.cancelBySKI(normalized)
+	if connected {
+		facade.disconnectCancelledBySKI(normalized)
+	}
 }
 
 func (facade *firstTrustFacade) cancelBySKI(normalized string) {
 	if facade.service != nil {
 		facade.service.CancelPairingWithSKI(normalized)
 	}
+}
+
+func (facade *firstTrustFacade) disconnectCancelledBySKI(normalized string) {
+	service, ok := facade.service.(firstTrustWithdrawalService)
+	if !ok {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+	service.DisconnectSKI(normalized, "pairing cancelled")
 }
 
 func (facade *firstTrustFacade) newConnectionLocked(normalized string, connected bool) *firstTrustConnection {
