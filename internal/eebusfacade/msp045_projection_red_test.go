@@ -48,7 +48,7 @@ func TestMSP045AdmissionInputsNeverProveDurablePairing(t *testing.T) {
 				t.Fatal(err)
 			}
 			snapshot, _ := msp045Capture(t, handler)
-			msp045AssertTrust(t, snapshot, "unpaired", false, "no-visible-services")
+			issue54AssertNoRemoteEvidence(t, snapshot)
 		})
 	}
 }
@@ -62,12 +62,12 @@ func TestMSP045PairingRequiresEveryDurableEligibilityGate(t *testing.T) {
 		wantReason   string
 		wantRecovery string
 	}{
-		{name: "all gates", wantState: "paired", wantPaired: true, wantReason: "no-visible-services", wantRecovery: "PAIRED_TRUSTED"},
-		{name: "inactive", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].active = false }, wantState: "unpaired", wantReason: "no-visible-services", wantRecovery: "UNPAIRED_LOCKED"},
-		{name: "untrusted", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].trusted = false }, wantState: "unpaired", wantReason: "no-visible-services", wantRecovery: "UNPAIRED_LOCKED"},
-		{name: "not allowlisted", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].allowlisted = false }, wantState: "unpaired", wantReason: "no-visible-services", wantRecovery: "UNPAIRED_LOCKED"},
-		{name: "not reconnectable", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].reconnectable = false }, wantState: "unpaired", wantReason: "no-visible-services", wantRecovery: "UNPAIRED_LOCKED"},
-		{name: "stale lineage", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].lineage = msp045Opaque(t) }, wantState: "unpaired", wantReason: "no-visible-services", wantRecovery: "UNPAIRED_LOCKED"},
+		{name: "all gates", wantState: "paired", wantPaired: true, wantRecovery: "PAIRED_TRUSTED"},
+		{name: "inactive", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].active = false }, wantState: "unpaired", wantRecovery: "UNPAIRED_LOCKED"},
+		{name: "untrusted", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].trusted = false }, wantState: "unpaired", wantRecovery: "UNPAIRED_LOCKED"},
+		{name: "not allowlisted", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].allowlisted = false }, wantState: "unpaired", wantRecovery: "UNPAIRED_LOCKED"},
+		{name: "not reconnectable", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].reconnectable = false }, wantState: "unpaired", wantRecovery: "UNPAIRED_LOCKED"},
+		{name: "stale lineage", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].lineage = msp045Opaque(t) }, wantState: "unpaired", wantRecovery: "UNPAIRED_LOCKED"},
 		{name: "tombstoned", mutate: func(setup *msp045ProductSetup) { msp045AddTombstone(t, setup) }, wantState: "denied", wantReason: "denied-trust", wantRecovery: "REVOKED"},
 	}
 	for _, test := range tests {
@@ -160,8 +160,8 @@ func TestMSP045ClosedDegradationPrecedence(t *testing.T) {
 			setup.storeOutcome = "key_provider_unavailable"
 			setup.view.associations = nil
 		}, wantState: "unknown", wantReason: "certificate-unavailable"},
-		{name: "paired disconnect", disconnect: true, wantState: "paired", wantPaired: true, wantReason: "remote-disconnect"},
-		{name: "unpaired liveness", mutate: func(setup *msp045ProductSetup) { setup.view.associations = nil }, wantState: "unpaired", wantReason: "no-visible-services"},
+		{name: "disconnect before connection", disconnect: true, wantState: "paired", wantPaired: true},
+		{name: "unpaired visibility", mutate: func(setup *msp045ProductSetup) { setup.view.associations = nil }, wantState: "unpaired"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -262,7 +262,7 @@ func TestMSP045DurablePairingPublishesWithoutNetworkCallback(t *testing.T) {
 	updates := msp045InstallPublisher(harness.handler)
 	pairRuntimeRemote(t, harness.resources, harness.remoteSKI, 4_501)
 	snapshot := msp045WaitForTrust(t, updates, "paired")
-	msp045AssertTrust(t, snapshot, "paired", true, "no-visible-services")
+	msp045AssertTrust(t, snapshot, "paired", true, "")
 }
 
 func TestMSP045CommitFailureProductsFailClosed(t *testing.T) {
@@ -286,7 +286,7 @@ func TestMSP045CommitFailureProductsFailClosed(t *testing.T) {
 		{name: "prepared descriptor mismatch", configure: func(harness *msp045RuntimeHarness) { msp045SetBridgeOutcome(harness, "commit_durable", true, false) }, wantState: "unknown", wantReason: "denied-trust"},
 		{name: "commit not published and anchor cleared", configure: func(harness *msp045RuntimeHarness) {
 			msp045SetBridgeOutcome(harness, "commit_not_published", false, false)
-		}, wantState: "unpaired", wantReason: "no-visible-services"},
+		}, wantState: "unpaired"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -373,20 +373,6 @@ func TestMSP045FuturePrepareOutcomeFailsClosedAcrossCallers(t *testing.T) {
 		}
 	})
 
-	t.Run("predial", func(t *testing.T) {
-		harness := newMSP045ProductHarness(t, nil)
-		setFuture(harness)
-		coordinator := harness.resources.coordinator
-		coordinator.mu.Lock()
-		epoch := coordinator.controlView.control.controlEpoch
-		target := cloneFirstTrustControlRecord(coordinator.controlView.control)
-		target.controlEpoch++
-		coordinator.mu.Unlock()
-		_, outcome := coordinator.publishOutgoingAttemptControl(context.Background(), epoch, target, msp045Opaque(t), "attempt_prepare")
-		if outcome != "unknown" || coordinator.recoveryState() != "QUARANTINED" || coordinator.recoveryReason() != "DURABILITY_UNKNOWN" {
-			t.Fatalf("predial = %q %s/%s, want unknown QUARANTINED/DURABILITY_UNKNOWN", outcome, coordinator.recoveryState(), coordinator.recoveryReason())
-		}
-	})
 }
 
 func TestMSP045RepairAndRevocationPublishWithoutNetworkCallback(t *testing.T) {
@@ -399,7 +385,7 @@ func TestMSP045RepairAndRevocationPublishWithoutNetworkCallback(t *testing.T) {
 			t.Fatalf("repair = %q", got)
 		}
 		snapshot := msp045WaitForTrust(t, updates, "unpaired")
-		msp045AssertTrust(t, snapshot, "unpaired", false, "no-visible-services")
+		msp045AssertTrust(t, snapshot, "unpaired", false, "")
 	})
 
 	t.Run("revocation", func(t *testing.T) {
@@ -414,7 +400,7 @@ func TestMSP045RepairAndRevocationPublishWithoutNetworkCallback(t *testing.T) {
 	})
 }
 
-func TestMSP045StartupPublishesAuthoritativeProjectionWithoutNetworkCallback(t *testing.T) {
+func TestMSP045VisibleCallbackPublishesAuthoritativeProjection(t *testing.T) {
 	tests := []struct {
 		name       string
 		mutate     func(*msp045ProductSetup)
@@ -422,10 +408,10 @@ func TestMSP045StartupPublishesAuthoritativeProjectionWithoutNetworkCallback(t *
 		wantPaired bool
 		wantReason string
 	}{
-		{name: "durably trusted", wantState: "paired", wantPaired: true, wantReason: "no-visible-services"},
+		{name: "durably trusted", wantState: "paired", wantPaired: true},
 		{name: "not yet trusted", mutate: func(setup *msp045ProductSetup) {
 			setup.view.associations = nil
-		}, wantState: "unpaired", wantReason: "no-visible-services"},
+		}, wantState: "unpaired"},
 		{name: "terminal denial", mutate: func(setup *msp045ProductSetup) {
 			msp045AddTombstone(t, setup)
 		}, wantState: "denied", wantReason: "denied-trust"},
@@ -460,9 +446,6 @@ func TestMSP045UnknownAndImpossibleProductsAreDeterministic(t *testing.T) {
 		{name: "unknown quarantine", mutate: func(coordinator *firstTrustCoordinator) {
 			coordinator.recovery = "QUARANTINED"
 			coordinator.controlView.control.quarantines = []firstTrustQuarantineRecord{{scope: msp045Opaque(t), state: "FUTURE_QUARANTINE"}}
-		}},
-		{name: "unknown attempt", mutate: func(coordinator *firstTrustCoordinator) {
-			coordinator.controlView.control.attempts = []firstTrustOutgoingAttemptRecord{{state: "FUTURE_ATTEMPT", attemptID: msp045Opaque(t)}}
 		}},
 		{name: "reopen in progress", mutate: func(coordinator *firstTrustCoordinator) { coordinator.reopening = true }},
 		{name: "repair in progress", mutate: func(coordinator *firstTrustCoordinator) {
@@ -511,6 +494,11 @@ func TestMSP045ProjectionOrderAndHashAreDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	visible := make([]shipapi.RemoteService, 0, len(remotes))
+	for _, remote := range remotes {
+		visible = append(visible, shipapi.RemoteService{Ski: remote.SKI})
+	}
+	handler.VisibleRemoteServicesUpdated(nil, visible)
 	graph := handler.reducer.Snapshot()
 	if len(graph) != len(wantOrder) {
 		t.Fatalf("graph cardinality = %d, want %d", len(graph), len(wantOrder))
@@ -540,19 +528,12 @@ func TestMSP045ProjectionOrderAndHashAreDeterministic(t *testing.T) {
 		}
 	}
 	snapshot := decodeRuntimePayload(t, wantPayload)
-	if len(snapshot.Pairing) != len(wantOrder) || len(snapshot.Services) != len(wantOrder) {
-		t.Fatalf("projection cardinality = pairing:%d services:%d, want %d each", len(snapshot.Pairing), len(snapshot.Services), len(wantOrder))
+	if len(snapshot.Pairing) != 0 || len(snapshot.Services) != len(wantOrder) || len(snapshot.Sessions) != 0 {
+		t.Fatalf("observed projection cardinality = pairing:%d services:%d sessions:%d, want 0/%d/0", len(snapshot.Pairing), len(snapshot.Services), len(snapshot.Sessions), len(wantOrder))
 	}
-	for index, remote := range wantOrder {
-		redacted, redactErr := eebusraw.RedactID(eebusraw.IDKindRemoteSKI, remote)
-		if redactErr != nil {
-			t.Fatal(redactErr)
-		}
-		if snapshot.Pairing[index].Remote != redacted {
-			t.Fatalf("pairing order[%d] = %+v, want %+v", index, snapshot.Pairing[index].Remote, redacted)
-		}
-		if snapshot.Pairing[index].State != "unpaired" || snapshot.Services[index].Paired {
-			t.Fatalf("admission-derived row[%d] = pairing:%q paired:%t, want unpaired/false", index, snapshot.Pairing[index].State, snapshot.Services[index].Paired)
+	for index := range wantOrder {
+		if !snapshot.Services[index].Visible || snapshot.Services[index].Paired {
+			t.Fatalf("visible observation row[%d] = visible:%t paired:%t", index, snapshot.Services[index].Visible, snapshot.Services[index].Paired)
 		}
 	}
 }
@@ -733,9 +714,7 @@ func TestMSP045ProjectionPrivacyCanariesStayOutOfObservationChannels(t *testing.
 	candidateSKI := msp045RandomSKI(t)
 	harness.reader.ServicePairingDetailUpdate(candidateSKI, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateReceivedPairingRequest, nil))
 	privateKey := msp045RunToken(t, "idem"+"potency")
-	privateEndpoint := msp045RunToken(t, "endpoint") + ".invalid"
-	privatePath := "/" + msp045RunToken(t, "admin") + "/" + msp045RunToken(t, "operation")
-	privateOperation := msp045Opaque(t)
+	privateInterface := msp045RunToken(t, "interface") + ".invalid"
 	harness.resources.coordinator.mu.Lock()
 	candidate := harness.resources.coordinator.currentCandidate
 	candidate.shipID = msp045RunToken(t, "candidate-service")
@@ -744,10 +723,6 @@ func TestMSP045ProjectionPrivacyCanariesStayOutOfObservationChannels(t *testing.
 		fingerprint: msp045RunToken(t, "candidate-proof"),
 		nonce:       msp045RunToken(t, "candidate-challenge"),
 	}
-	harness.resources.coordinator.controlView.control.attempts = []firstTrustOutgoingAttemptRecord{{
-		state: "RESERVED", attemptID: privateOperation, remoteSKI: append([]byte(nil), candidate.remote...),
-		endpoint: firstTrustOutgoingAttemptEndpoint{host: privateEndpoint, port: 9}, path: privatePath,
-	}}
 	privateValues := []string{
 		candidateSKI,
 		candidate.shipID,
@@ -755,15 +730,13 @@ func TestMSP045ProjectionPrivacyCanariesStayOutOfObservationChannels(t *testing.
 		privateKey,
 		candidate.requests[privateKey].fingerprint,
 		candidate.requests[privateKey].nonce,
-		privateEndpoint,
-		privatePath,
-		hex.EncodeToString(privateOperation[:]),
+		privateInterface,
 		harness.resources.adminDir,
 	}
 	harness.resources.coordinator.mu.Unlock()
 
 	_, snapshotPayload := msp045Capture(t, harness.handler)
-	_, diagnosticErr := newEEBusService(RuntimeConfig{Interface: privateEndpoint}, runtimeMaterial{}, nil)
+	_, diagnosticErr := newEEBusService(RuntimeConfig{Interface: privateInterface}, runtimeMaterial{}, nil)
 	channels := map[string][]byte{
 		"snapshot": snapshotPayload,
 		"error":    []byte(diagnosticErr.Error()),
@@ -839,7 +812,7 @@ func TestMSP045ScopedListenerLifecycleIsAvailableThroughTheInternalFacade(t *tes
 	service, err := newEEBusService(RuntimeConfig{
 		Interface: "fixture-interface", ListenPort: 4711,
 		ListenAddress: netip.MustParseAddrPort("127.0.0.1:4711"),
-	}, runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate)}, nil)
+	}, runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate), nodeToken: runtimeTestNodeToken}, nil)
 	if err != nil {
 		t.Fatalf("construct scoped listener service: %v", err)
 	}
@@ -866,11 +839,10 @@ type msp045ProductSetup struct {
 	remote                []byte
 	remoteSKI             string
 	remotePretrusted      *bool
-	configureRemote       func(*RuntimeRemote)
 	configureService      func(*msp045Service)
 	wrapRuntime           func(*msp045Service, eebusapi.ServiceReaderInterface) runtimeService
-	withoutOutbound       bool
 	discoveryEnabled      bool
+	suppressVisible       bool
 }
 
 type msp045RuntimeHarness struct {
@@ -937,9 +909,10 @@ func newMSP045ProductHarness(t *testing.T, mutate func(*msp045ProductSetup)) *ms
 	return msp045AcquireHarness(t, msp045AcquireOptions{
 		stateRoot: filepath.Join(root, "state"), adminRoot: filepath.Join(root, "admin"),
 		remote: setup.remote, bridge: bridge, anchor: anchor, identityProvider: anchor,
-		remotePretrusted: setup.remotePretrusted, configureRemote: setup.configureRemote,
-		configureService: setup.configureService, withoutOutbound: setup.withoutOutbound,
-		wrapRuntime: setup.wrapRuntime, discoveryEnabled: setup.discoveryEnabled,
+		remotePretrusted: setup.remotePretrusted,
+		configureService: setup.configureService,
+		wrapRuntime:      setup.wrapRuntime, discoveryEnabled: setup.discoveryEnabled,
+		suppressVisible: setup.suppressVisible,
 	})
 }
 
@@ -954,11 +927,10 @@ type msp045AcquireOptions struct {
 	identityProvider firstTrustIdentityProvider
 	keyProviders     []eebusstore.KeyProviderBinding
 	remotePretrusted *bool
-	configureRemote  func(*RuntimeRemote)
 	configureService func(*msp045Service)
 	wrapRuntime      func(*msp045Service, eebusapi.ServiceReaderInterface) runtimeService
-	withoutOutbound  bool
 	discoveryEnabled bool
+	suppressVisible  bool
 }
 
 func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045RuntimeHarness {
@@ -989,6 +961,7 @@ func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045Run
 		return runtimeMaterial{
 			certificate: options.certificate,
 			localSKI:    options.localSKI,
+			nodeToken:   runtimeTestNodeToken,
 			pretrusted:  trusted,
 			firstTrust: &runtimeFirstTrustAuthorization{
 				adminRuntimeDir: options.adminRoot, keyProviders: options.keyProviders,
@@ -1002,9 +975,6 @@ func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045Run
 	dependencies.newService = func(_ RuntimeConfig, _ runtimeMaterial, callback eebusapi.ServiceReaderInterface) (runtimeService, error) {
 		reader = callback.(*runtimeServiceReader)
 		var runtime runtimeService = service
-		if options.withoutOutbound {
-			runtime = &msp05pServiceWithoutOutbound{service: service}
-		}
 		if options.wrapRuntime != nil {
 			runtime = options.wrapRuntime(service, callback)
 		}
@@ -1019,9 +989,6 @@ func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045Run
 		return msp045AdminEndpoint{}, nil
 	}
 	remoteConfig := RuntimeRemote{SKI: remoteSKI, Pretrusted: pretrusted, Allowlisted: true}
-	if options.configureRemote != nil {
-		options.configureRemote(&remoteConfig)
-	}
 	backendInterface, err := acquireRuntime(context.Background(), RuntimeConfig{
 		StateRoot: options.stateRoot, Interface: "synthetic-interface", ListenPort: 47_11,
 		DiscoveryEnabled: options.discoveryEnabled,
@@ -1038,6 +1005,9 @@ func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045Run
 	}
 	if bridge, ok := options.bridge.(*msp045Bridge); ok {
 		harness.bridge = bridge
+	}
+	if !options.suppressVisible {
+		reader.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{Ski: remoteSKI}})
 	}
 	t.Cleanup(func() {
 		if err := backend.Close(); err != nil {
@@ -1225,28 +1195,14 @@ func (*msp045Anchor) CreateSigningIdentity(context.Context) (firstTrustLocalIden
 }
 
 type msp045Service struct {
-	mu                      sync.Mutex
-	startOnce               sync.Once
-	started                 chan struct{}
-	shutdowns               int
-	registered              []string
-	queued                  []string
-	reported                []msp045EndpointReport
-	cancelled               []string
-	pairingRegistration     []bool
-	endpointOperationLocked bool
-	coordinatorLockIsHeld   func() bool
-	events                  []string
-	queueErr                error
-	reportErr               error
-	queueStarted            chan struct{}
-	queueRelease            <-chan struct{}
-	queueStartOnce          sync.Once
-}
-
-type msp045EndpointReport struct {
-	ski      string
-	endpoint shipapi.RemoteEndpoint
+	mu                  sync.Mutex
+	startOnce           sync.Once
+	started             chan struct{}
+	shutdowns           int
+	registered          []string
+	cancelled           []string
+	pairingRegistration []bool
+	events              []string
 }
 
 func (service *msp045Service) Setup() error {
@@ -1280,41 +1236,6 @@ func (service *msp045Service) RegisterRemoteSKI(ski string) {
 	service.mu.Unlock()
 }
 
-func (service *msp045Service) QueueRemoteSKI(ski string) error {
-	service.recordEndpointLockState()
-	service.mu.Lock()
-	err := service.queueErr
-	started := service.queueStarted
-	release := service.queueRelease
-	service.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if started != nil {
-		service.queueStartOnce.Do(func() { close(started) })
-	}
-	if release != nil {
-		<-release
-	}
-	service.mu.Lock()
-	service.queued = append(service.queued, ski)
-	service.events = append(service.events, "queue")
-	service.mu.Unlock()
-	return nil
-}
-
-func (service *msp045Service) ReportRemoteEndpoint(ski string, endpoint shipapi.RemoteEndpoint) error {
-	service.recordEndpointLockState()
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	if service.reportErr != nil {
-		return service.reportErr
-	}
-	service.reported = append(service.reported, msp045EndpointReport{ski: ski, endpoint: endpoint})
-	service.events = append(service.events, "report")
-	return nil
-}
-
 func (*msp045Service) LocalService() *shipapi.ServiceDetails      { return nil }
 func (*msp045Service) LocalDevice() spineapi.DeviceLocalInterface { return nil }
 func (*msp045Service) SetAutoAccept(bool)                         {}
@@ -1323,13 +1244,6 @@ func (service *msp045Service) CancelPairingWithSKI(ski string) {
 	service.mu.Lock()
 	service.cancelled = append(service.cancelled, ski)
 	service.events = append(service.events, "cancel")
-	retained := service.queued[:0]
-	for _, queued := range service.queued {
-		if queued != ski {
-			retained = append(retained, queued)
-		}
-	}
-	service.queued = retained
 	service.mu.Unlock()
 }
 
@@ -1343,18 +1257,6 @@ func (service *msp045Service) SetPairingRegistration(value bool) error {
 	}
 	service.mu.Unlock()
 	return nil
-}
-
-func (service *msp045Service) recordEndpointLockState() {
-	service.mu.Lock()
-	probe := service.coordinatorLockIsHeld
-	service.mu.Unlock()
-	if probe == nil || !probe() {
-		return
-	}
-	service.mu.Lock()
-	service.endpointOperationLocked = true
-	service.mu.Unlock()
 }
 
 type msp045AdminEndpoint struct{}

@@ -84,8 +84,8 @@ func TestCanonicalGenerationRejectsNonCanonicalOrMalformedBytes(t *testing.T) {
 	invalidUTF8 := bytes.Replace(empty, []byte(`"remote_identities":[]`), invalidUTF8Record, 1)
 
 	tests := map[string][]byte{
-		"duplicate key":         bytes.Replace(empty, []byte(`"schema_version":1`), []byte(`"schema_version":1,"schema_version":1`), 1),
-		"unknown top-level key": bytes.Replace(empty, []byte(`"schema_version":1`), []byte(`"schema_version":1,"unexpected":null`), 1),
+		"duplicate key":         bytes.Replace(empty, []byte(`"schema_version":3`), []byte(`"schema_version":3,"schema_version":3`), 1),
+		"unknown top-level key": bytes.Replace(empty, []byte(`"schema_version":3`), []byte(`"schema_version":3,"unexpected":null`), 1),
 		"unknown nested key":    bytes.Replace(empty, []byte(`"sequence":1`), []byte(`"sequence":1,"timestamp":0`), 1),
 		"trailing JSON":         append(bytes.Clone(empty), []byte(`{}`)...),
 		"extra newline":         append(bytes.Clone(empty), '\n'),
@@ -93,12 +93,12 @@ func TestCanonicalGenerationRejectsNonCanonicalOrMalformedBytes(t *testing.T) {
 		"leading whitespace":    append([]byte{' '}, empty...),
 		"UTF-8 BOM":             append([]byte{0xef, 0xbb, 0xbf}, empty...),
 		"invalid UTF-8":         invalidUTF8,
-		"comment":               bytes.Replace(empty, []byte(`"schema_version":1`), []byte(`"schema_version":1/*x*/`), 1),
+		"comment":               bytes.Replace(empty, []byte(`"schema_version":3`), []byte(`"schema_version":3/*x*/`), 1),
 		"negative integer":      bytes.Replace(empty, []byte(`"sequence":1`), []byte(`"sequence":-1`), 1),
 		"floating integer":      bytes.Replace(empty, []byte(`"sequence":1`), []byte(`"sequence":1.0`), 1),
 		"exponent integer":      bytes.Replace(empty, []byte(`"sequence":1`), []byte(`"sequence":1e0`), 1),
 		"integer overflow":      bytes.Replace(empty, []byte(`"sequence":1`), []byte(`"sequence":9223372036854775808`), 1),
-		"object key order":      []byte(`{"schema_version":1,"generation":{"parent_sequence":null,"parent_sha256":null,"sequence":1},"local_identity":null,"remote_identities":[]}` + "\n"),
+		"object key order":      []byte(`{"schema_version":3,"control":null,"generation":{"parent_sequence":null,"parent_sha256":null,"sequence":1},"local_identity":null,"remote_identities":[]}` + "\n"),
 		"escaped non-ASCII":     bytes.Replace(populated, []byte("Étage"), []byte(`\u00c9tage`), 1),
 		"decomposed NFC":        bytes.Replace(populated, []byte("Étage"), []byte("E\u0301tage"), 1),
 		"control escape":        bytes.Replace(populated, []byte("Étage 2"), []byte(`bad\u0001value`), 1),
@@ -292,7 +292,7 @@ func TestManifestEnvelopeCanonicalityAndBounds(t *testing.T) {
 	}
 }
 
-func TestV1StateIsNeutralAndClosed(t *testing.T) {
+func TestCurrentStateIsNeutralAndClosed(t *testing.T) {
 	payload := readFixture(t, "generation-v1-populated.json")
 	decoded, err := decodeGenerationV1(payload)
 	if err != nil {
@@ -303,7 +303,7 @@ func TestV1StateIsNeutralAndClosed(t *testing.T) {
 	if err := json.Unmarshal(payload, &document); err != nil {
 		t.Fatal(err)
 	}
-	wantTopLevel := []string{"generation", "local_identity", "remote_identities", "schema_version"}
+	wantTopLevel := []string{"control", "generation", "local_identity", "remote_identities", "schema_version"}
 	if got := sortedMapKeys(document); !reflect.DeepEqual(got, wantTopLevel) {
 		t.Fatalf("top-level fields = %v, want %v", got, wantTopLevel)
 	}
@@ -320,7 +320,7 @@ func TestV1StateIsNeutralAndClosed(t *testing.T) {
 		"backup_excluded",
 	} {
 		t.Run(forbidden, func(t *testing.T) {
-			withField := bytes.Replace(payload, []byte(`,"schema_version":1}`), []byte(`,"`+forbidden+`":null,"schema_version":1}`), 1)
+			withField := bytes.Replace(payload, []byte(`,"schema_version":3}`), []byte(`,"`+forbidden+`":null,"schema_version":3}`), 1)
 			_, err := decodeGenerationV1(withField)
 			assertErrorOutcome(t, err, outcomeMalformedState)
 		})
@@ -330,7 +330,7 @@ func TestV1StateIsNeutralAndClosed(t *testing.T) {
 	for _, forbidden := range []string{"pairing", "trust", "quarantine", "backoff", "retry", "semantic", "lifecycle", "privatekey", "plaintext"} {
 		for _, field := range fieldNames {
 			if strings.Contains(strings.ToLower(field), forbidden) {
-				t.Fatalf("v1 in-memory state field %q contains forbidden concept %q", field, forbidden)
+				t.Fatalf("current in-memory state field %q contains forbidden concept %q", field, forbidden)
 			}
 		}
 	}
@@ -338,7 +338,7 @@ func TestV1StateIsNeutralAndClosed(t *testing.T) {
 
 func generationWithRemoteCount(count int) []byte {
 	var payload strings.Builder
-	payload.WriteString(`{"generation":{"parent_sequence":null,"parent_sha256":null,"sequence":1},"local_identity":null,"remote_identities":[`)
+	payload.WriteString(`{"control":null,"generation":{"parent_sequence":null,"parent_sha256":null,"sequence":1},"local_identity":null,"remote_identities":[`)
 	for i := 0; i < count; i++ {
 		if i > 0 {
 			payload.WriteByte(',')
@@ -346,7 +346,7 @@ func generationWithRemoteCount(count int) []byte {
 		recordID := base64.StdEncoding.EncodeToString([]byte{byte(i >> 24), byte(i >> 16), byte(i >> 8), byte(i)})
 		fmt.Fprintf(&payload, `{"record_id":%q,"remote_ship_id":%q,"remote_ski":%q}`, recordID, fmt.Sprintf("ship-%04d", i), base64.StdEncoding.EncodeToString([]byte{0x80, byte(i >> 8), byte(i)}))
 	}
-	payload.WriteString(`],"schema_version":1}`)
+	payload.WriteString(`],"schema_version":3}`)
 	payload.WriteByte('\n')
 	return []byte(payload.String())
 }

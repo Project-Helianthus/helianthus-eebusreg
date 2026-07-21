@@ -65,7 +65,7 @@ func TestMSP05PScopedStartupRollbackClosesTrustAndPreservesPrimaryError(t *testi
 	if failed != nil || !errors.Is(err, primary) {
 		t.Fatalf("scoped startup result backend=%v error=%v, want primary bind error", failed, err)
 	}
-	if got, want := service.eventsSnapshot(), []string{"setup", "register:" + remoteSKI, "start-policy", "shutdown"}; !slices.Equal(got, want) {
+	if got, want := service.eventsSnapshot(), []string{"setup", "start-policy", "shutdown"}; !slices.Equal(got, want) {
 		t.Fatalf("scoped startup events = %v, want %v", got, want)
 	}
 	if service.shutdownCount() != 1 {
@@ -109,7 +109,7 @@ func TestMSP05PServiceBackendReportsListenerTerminalAndClaimsPublisherOnce(t *te
 			if certificateErr != nil {
 				return runtimeMaterial{}, certificateErr
 			}
-			return runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate), pretrusted: map[string]bool{remoteSKI: true}}, nil
+			return runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate), nodeToken: runtimeTestNodeToken, pretrusted: map[string]bool{remoteSKI: true}}, nil
 		},
 		newService: func(RuntimeConfig, runtimeMaterial, eebusapi.ServiceReaderInterface) (runtimeService, error) {
 			return service, nil
@@ -316,9 +316,7 @@ func TestMSP05PProductionRuntimeScopesListenerDisablesDiscoveryAndDeniesUnknownT
 	runCancel, runDone, initialPayload := msp05pProductionRun(t, instance)
 	defer runCancel()
 	initialSnapshot := decodeRuntimePayload(t, initialPayload)
-	if len(initialSnapshot.Pairing) != 1 || initialSnapshot.Pairing[0].State != "paired" {
-		t.Fatalf("initial paired snapshot = %+v", initialSnapshot.Pairing)
-	}
+	issue54AssertNoRemoteEvidence(t, initialSnapshot)
 
 	before := msp05pProductionStateDigest(t, stateRoot)
 	peerCertificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "unknown-peer")
@@ -371,9 +369,10 @@ func TestMSP05PProductionRuntimeScopesListenerDisablesDiscoveryAndDeniesUnknownT
 	}
 	restartCancel, restartDone, restartPayload := msp05pProductionRun(t, restarted)
 	restartSnapshot := decodeRuntimePayload(t, restartPayload)
-	if restartSnapshot.Meta.LocalSKI != initialSnapshot.Meta.LocalSKI || len(restartSnapshot.Pairing) != 1 || restartSnapshot.Pairing[0].Remote != initialSnapshot.Pairing[0].Remote || restartSnapshot.Pairing[0].State != initialSnapshot.Pairing[0].State {
-		t.Fatalf("restart identity/pairing changed: initial=%+v/%+v restart=%+v/%+v", initialSnapshot.Meta.LocalSKI, initialSnapshot.Pairing, restartSnapshot.Meta.LocalSKI, restartSnapshot.Pairing)
+	if restartSnapshot.Meta.LocalSKI != initialSnapshot.Meta.LocalSKI {
+		t.Fatalf("restart local SKI changed: initial=%+v restart=%+v", initialSnapshot.Meta.LocalSKI, restartSnapshot.Meta.LocalSKI)
 	}
+	issue54AssertNoRemoteEvidence(t, restartSnapshot)
 	restartCancel()
 	if err := restarted.Close(); err != nil {
 		t.Fatalf("close restarted same selected runtime: %v", err)

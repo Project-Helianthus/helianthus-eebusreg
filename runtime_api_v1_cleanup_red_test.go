@@ -42,8 +42,6 @@ func TestMSP05PInitialV1PublicShapeIsExact(t *testing.T) {
 
 	assertMSP05PStructFields(t, reflect.TypeOf(Remote{}), []msp05pField{
 		{name: "SKI", typ: reflect.TypeOf("")},
-		{name: "Endpoint", typ: reflect.TypeOf(netip.AddrPort{})},
-		{name: "EndpointPath", typ: reflect.TypeOf("")},
 	})
 
 	runtimeType := reflect.TypeOf((*Runtime)(nil)).Elem()

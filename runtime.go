@@ -7,12 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"net/url"
-	pathpkg "path"
 	"path/filepath"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 )
@@ -46,9 +43,7 @@ type PairingPolicy string
 const PairingPolicyClosed PairingPolicy = "closed"
 
 type Remote struct {
-	SKI          string
-	Endpoint     netip.AddrPort
-	EndpointPath string
+	SKI string
 }
 
 type runtimeBackend interface {
@@ -388,8 +383,6 @@ func newFacadeRuntimeBackend(ctx context.Context, config Config) (runtimeBackend
 	for index, remote := range config.Remotes {
 		remotes[index] = eebusfacade.RuntimeRemote{
 			SKI:         remote.SKI,
-			Endpoint:    remote.Endpoint,
-			SHIPPath:    remote.EndpointPath,
 			Allowlisted: true,
 		}
 	}
@@ -535,46 +528,7 @@ func normalizeRuntimeRemote(remote Remote) (Remote, error) {
 	if _, err := hex.DecodeString(remote.SKI); err != nil {
 		return Remote{}, errors.New("remote SKI must contain 40 hexadecimal characters")
 	}
-	if err := validateRuntimeRemoteEndpoint(remote.Endpoint, remote.EndpointPath); err != nil {
-		return Remote{}, err
-	}
-
 	return remote, nil
-}
-
-func validateRuntimeRemoteEndpoint(endpoint netip.AddrPort, shipPath string) error {
-	if endpoint == (netip.AddrPort{}) {
-		if shipPath == "" {
-			return nil
-		}
-		return errors.New("remote endpoint address and port are required")
-	}
-	if !endpoint.IsValid() || endpoint.Port() == 0 {
-		return errors.New("remote endpoint address and port must be valid")
-	}
-	address := endpoint.Addr()
-	if address.IsUnspecified() || address.IsMulticast() || address.Is4In6() {
-		return errors.New("remote endpoint address must be literal unicast")
-	}
-	if address.Is4() && address.As4() == [4]byte{255, 255, 255, 255} {
-		return errors.New("remote endpoint address must not be global broadcast")
-	}
-	if shipPath == "" || !strings.HasPrefix(shipPath, "/") || !utf8.ValidString(shipPath) ||
-		strings.ContainsAny(shipPath, "\\\x00?#") {
-		return errors.New("remote SHIP path must be canonical and absolute")
-	}
-	decoded, err := url.PathUnescape(shipPath)
-	if err != nil || decoded != shipPath || !utf8.ValidString(decoded) || strings.ContainsAny(decoded, "\\\x00?#") {
-		return errors.New("remote SHIP path must be canonical and absolute")
-	}
-	canonical := pathpkg.Clean(shipPath)
-	if strings.HasSuffix(shipPath, "/") && canonical != "/" {
-		canonical += "/"
-	}
-	if canonical != shipPath {
-		return errors.New("remote SHIP path must be canonical and absolute")
-	}
-	return nil
 }
 
 func cloneRuntimeConfig(config Config) Config {

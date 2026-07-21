@@ -291,9 +291,9 @@ func TestPreMaintenancePreservesLowerEpochFutureSlotGeneration(t *testing.T) {
 	first := readFixture(t, "generation-v1-empty.json")
 	second := readFixture(t, "generation-v1-child-empty.json")
 	future := testGenerationWithParent(t, 50, 1, testDigestHex(first))
-	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
-	secondRef := testGenerationRef{sequence: 2, sha256: testDigestHex(second), schema: 1}
-	futureRef := testGenerationRef{sequence: 50, sha256: testDigestHex(future), schema: 1}
+	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: currentSchemaVersion}
+	secondRef := testGenerationRef{sequence: 2, sha256: testDigestHex(second), schema: currentSchemaVersion}
+	futureRef := testGenerationRef{sequence: 50, sha256: testDigestHex(future), schema: currentSchemaVersion}
 	installStoreLayout(
 		t,
 		root,

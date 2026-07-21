@@ -19,11 +19,11 @@ import (
 )
 
 const (
-	emptyGenerationSHA256     = "26e7252d73a90b25c7a209ae20f2bc382fe3460653f2d02df03061b5c6ab2ddf"
-	childGenerationSHA256     = "cee781371c50902230660ccdea49382d4ced220afd0067629aa4736d4ea28b60"
-	populatedGenerationSHA256 = "a93513e24e2c3957d4e4d9dfd010349bc05dc56c18b5091a17983214ab3b4ab6"
-	emptyManifestSHA256       = "7733652f5a868d40212573fef13bad5b471010c51d040cf6ee27e42f34228880"
-	childManifestSHA256       = "58eea78843a229f73def83719687b7bab328a265ee4357dbdb3bef72e3b8e2cb"
+	emptyGenerationSHA256     = "ecbc32f0c7652e36457babf82189f88d37da389fb9d228fd346f4064d7b565dd"
+	childGenerationSHA256     = "d3109878b7c025524c2418212878fba21ebff307c6c09727dbf0d29d7b1b8968"
+	populatedGenerationSHA256 = "9c5cbf5b39eb9951ce74fee28f66c4ced7dfc9cbc14c1a7a0d87e198e21798a4"
+	emptyManifestSHA256       = "52c4f3d826edb94faa906ed6609e320052adf7ea7de99d6b484198c5af06ba50"
+	childManifestSHA256       = "256fdd2a8b2653b7b14efed9c573d925d189e4c82b5d0cd29239d227a7f85170"
 )
 
 type testGenerationRef struct {
@@ -112,8 +112,8 @@ func installStoreLayout(t *testing.T, root string, generations map[uint64][]byte
 func installTwoGenerationStore(t *testing.T, root string, second []byte) {
 	t.Helper()
 	first := readFixture(t, "generation-v1-empty.json")
-	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
-	secondRef := testGenerationRef{sequence: 2, sha256: testDigestHex(second), schema: 1}
+	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: currentSchemaVersion}
+	secondRef := testGenerationRef{sequence: 2, sha256: testDigestHex(second), schema: currentSchemaVersion}
 	installStoreLayout(
 		t,
 		root,
@@ -178,15 +178,6 @@ func summarizeTree(tree map[string]treeEntry) string {
 	return summary.String()
 }
 
-func testMigrationGraph(t *testing.T) migrationGraph {
-	t.Helper()
-	graph, err := newMigrationGraph(1, nil)
-	if err != nil {
-		t.Fatalf("build v1 migration graph: %v", err)
-	}
-	return graph
-}
-
 func testStoreConfig(t *testing.T, root string, hook syscallHook, providers map[providerKey]protectedKeyProvider) storeConfig {
 	t.Helper()
 	backend, err := newNativeSyscallBackend(hook)
@@ -194,10 +185,9 @@ func testStoreConfig(t *testing.T, root string, hook syscallHook, providers map[
 		t.Fatalf("native backend: %v", err)
 	}
 	return storeConfig{
-		root:       root,
-		backend:    backend,
-		providers:  providers,
-		migrations: testMigrationGraph(t),
+		root:      root,
+		backend:   backend,
+		providers: providers,
 	}
 }
 

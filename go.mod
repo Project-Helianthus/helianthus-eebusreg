@@ -3,12 +3,11 @@ module github.com/Project-Helianthus/helianthus-eebusreg
 go 1.22.0
 
 require (
-	github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.3
-	github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.4
+	github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.4
+	github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.5
 	github.com/Project-Helianthus/helianthus-spine-go v0.7.1-helianthus.1
 	github.com/gorilla/websocket v1.5.3
 	golang.org/x/mod v0.21.0
-	golang.org/x/net v0.29.0
 	golang.org/x/sys v0.25.0
 	golang.org/x/text v0.18.0
 )
@@ -27,6 +26,7 @@ require (
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/stretchr/testify v1.9.0 // indirect
 	gitlab.com/c0b/go-ordered-json v0.0.0-20201030195603-febf46534d5a // indirect
+	golang.org/x/net v0.29.0 // indirect
 	golang.org/x/sync v0.8.0 // indirect
 	golang.org/x/tools v0.25.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

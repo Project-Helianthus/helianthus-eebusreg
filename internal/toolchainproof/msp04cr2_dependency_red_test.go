@@ -27,8 +27,8 @@ func TestMSP05PDependencyClosureUsesReviewedHelianthusReleases(t *testing.T) {
 		path    string
 		version string
 	}{
-		{path: "github.com/Project-Helianthus/helianthus-eebus-go", version: "v0.7.1-helianthus.3"},
-		{path: "github.com/Project-Helianthus/helianthus-ship-go", version: "v0.6.1-helianthus.4"},
+		{path: "github.com/Project-Helianthus/helianthus-eebus-go", version: "v0.7.1-helianthus.4"},
+		{path: "github.com/Project-Helianthus/helianthus-ship-go", version: "v0.6.1-helianthus.5"},
 		{path: "github.com/Project-Helianthus/helianthus-spine-go", version: "v0.7.1-helianthus.1"},
 	}
 	got := make(map[string]string, len(file.Require))
@@ -98,7 +98,9 @@ func TestMSP05PDependencyClosureUsesReviewedHelianthusReleases(t *testing.T) {
 	}
 	for _, stale := range []string{
 		"github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.1 ",
+		"github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.3 ",
 		"github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.2 ",
+		"github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.4 ",
 	} {
 		if strings.Contains(sums, stale) {
 			t.Errorf("go.sum retains stale current dependency entry %q", stale)

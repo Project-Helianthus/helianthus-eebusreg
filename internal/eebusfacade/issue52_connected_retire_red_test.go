@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -82,13 +81,12 @@ func TestIssue52ConnectedCancellationUsesWithdrawalAndRetiresExactGeneration(t *
 	})
 }
 
-func TestIssue52RuntimeImmediateExpiryReopenDoesNotFailOutboundEndpoint(t *testing.T) {
+func TestIssue52RuntimeImmediateExpiryReopenRetiresEveryGeneration(t *testing.T) {
 	var service *issue52RuntimeService
 	pretrusted := false
 	harness := newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
 		setup.view.associations = nil
 		setup.remotePretrusted = &pretrusted
-		setup.configureRemote = configureMSP05POutboundEndpoint
 		setup.wrapRuntime = func(base *msp045Service, reader eebusapi.ServiceReaderInterface) runtimeService {
 			service = newIssue52RuntimeService(base, reader)
 			return service
@@ -123,9 +121,6 @@ func TestIssue52RuntimeImmediateExpiryReopenDoesNotFailOutboundEndpoint(t *testi
 
 	if got := service.disconnectCount(); got != 3 {
 		t.Fatalf("DisconnectSKI calls = %d, want 3", got)
-	}
-	if got := service.queueFailureCount(); got != 0 {
-		t.Fatalf("outbound queue failures = %d, want 0", got)
 	}
 	if state, recovery := harness.resources.coordinator.state(), harness.resources.coordinator.recoveryState(); state != "PAIRING_CLOSED" || recovery != "UNPAIRED_LOCKED" {
 		t.Fatalf("final runtime state = %s/%s, want PAIRING_CLOSED/UNPAIRED_LOCKED", state, recovery)
@@ -230,10 +225,9 @@ type issue52RuntimeService struct {
 	*msp045Service
 	reader eebusapi.ServiceReaderInterface
 
-	stateMu       sync.Mutex
-	connections   map[string]bool
-	disconnects   int
-	queueFailures int
+	stateMu     sync.Mutex
+	connections map[string]bool
+	disconnects int
 }
 
 func newIssue52RuntimeService(base *msp045Service, reader eebusapi.ServiceReaderInterface) *issue52RuntimeService {
@@ -257,17 +251,6 @@ func (service *issue52RuntimeService) connected(ski string) bool {
 	return service.connections[ski]
 }
 
-func (service *issue52RuntimeService) QueueRemoteSKI(ski string) error {
-	service.stateMu.Lock()
-	if service.connections[ski] {
-		service.queueFailures++
-		service.stateMu.Unlock()
-		return errors.New("outbound endpoint still has a connected SHIP transport")
-	}
-	service.stateMu.Unlock()
-	return service.msp045Service.QueueRemoteSKI(ski)
-}
-
 func (service *issue52RuntimeService) DisconnectSKI(ski string, _ string) {
 	service.stateMu.Lock()
 	service.connections[ski] = false
@@ -282,10 +265,4 @@ func (service *issue52RuntimeService) disconnectCount() int {
 	service.stateMu.Lock()
 	defer service.stateMu.Unlock()
 	return service.disconnects
-}
-
-func (service *issue52RuntimeService) queueFailureCount() int {
-	service.stateMu.Lock()
-	defer service.stateMu.Unlock()
-	return service.queueFailures
 }

@@ -21,21 +21,6 @@ func TestMSP045ControlSchemaAndWireRemainExactlyV3(t *testing.T) {
 		"StoreInstance:store_instance",
 		"Tombstones:tombstones",
 	})
-	assertMSP045WireShape(t, reflect.TypeOf(controlAttemptWireV3{}), []string{
-		"AssociationLineage:association_lineage",
-		"AttemptCountBefore:attempt_count_before",
-		"AttemptID:attempt_id",
-		"CancellationGeneration:cancellation_generation",
-		"ControlEpoch:control_epoch",
-		"End" + "pointHost:endpoint_host",
-		"End" + "pointPort:endpoint_port",
-		"Path:path",
-		"RemoteSKI:remote_ski",
-		"ReservationOrder:reservation_order",
-		"ReservationTimestamp:reservation_timestamp",
-		"Scope:scope",
-		"StateCode:state_code",
-	})
 	assertMSP045FieldNames(t, reflect.TypeOf(ControlRecord{}), []string{
 		"Present",
 		"StoreInstance",
@@ -44,7 +29,6 @@ func TestMSP045ControlSchemaAndWireRemainExactlyV3(t *testing.T) {
 		"Tombstones",
 		"Quarantines",
 		"Receipts",
-		"Attempts",
 		"OperationHighWater",
 		"RepairSequence",
 		"Publication",

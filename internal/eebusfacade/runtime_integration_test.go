@@ -25,6 +25,8 @@ import (
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
+const runtimeTestNodeToken = "0123456789abcdef0123456789abcdef"
+
 func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testing.T) {
 	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "runtime-test")
 	if err != nil {
@@ -40,6 +42,7 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 			return runtimeMaterial{
 				certificate: certificate,
 				localSKI:    localSKI,
+				nodeToken:   runtimeTestNodeToken,
 				pretrusted:  map[string]bool{remoteSKI: true},
 			}, nil
 		},
@@ -60,7 +63,7 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	if err != nil {
 		t.Fatalf("acquireRuntime() error = %v", err)
 	}
-	if !service.setup || len(service.registered) != 1 || service.registered[0] != remoteSKI {
+	if !service.setup || len(service.registered) != 0 {
 		t.Fatalf("service setup=%t registered=%v", service.setup, service.registered)
 	}
 	if handler == nil {
@@ -84,23 +87,23 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	if initial.Status.State != "degraded" || initial.Status.Degradation == nil || initial.Status.Degradation.Reason != "no-visible-services" {
 		t.Fatalf("initial status = %+v", initial.Status)
 	}
-	initialSessionID := initial.Sessions[0].ID
-
-	clock.Advance(time.Second)
-	handler.ServiceShipIDUpdate(remoteSKI, "fixture-ship-id")
-	shipIDUpdate := decodeRuntimePayload(t, waitRuntimePayload(t, updates))
-	if shipIDUpdate.Sessions[0].ID == initialSessionID {
-		t.Fatal("SHIP ID callback did not replace the session identity")
-	}
-	if strings.Contains(shipIDUpdate.Sessions[0].ID.Digest, "fixture-ship-id") {
-		t.Fatal("SHIP ID escaped redaction")
-	}
+	issue54AssertNoRemoteEvidence(t, initial)
 
 	clock.Advance(time.Second)
 	handler.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{Ski: remoteSKI}})
 	visible := decodeRuntimePayload(t, waitRuntimePayload(t, updates))
 	if len(visible.Services) != 1 || !visible.Services[0].Visible || visible.Services[0].Paired {
 		t.Fatalf("visible services = %+v", visible.Services)
+	}
+	if len(visible.Sessions) != 0 {
+		t.Fatalf("visible callback fabricated sessions: %+v", visible.Sessions)
+	}
+
+	clock.Advance(time.Second)
+	handler.ServiceShipIDUpdate(remoteSKI, "fixture-ship-id")
+	shipIDUpdate := decodeRuntimePayload(t, waitRuntimePayload(t, updates))
+	if len(shipIDUpdate.Sessions) != 0 {
+		t.Fatalf("SHIP ID callback fabricated sessions: %+v", shipIDUpdate.Sessions)
 	}
 
 	remoteService := eebusServiceWithFeatureGraph(t, remoteSKI)
@@ -114,8 +117,8 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 		t.Fatalf("connected topology = %+v", connected.Topology)
 	}
 	connectedSessionID := connected.Sessions[0].ID
-	if connectedSessionID == shipIDUpdate.Sessions[0].ID {
-		t.Fatal("connected callback did not create a new session generation")
+	if strings.Contains(connectedSessionID.Digest, "fixture-ship-id") {
+		t.Fatal("SHIP ID escaped redaction")
 	}
 
 	clock.Advance(time.Second)
@@ -170,6 +173,7 @@ func TestAcquireRuntimeKeepsFirstTrustDisabledWithoutInternalAuthorization(t *te
 			return runtimeMaterial{
 				certificate: certificate,
 				localSKI:    localSKI,
+				nodeToken:   runtimeTestNodeToken,
 				pretrusted:  map[string]bool{remoteSKI: true},
 			}, nil
 		},
@@ -224,6 +228,7 @@ func TestAcquireRuntimeComposesAndOwnsAuthorizedFirstTrustResources(t *testing.T
 		return runtimeMaterial{
 			certificate: certificate,
 			localSKI:    localSKI,
+			nodeToken:   runtimeTestNodeToken,
 			pretrusted:  map[string]bool{remoteSKI: true},
 			firstTrust: &runtimeFirstTrustAuthorization{
 				adminRuntimeDir:  adminRuntimeDir,
@@ -347,6 +352,7 @@ func TestAcquireRuntimeFailsClosedAndReleasesStoreWhenAdminStartFails(t *testing
 		return runtimeMaterial{
 			certificate: certificate,
 			localSKI:    localSKI,
+			nodeToken:   runtimeTestNodeToken,
 			pretrusted:  map[string]bool{remoteSKI: true},
 			firstTrust: &runtimeFirstTrustAuthorization{
 				adminRuntimeDir:  adminRuntimeDir,
@@ -439,7 +445,7 @@ func TestPinnedEEBusServiceProvidesScopedSHIPLifecycle(t *testing.T) {
 	service, err := newEEBusService(RuntimeConfig{
 		Interface: "fixture-interface", ListenPort: 4711,
 		ListenAddress: netip.MustParseAddrPort("127.0.0.1:4711"),
-	}, runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate)}, nil)
+	}, runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate), nodeToken: runtimeTestNodeToken}, nil)
 	if err != nil {
 		t.Fatalf("newEEBusService() error = %v", err)
 	}

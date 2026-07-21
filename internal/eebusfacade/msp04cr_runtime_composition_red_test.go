@@ -90,10 +90,10 @@ func TestMSP04CRPairingCallbackPersistsRetryCheckpointAndRestartArm(t *testing.T
 
 }
 
-func TestMSP04CROutgoingCallbacksShareOneDurableInflightAttempt(t *testing.T) {
+func TestMSP04CRPairingCallbacksShareOneDurableInflightAttempt(t *testing.T) {
 	fixture := newMSP04CRRuntimeFixture(t, 306)
 	service := newMSP04CRService()
-	backend, reader := fixture.acquire(t, service, "outgoing-one")
+	backend, reader := fixture.acquire(t, service, "pairing-one")
 	fixture.recoverUnavailableHostKey(t, backend)
 	if got := backend.firstTrust.coordinator.openPairingWindow(context.Background(), msp04cText(307), time.Minute); got != "open_empty" {
 		t.Fatalf("open pairing window = %q", got)
@@ -103,22 +103,22 @@ func TestMSP04CROutgoingCallbacksShareOneDurableInflightAttempt(t *testing.T) {
 	}
 	_, state, _, count, _, ok := soleMSP04CRRetryRecord(backend.firstTrust.coordinator)
 	if !ok || state != "RETRY_READY" || count != 0 || len(backend.firstTrust.coordinator.retryInflight) != 1 {
-		t.Fatalf("outgoing inflight tuple = %s/%d/%t inflight=%d", state, count, ok, len(backend.firstTrust.coordinator.retryInflight))
+		t.Fatalf("pairing inflight tuple = %s/%d/%t inflight=%d", state, count, ok, len(backend.firstTrust.coordinator.retryInflight))
 	}
-	reader.ServicePairingDetailUpdate(fixture.remoteSKI, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateError, errors.New("outgoing")))
+	reader.ServicePairingDetailUpdate(fixture.remoteSKI, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateError, errors.New("pairing")))
 	_, state, _, count, remaining, _ := soleMSP04CRRetryRecord(backend.firstTrust.coordinator)
 	if state != "BACKOFF_ACTIVE" || count != 1 || remaining <= 0 || remaining > 3*time.Second {
-		t.Fatalf("outgoing failure tuple = %s/%d/%s", state, count, remaining)
+		t.Fatalf("pairing failure tuple = %s/%d/%s", state, count, remaining)
 	}
 	if err := backend.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, restartedReader := fixture.acquire(t, newMSP04CRService(), "outgoing-two")
+	restarted, restartedReader := fixture.acquire(t, newMSP04CRService(), "pairing-two")
 	defer restarted.Close()
 	restartedReader.ServicePairingDetailUpdate(fixture.remoteSKI, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateQueued, nil))
 	_, state, _, count, remaining, _ = soleMSP04CRRetryRecord(restarted.firstTrust.coordinator)
 	if state != "BACKOFF_ACTIVE" || count != 1 || remaining <= 0 || remaining > 3*time.Second {
-		t.Fatalf("restart bypassed outgoing ceiling tuple = %s/%d/%s", state, count, remaining)
+		t.Fatalf("restart bypassed pairing ceiling tuple = %s/%d/%s", state, count, remaining)
 	}
 }
 
@@ -414,7 +414,8 @@ func (fixture *msp04crRuntimeFixture) acquire(t *testing.T, service *msp04crServ
 	dependencies := defaultRuntimeDependencies
 	dependencies.loadMaterial = func(context.Context, string) (runtimeMaterial, error) {
 		return runtimeMaterial{
-			certificate: fixture.certificate, localSKI: fixture.localSKI, pretrusted: map[string]bool{fixture.remoteSKI: true},
+			certificate: fixture.certificate, localSKI: fixture.localSKI, nodeToken: runtimeTestNodeToken,
+			pretrusted: map[string]bool{fixture.remoteSKI: true},
 			firstTrust: &runtimeFirstTrustAuthorization{
 				adminRuntimeDir: filepath.Join(fixture.root, admin), hostAnchor: fixture.hostAnchor,
 				identityProvider: fixture.anchor, keyProviders: []eebusstore.KeyProviderBinding{fixture.anchor.keyBinding()},

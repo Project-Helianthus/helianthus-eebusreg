@@ -2,8 +2,6 @@ package eebusstore
 
 import (
 	"bytes"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"math"
 )
@@ -17,26 +15,14 @@ const (
 	maxControlQuarantineValue = math.MaxUint16
 )
 
-type controlRecordV2 struct {
-	storeInstance      []byte
-	controlEpoch       uint64
-	associationLineage []byte
-	tombstones         []controlTombstoneV2
-	quarantines        []controlQuarantineV2
-	receipts           []controlReceiptV2
-	operationHighWater uint64
-	repairSequence     uint64
-	publication        *controlPublicationV2
-}
-
-type controlTombstoneV2 struct {
+type controlTombstone struct {
 	associationRef      []byte
 	revocationEpoch     uint64
 	operationID         []byte
 	effectiveGeneration generationReference
 }
 
-type controlQuarantineV2 struct {
+type controlQuarantine struct {
 	scope            []byte
 	reasonCode       uint64
 	stateCode        uint64
@@ -47,7 +33,7 @@ type controlQuarantineV2 struct {
 	lastControlEpoch uint64
 }
 
-type controlReceiptV2 struct {
+type controlReceipt struct {
 	operationID    []byte
 	operationClass uint64
 	bindingSHA256  []byte
@@ -55,7 +41,7 @@ type controlReceiptV2 struct {
 	terminal       bool
 }
 
-type controlPublicationV2 struct {
+type controlPublication struct {
 	operationID          []byte
 	operationClass       uint64
 	storeInstance        []byte
@@ -65,26 +51,14 @@ type controlPublicationV2 struct {
 	targetGeneration     generationReference
 }
 
-type controlRecordWireV2 struct {
-	AssociationLineage string                    `json:"association_lineage"`
-	ControlEpoch       uint64                    `json:"control_epoch"`
-	OperationHighWater uint64                    `json:"operation_high_water"`
-	Publication        *controlPublicationWireV2 `json:"publication"`
-	Quarantines        []controlQuarantineWireV2 `json:"quarantines"`
-	Receipts           []controlReceiptWireV2    `json:"receipts"`
-	RepairSequence     uint64                    `json:"repair_sequence"`
-	StoreInstance      string                    `json:"store_instance"`
-	Tombstones         []controlTombstoneWireV2  `json:"tombstones"`
-}
-
-type controlTombstoneWireV2 struct {
+type controlTombstoneWire struct {
 	AssociationRef      string                  `json:"association_ref"`
 	EffectiveGeneration generationReferenceWire `json:"effective_generation"`
 	OperationID         string                  `json:"operation_id"`
 	RevocationEpoch     uint64                  `json:"revocation_epoch"`
 }
 
-type controlQuarantineWireV2 struct {
+type controlQuarantineWire struct {
 	AttemptCount     uint64 `json:"attempt_count"`
 	BackoffStep      uint64 `json:"backoff_step"`
 	LastControlEpoch uint64 `json:"last_control_epoch"`
@@ -95,7 +69,7 @@ type controlQuarantineWireV2 struct {
 	StateCode        uint64 `json:"state_code"`
 }
 
-type controlReceiptWireV2 struct {
+type controlReceiptWire struct {
 	BindingSHA256  string `json:"binding_sha256"`
 	OperationClass uint64 `json:"operation_class"`
 	OperationID    string `json:"operation_id"`
@@ -103,7 +77,7 @@ type controlReceiptWireV2 struct {
 	Terminal       bool   `json:"terminal"`
 }
 
-type controlPublicationWireV2 struct {
+type controlPublicationWire struct {
 	OperationClass       uint64                  `json:"operation_class"`
 	OperationID          string                  `json:"operation_id"`
 	PreviousControlEpoch uint64                  `json:"previous_control_epoch"`
@@ -113,37 +87,22 @@ type controlPublicationWireV2 struct {
 	TargetGeneration     generationReferenceWire `json:"target_generation"`
 }
 
-func withControlRecordV2(source stateV1, record controlRecordV2) stateV1 {
-	result := cloneStateV1(source)
-	payload, _ := encodeControlRecordV2Unchecked(record)
-	result.controlEnvelope = payload
-	return result
-}
-
-func controlRecordFromStateV1(source stateV1) (controlRecordV2, bool) {
-	if len(source.controlEnvelope) == 0 {
-		return controlRecordV2{}, false
-	}
-	record, err := decodeControlRecordV2(source.controlEnvelope)
-	return record, err == nil
-}
-
-func cloneControlRecordV2(source controlRecordV2) controlRecordV2 {
+func cloneControlRecordV3(source controlRecordV3) controlRecordV3 {
 	result := source
 	result.storeInstance = bytes.Clone(source.storeInstance)
 	result.associationLineage = bytes.Clone(source.associationLineage)
-	result.tombstones = make([]controlTombstoneV2, len(source.tombstones))
+	result.tombstones = make([]controlTombstone, len(source.tombstones))
 	for index, tombstone := range source.tombstones {
 		result.tombstones[index] = tombstone
 		result.tombstones[index].associationRef = bytes.Clone(tombstone.associationRef)
 		result.tombstones[index].operationID = bytes.Clone(tombstone.operationID)
 	}
-	result.quarantines = make([]controlQuarantineV2, len(source.quarantines))
+	result.quarantines = make([]controlQuarantine, len(source.quarantines))
 	for index, quarantine := range source.quarantines {
 		result.quarantines[index] = quarantine
 		result.quarantines[index].scope = bytes.Clone(quarantine.scope)
 	}
-	result.receipts = make([]controlReceiptV2, len(source.receipts))
+	result.receipts = make([]controlReceipt, len(source.receipts))
 	for index, receipt := range source.receipts {
 		result.receipts[index] = receipt
 		result.receipts[index].operationID = bytes.Clone(receipt.operationID)
@@ -158,7 +117,7 @@ func cloneControlRecordV2(source controlRecordV2) controlRecordV2 {
 	return result
 }
 
-func validateControlRecordV2(record controlRecordV2) error {
+func validateControlRecordBase(record controlRecordV3) error {
 	if len(record.storeInstance) != controlOpaqueBytes || len(record.associationLineage) != controlOpaqueBytes || record.controlEpoch == 0 || record.controlEpoch >= math.MaxUint64 {
 		return malformed("validate_control", errors.New("record binding"))
 	}
@@ -207,134 +166,67 @@ func validateControlRecordV2(record controlRecordV2) error {
 	return nil
 }
 
-func encodeControlRecordV2(record controlRecordV2) ([]byte, error) {
-	if err := validateControlRecordV2(record); err != nil {
-		return nil, err
-	}
-	return encodeControlRecordV2Unchecked(record)
-}
-
-func encodeControlRecordV2Unchecked(record controlRecordV2) ([]byte, error) {
-	wire := controlRecordWireV2{
-		AssociationLineage: base64.StdEncoding.EncodeToString(record.associationLineage),
-		ControlEpoch:       record.controlEpoch, OperationHighWater: record.operationHighWater,
-		Quarantines: make([]controlQuarantineWireV2, len(record.quarantines)),
-		Receipts:    make([]controlReceiptWireV2, len(record.receipts)), RepairSequence: record.repairSequence,
-		StoreInstance: base64.StdEncoding.EncodeToString(record.storeInstance),
-		Tombstones:    make([]controlTombstoneWireV2, len(record.tombstones)),
-	}
-	for index, tombstone := range record.tombstones {
-		wire.Tombstones[index] = controlTombstoneWireV2{
-			AssociationRef:      base64.StdEncoding.EncodeToString(tombstone.associationRef),
-			EffectiveGeneration: generationReferenceToWire(tombstone.effectiveGeneration),
-			OperationID:         base64.StdEncoding.EncodeToString(tombstone.operationID), RevocationEpoch: tombstone.revocationEpoch,
-		}
-	}
-	for index, quarantine := range record.quarantines {
-		wire.Quarantines[index] = controlQuarantineWireV2{
-			AttemptCount: quarantine.attemptCount, BackoffStep: quarantine.backoffStep, LastControlEpoch: quarantine.lastControlEpoch,
-			ReasonCode: quarantine.reasonCode, RemainingDelay: quarantine.remainingDelay, RetentionBudget: quarantine.retentionBudget,
-			Scope: base64.StdEncoding.EncodeToString(quarantine.scope), StateCode: quarantine.stateCode,
-		}
-	}
-	for index, receipt := range record.receipts {
-		wire.Receipts[index] = controlReceiptWireV2{
-			BindingSHA256: base64.StdEncoding.EncodeToString(receipt.bindingSHA256), OperationClass: receipt.operationClass,
-			OperationID: base64.StdEncoding.EncodeToString(receipt.operationID), ResultCode: receipt.resultCode, Terminal: receipt.terminal,
-		}
-	}
-	if record.publication != nil {
-		wire.Publication = &controlPublicationWireV2{
-			OperationClass: record.publication.operationClass, OperationID: base64.StdEncoding.EncodeToString(record.publication.operationID),
-			PreviousControlEpoch: record.publication.previousControlEpoch, PreviousGeneration: generationReferenceToWire(record.publication.previousGeneration),
-			StoreInstance: base64.StdEncoding.EncodeToString(record.publication.storeInstance), TargetControlEpoch: record.publication.targetControlEpoch,
-			TargetGeneration: generationReferenceToWire(record.publication.targetGeneration),
-		}
-	}
-	return json.Marshal(wire)
-}
-
-func decodeControlRecordV2(payload []byte) (controlRecordV2, error) {
-	var wire controlRecordWireV2
-	if err := decodeClosedJSON(payload, &wire); err != nil {
-		return controlRecordV2{}, malformed("decode_control", err)
-	}
-	storeInstance, err := decodeControlOpaque(wire.StoreInstance)
-	if err != nil {
-		return controlRecordV2{}, err
-	}
-	lineage, err := decodeControlOpaque(wire.AssociationLineage)
-	if err != nil {
-		return controlRecordV2{}, err
-	}
-	record := controlRecordV2{
-		storeInstance: storeInstance, controlEpoch: wire.ControlEpoch, associationLineage: lineage,
-		tombstones: make([]controlTombstoneV2, len(wire.Tombstones)), quarantines: make([]controlQuarantineV2, len(wire.Quarantines)),
-		receipts: make([]controlReceiptV2, len(wire.Receipts)), operationHighWater: wire.OperationHighWater, repairSequence: wire.RepairSequence,
-	}
+func decodeControlRecordFields(record *controlRecordV3, wire controlRecordWireV3) error {
 	for index, item := range wire.Tombstones {
-		reference, decodeErr := decodeControlOpaque(item.AssociationRef)
-		if decodeErr != nil {
-			return controlRecordV2{}, decodeErr
+		reference, err := decodeControlOpaque(item.AssociationRef)
+		if err != nil {
+			return err
 		}
-		operationID, decodeErr := decodeControlOpaque(item.OperationID)
-		if decodeErr != nil {
-			return controlRecordV2{}, decodeErr
+		operationID, err := decodeControlOpaque(item.OperationID)
+		if err != nil {
+			return err
 		}
-		generation, decodeErr := decodeGenerationReference(item.EffectiveGeneration)
-		if decodeErr != nil {
-			return controlRecordV2{}, decodeErr
+		generation, err := decodeGenerationReference(item.EffectiveGeneration)
+		if err != nil {
+			return err
 		}
-		record.tombstones[index] = controlTombstoneV2{associationRef: reference, effectiveGeneration: generation, operationID: operationID, revocationEpoch: item.RevocationEpoch}
+		record.tombstones[index] = controlTombstone{associationRef: reference, effectiveGeneration: generation, operationID: operationID, revocationEpoch: item.RevocationEpoch}
 	}
 	for index, item := range wire.Quarantines {
-		scope, decodeErr := decodeControlOpaque(item.Scope)
-		if decodeErr != nil {
-			return controlRecordV2{}, decodeErr
+		scope, err := decodeControlOpaque(item.Scope)
+		if err != nil {
+			return err
 		}
-		record.quarantines[index] = controlQuarantineV2{
+		record.quarantines[index] = controlQuarantine{
 			scope: scope, reasonCode: item.ReasonCode, stateCode: item.StateCode, attemptCount: item.AttemptCount,
 			backoffStep: item.BackoffStep, remainingDelay: item.RemainingDelay, retentionBudget: item.RetentionBudget, lastControlEpoch: item.LastControlEpoch,
 		}
 	}
 	for index, item := range wire.Receipts {
-		operationID, decodeErr := decodeControlOpaque(item.OperationID)
-		if decodeErr != nil {
-			return controlRecordV2{}, decodeErr
+		operationID, err := decodeControlOpaque(item.OperationID)
+		if err != nil {
+			return err
 		}
-		binding, decodeErr := decodeControlOpaque(item.BindingSHA256)
-		if decodeErr != nil {
-			return controlRecordV2{}, decodeErr
+		binding, err := decodeControlOpaque(item.BindingSHA256)
+		if err != nil {
+			return err
 		}
-		record.receipts[index] = controlReceiptV2{operationID: operationID, operationClass: item.OperationClass, bindingSHA256: binding, resultCode: item.ResultCode, terminal: item.Terminal}
+		record.receipts[index] = controlReceipt{operationID: operationID, operationClass: item.OperationClass, bindingSHA256: binding, resultCode: item.ResultCode, terminal: item.Terminal}
 	}
 	if wire.Publication != nil {
-		operationID, decodeErr := decodeControlOpaque(wire.Publication.OperationID)
-		if decodeErr != nil {
-			return controlRecordV2{}, decodeErr
+		operationID, err := decodeControlOpaque(wire.Publication.OperationID)
+		if err != nil {
+			return err
 		}
-		instance, decodeErr := decodeControlOpaque(wire.Publication.StoreInstance)
-		if decodeErr != nil {
-			return controlRecordV2{}, decodeErr
+		instance, err := decodeControlOpaque(wire.Publication.StoreInstance)
+		if err != nil {
+			return err
 		}
-		previous, decodeErr := decodeGenerationReference(wire.Publication.PreviousGeneration)
-		if decodeErr != nil {
-			return controlRecordV2{}, decodeErr
+		previous, err := decodeGenerationReference(wire.Publication.PreviousGeneration)
+		if err != nil {
+			return err
 		}
-		target, decodeErr := decodeGenerationReference(wire.Publication.TargetGeneration)
-		if decodeErr != nil {
-			return controlRecordV2{}, decodeErr
+		target, err := decodeGenerationReference(wire.Publication.TargetGeneration)
+		if err != nil {
+			return err
 		}
-		record.publication = &controlPublicationV2{
+		record.publication = &controlPublication{
 			operationID: operationID, operationClass: wire.Publication.OperationClass, storeInstance: instance,
 			previousControlEpoch: wire.Publication.PreviousControlEpoch, targetControlEpoch: wire.Publication.TargetControlEpoch,
 			previousGeneration: previous, targetGeneration: target,
 		}
 	}
-	if err := validateControlRecordV2(record); err != nil {
-		return controlRecordV2{}, err
-	}
-	return record, nil
+	return nil
 }
 
 func decodeControlOpaque(value string) ([]byte, error) {

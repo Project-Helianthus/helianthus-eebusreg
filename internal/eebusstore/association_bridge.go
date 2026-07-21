@@ -45,12 +45,8 @@ func OpenAssociationBridge(root string, bindings []KeyProviderBinding) (*Associa
 		}
 		providers[key] = keyProviderAdapter{provider: binding.Provider}
 	}
-	graph, err := currentMigrationGraph()
-	if err != nil {
-		return nil, string(outcomeMigrationFailed)
-	}
 	bridge := &AssociationBridge{config: storeConfig{
-		root: root, backend: backend, providers: providers, migrations: graph,
+		root: root, backend: backend, providers: providers,
 		retainUnavailableProtectedState: true,
 	}}
 	result := openStore(bridge.config)

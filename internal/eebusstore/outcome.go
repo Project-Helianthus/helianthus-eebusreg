@@ -11,7 +11,6 @@ type outcome string
 const (
 	outcomeOpenedEmpty                     outcome = "opened_empty"
 	outcomeOpenedCurrent                   outcome = "opened_current"
-	outcomeOpenedMigrated                  outcome = "opened_migrated"
 	outcomeRecoveryCandidateAvailable      outcome = "recovery_candidate_available"
 	outcomeCommitDurable                   outcome = "commit_durable"
 	outcomeCommitAppliedMaintenanceFailed  outcome = "commit_applied_maintenance_failed"
@@ -30,7 +29,6 @@ const (
 	outcomeNoValidCurrent                  outcome = "no_valid_current"
 	outcomeKeyProviderUnavailable          outcome = "key_provider_unavailable"
 	outcomeKeyMaterialUnavailable          outcome = "key_material_unavailable"
-	outcomeMigrationFailed                 outcome = "migration_failed"
 	outcomeMaintenanceFailed               outcome = "maintenance_failed"
 	outcomeCommitNotPublished              outcome = "commit_not_published"
 	outcomeCommitDurabilityUnknown         outcome = "commit_durability_unknown"

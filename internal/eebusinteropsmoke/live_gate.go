@@ -1,4 +1,4 @@
-package main
+package eebusinteropsmoke
 
 import (
 	"bytes"
@@ -377,10 +377,6 @@ func replayNegativeObservationsFrom(payload []byte) (negativeObservation, negati
 		replayExpectedSKI   = "1111111111111111111111111111111111111111"
 		replayUnexpectedSKI = "2222222222222222222222222222222222222222"
 	)
-	handler := liveServiceHandler{
-		expectedSKI: replayExpectedSKI,
-		denied:      make(map[string]struct{}),
-	}
 	base := time.Unix(0, 0).UTC()
 	tracker := &postWithdrawalTracker{}
 	denied := false
@@ -399,7 +395,7 @@ func replayNegativeObservationsFrom(payload []byte) (negativeObservation, negati
 			if event.Peer == replayPeerUnexpected {
 				peerSKI = replayUnexpectedSKI
 			}
-			allowed := handler.allowRemote(peerSKI)
+			allowed := strings.EqualFold(strings.TrimSpace(peerSKI), replayExpectedSKI)
 			transition := replayTransitionAccessAllowed
 			if !allowed {
 				transition = replayTransitionAccessDenied

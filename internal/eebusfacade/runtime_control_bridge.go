@@ -127,7 +127,6 @@ func runtimeControlRecordFromStore(source eebusstore.ControlRecord) (firstTrustC
 		tombstones:     make([]firstTrustRevocationTombstone, len(source.Tombstones)),
 		quarantines:    make([]firstTrustQuarantineRecord, len(source.Quarantines)),
 		receipts:       make([]firstTrustDurableReceipt, len(source.Receipts)),
-		attempts:       make([]firstTrustOutgoingAttemptRecord, len(source.Attempts)),
 	}
 	for index, value := range source.Tombstones {
 		result.tombstones[index] = firstTrustRevocationTombstone{
@@ -158,19 +157,6 @@ func runtimeControlRecordFromStore(source eebusstore.ControlRecord) (firstTrustC
 			bindingSHA256: value.BindingSHA256, result: resultCode, terminal: value.Terminal,
 		}
 	}
-	for index, value := range source.Attempts {
-		state, stateOK := runtimeOutgoingAttemptStateFromCode(value.StateCode)
-		if !stateOK {
-			return firstTrustControlRecord{}, false
-		}
-		result.attempts[index] = firstTrustOutgoingAttemptRecord{
-			state: state, attemptID: value.AttemptID, remoteSKI: append([]byte(nil), value.RemoteSKI...),
-			scope: value.Scope, controlEpoch: value.ControlEpoch, associationLineage: value.AssociationLineage,
-			endpoint: firstTrustOutgoingAttemptEndpoint{host: value.EndpointHost, port: value.EndpointPort}, path: value.Path,
-			cancellationGeneration: value.CancellationGeneration, reservationOrder: value.ReservationOrder,
-			reservationTimestamp: value.ReservationTimestamp, attemptCountBefore: value.AttemptCountBefore,
-		}
-	}
 	return result, true
 }
 
@@ -185,7 +171,6 @@ func runtimeControlRecordToStore(source firstTrustControlRecord) (eebusstore.Con
 		Tombstones:     make([]eebusstore.ControlTombstone, len(source.tombstones)),
 		Quarantines:    make([]eebusstore.ControlQuarantine, len(source.quarantines)),
 		Receipts:       make([]eebusstore.ControlReceipt, len(source.receipts)),
-		Attempts:       make([]eebusstore.ControlAttempt, len(source.attempts)),
 	}
 	if source.replacementIdentity != nil {
 		identity := source.replacementIdentity
@@ -227,19 +212,6 @@ func runtimeControlRecordToStore(source firstTrustControlRecord) (eebusstore.Con
 		result.Receipts[index] = eebusstore.ControlReceipt{
 			OperationID: value.operationID, OperationClass: operationClass,
 			BindingSHA256: value.bindingSHA256, ResultCode: resultCode, Terminal: value.terminal,
-		}
-	}
-	for index, value := range source.attempts {
-		state, stateOK := runtimeOutgoingAttemptStateCode(value.state)
-		if !stateOK {
-			return eebusstore.ControlRecord{}, false
-		}
-		result.Attempts[index] = eebusstore.ControlAttempt{
-			StateCode: state, AttemptID: value.attemptID, RemoteSKI: append([]byte(nil), value.remoteSKI...),
-			Scope: value.scope, ControlEpoch: value.controlEpoch, AssociationLineage: value.associationLineage,
-			EndpointHost: value.endpoint.host, EndpointPort: value.endpoint.port, Path: value.path,
-			CancellationGeneration: value.cancellationGeneration, ReservationOrder: value.reservationOrder,
-			ReservationTimestamp: value.reservationTimestamp, AttemptCountBefore: value.attemptCountBefore,
 		}
 	}
 	return result, true
@@ -303,11 +275,10 @@ func runtimePendingToStore(source firstTrustPendingPublication) eebusstore.Contr
 	}
 }
 
-var runtimeOperationClasses = []string{"first_trust", "revocation", "reconcile_pending_publication", "publish_inactive_parent", "adopt_copied_current", "recover_unavailable_host_key", "release_retry_quarantine", "attempt_prepare", "attempt_authorize", "attempt_complete_success", "attempt_complete_failure", "attempt_abort", "attempt_restart_synthetic_failure", "attempt_fallback_prepare"}
+var runtimeOperationClasses = []string{"first_trust", "revocation", "reconcile_pending_publication", "publish_inactive_parent", "adopt_copied_current", "recover_unavailable_host_key", "release_retry_quarantine"}
 var runtimeReceiptResults = []string{"trusted", "revoked", "repaired_unpaired", "operation_terminal", "failed_closed_unchanged", "revocation_withdrawal_incomplete"}
 var runtimeQuarantineReasons = []string{"RETRYABLE_FAILURE", "ADMIN_HOLD", "HANDSHAKE_ATTEMPT_LIMIT"}
 var runtimeQuarantineStates = []string{"BACKOFF_ACTIVE", "RETRY_READY", "ADMIN_HOLD"}
-var runtimeOutgoingAttemptStates = []string{"ATTEMPT_RESERVED", "ATTEMPT_LAUNCH_AUTHORIZED"}
 
 func runtimeOperationClassCode(value string) (uint64, bool) {
 	return runtimeClosedCode(runtimeOperationClasses, value)
@@ -333,13 +304,6 @@ func runtimeQuarantineStateCode(value string) (uint64, bool) {
 func runtimeQuarantineStateFromCode(value uint64) (string, bool) {
 	return runtimeClosedValue(runtimeQuarantineStates, value)
 }
-func runtimeOutgoingAttemptStateCode(value string) (uint64, bool) {
-	return runtimeClosedCode(runtimeOutgoingAttemptStates, value)
-}
-func runtimeOutgoingAttemptStateFromCode(value uint64) (string, bool) {
-	return runtimeClosedValue(runtimeOutgoingAttemptStates, value)
-}
-
 func runtimeClosedCode(values []string, value string) (uint64, bool) {
 	for index, candidate := range values {
 		if candidate == value {
