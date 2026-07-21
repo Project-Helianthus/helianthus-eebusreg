@@ -25,6 +25,8 @@ import (
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
+const runtimeTestNodeToken = "0123456789abcdef0123456789abcdef"
+
 func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testing.T) {
 	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "runtime-test")
 	if err != nil {
@@ -40,6 +42,7 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 			return runtimeMaterial{
 				certificate: certificate,
 				localSKI:    localSKI,
+				nodeToken:   runtimeTestNodeToken,
 				pretrusted:  map[string]bool{remoteSKI: true},
 			}, nil
 		},
@@ -170,6 +173,7 @@ func TestAcquireRuntimeKeepsFirstTrustDisabledWithoutInternalAuthorization(t *te
 			return runtimeMaterial{
 				certificate: certificate,
 				localSKI:    localSKI,
+				nodeToken:   runtimeTestNodeToken,
 				pretrusted:  map[string]bool{remoteSKI: true},
 			}, nil
 		},
@@ -224,6 +228,7 @@ func TestAcquireRuntimeComposesAndOwnsAuthorizedFirstTrustResources(t *testing.T
 		return runtimeMaterial{
 			certificate: certificate,
 			localSKI:    localSKI,
+			nodeToken:   runtimeTestNodeToken,
 			pretrusted:  map[string]bool{remoteSKI: true},
 			firstTrust: &runtimeFirstTrustAuthorization{
 				adminRuntimeDir:  adminRuntimeDir,
@@ -347,6 +352,7 @@ func TestAcquireRuntimeFailsClosedAndReleasesStoreWhenAdminStartFails(t *testing
 		return runtimeMaterial{
 			certificate: certificate,
 			localSKI:    localSKI,
+			nodeToken:   runtimeTestNodeToken,
 			pretrusted:  map[string]bool{remoteSKI: true},
 			firstTrust: &runtimeFirstTrustAuthorization{
 				adminRuntimeDir:  adminRuntimeDir,
@@ -439,7 +445,7 @@ func TestPinnedEEBusServiceProvidesScopedSHIPLifecycle(t *testing.T) {
 	service, err := newEEBusService(RuntimeConfig{
 		Interface: "fixture-interface", ListenPort: 4711,
 		ListenAddress: netip.MustParseAddrPort("127.0.0.1:4711"),
-	}, runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate)}, nil)
+	}, runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate), nodeToken: runtimeTestNodeToken}, nil)
 	if err != nil {
 		t.Fatalf("newEEBusService() error = %v", err)
 	}

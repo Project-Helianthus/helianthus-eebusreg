@@ -39,6 +39,7 @@ func TestIssue54OpeningPairingOnlyChangesLocalRegistration(t *testing.T) {
 func TestIssue54ConfiguredTrustedEndpointIsPolicyWithoutSyntheticObservation(t *testing.T) {
 	harness := newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
 		setup.configureRemote = configureMSP05POutboundEndpoint
+		setup.suppressVisible = true
 	})
 	time.Sleep(20 * time.Millisecond)
 	state := snapshotMSP05POutboundState(harness.service)
@@ -88,6 +89,7 @@ func newMSP05POutboundHarness(t *testing.T, endpoint, discovery bool) *msp045Run
 		setup.view.associations = nil
 		setup.remotePretrusted = &pretrusted
 		setup.discoveryEnabled = discovery
+		setup.suppressVisible = true
 		if endpoint {
 			setup.configureRemote = configureMSP05POutboundEndpoint
 		}

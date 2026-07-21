@@ -414,7 +414,8 @@ func (fixture *msp04crRuntimeFixture) acquire(t *testing.T, service *msp04crServ
 	dependencies := defaultRuntimeDependencies
 	dependencies.loadMaterial = func(context.Context, string) (runtimeMaterial, error) {
 		return runtimeMaterial{
-			certificate: fixture.certificate, localSKI: fixture.localSKI, pretrusted: map[string]bool{fixture.remoteSKI: true},
+			certificate: fixture.certificate, localSKI: fixture.localSKI, nodeToken: runtimeTestNodeToken,
+			pretrusted: map[string]bool{fixture.remoteSKI: true},
 			firstTrust: &runtimeFirstTrustAuthorization{
 				adminRuntimeDir: filepath.Join(fixture.root, admin), hostAnchor: fixture.hostAnchor,
 				identityProvider: fixture.anchor, keyProviders: []eebusstore.KeyProviderBinding{fixture.anchor.keyBinding()},

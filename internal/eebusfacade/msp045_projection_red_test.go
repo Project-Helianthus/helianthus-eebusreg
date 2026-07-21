@@ -62,12 +62,12 @@ func TestMSP045PairingRequiresEveryDurableEligibilityGate(t *testing.T) {
 		wantReason   string
 		wantRecovery string
 	}{
-		{name: "all gates", wantState: "paired", wantPaired: true, wantReason: "no-visible-services", wantRecovery: "PAIRED_TRUSTED"},
-		{name: "inactive", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].active = false }, wantState: "unpaired", wantReason: "no-visible-services", wantRecovery: "UNPAIRED_LOCKED"},
-		{name: "untrusted", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].trusted = false }, wantState: "unpaired", wantReason: "no-visible-services", wantRecovery: "UNPAIRED_LOCKED"},
-		{name: "not allowlisted", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].allowlisted = false }, wantState: "unpaired", wantReason: "no-visible-services", wantRecovery: "UNPAIRED_LOCKED"},
-		{name: "not reconnectable", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].reconnectable = false }, wantState: "unpaired", wantReason: "no-visible-services", wantRecovery: "UNPAIRED_LOCKED"},
-		{name: "stale lineage", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].lineage = msp045Opaque(t) }, wantState: "unpaired", wantReason: "no-visible-services", wantRecovery: "UNPAIRED_LOCKED"},
+		{name: "all gates", wantState: "paired", wantPaired: true, wantRecovery: "PAIRED_TRUSTED"},
+		{name: "inactive", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].active = false }, wantState: "unpaired", wantRecovery: "UNPAIRED_LOCKED"},
+		{name: "untrusted", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].trusted = false }, wantState: "unpaired", wantRecovery: "UNPAIRED_LOCKED"},
+		{name: "not allowlisted", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].allowlisted = false }, wantState: "unpaired", wantRecovery: "UNPAIRED_LOCKED"},
+		{name: "not reconnectable", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].reconnectable = false }, wantState: "unpaired", wantRecovery: "UNPAIRED_LOCKED"},
+		{name: "stale lineage", mutate: func(setup *msp045ProductSetup) { setup.view.associations[0].lineage = msp045Opaque(t) }, wantState: "unpaired", wantRecovery: "UNPAIRED_LOCKED"},
 		{name: "tombstoned", mutate: func(setup *msp045ProductSetup) { msp045AddTombstone(t, setup) }, wantState: "denied", wantReason: "denied-trust", wantRecovery: "REVOKED"},
 	}
 	for _, test := range tests {
@@ -160,8 +160,8 @@ func TestMSP045ClosedDegradationPrecedence(t *testing.T) {
 			setup.storeOutcome = "key_provider_unavailable"
 			setup.view.associations = nil
 		}, wantState: "unknown", wantReason: "certificate-unavailable"},
-		{name: "paired disconnect", disconnect: true, wantState: "paired", wantPaired: true, wantReason: "remote-disconnect"},
-		{name: "unpaired liveness", mutate: func(setup *msp045ProductSetup) { setup.view.associations = nil }, wantState: "unpaired", wantReason: "no-visible-services"},
+		{name: "disconnect before connection", disconnect: true, wantState: "paired", wantPaired: true},
+		{name: "unpaired visibility", mutate: func(setup *msp045ProductSetup) { setup.view.associations = nil }, wantState: "unpaired"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -262,7 +262,7 @@ func TestMSP045DurablePairingPublishesWithoutNetworkCallback(t *testing.T) {
 	updates := msp045InstallPublisher(harness.handler)
 	pairRuntimeRemote(t, harness.resources, harness.remoteSKI, 4_501)
 	snapshot := msp045WaitForTrust(t, updates, "paired")
-	msp045AssertTrust(t, snapshot, "paired", true, "no-visible-services")
+	msp045AssertTrust(t, snapshot, "paired", true, "")
 }
 
 func TestMSP045CommitFailureProductsFailClosed(t *testing.T) {
@@ -286,7 +286,7 @@ func TestMSP045CommitFailureProductsFailClosed(t *testing.T) {
 		{name: "prepared descriptor mismatch", configure: func(harness *msp045RuntimeHarness) { msp045SetBridgeOutcome(harness, "commit_durable", true, false) }, wantState: "unknown", wantReason: "denied-trust"},
 		{name: "commit not published and anchor cleared", configure: func(harness *msp045RuntimeHarness) {
 			msp045SetBridgeOutcome(harness, "commit_not_published", false, false)
-		}, wantState: "unpaired", wantReason: "no-visible-services"},
+		}, wantState: "unpaired"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -399,7 +399,7 @@ func TestMSP045RepairAndRevocationPublishWithoutNetworkCallback(t *testing.T) {
 			t.Fatalf("repair = %q", got)
 		}
 		snapshot := msp045WaitForTrust(t, updates, "unpaired")
-		msp045AssertTrust(t, snapshot, "unpaired", false, "no-visible-services")
+		msp045AssertTrust(t, snapshot, "unpaired", false, "")
 	})
 
 	t.Run("revocation", func(t *testing.T) {
@@ -414,7 +414,7 @@ func TestMSP045RepairAndRevocationPublishWithoutNetworkCallback(t *testing.T) {
 	})
 }
 
-func TestMSP045StartupPublishesAuthoritativeProjectionWithoutNetworkCallback(t *testing.T) {
+func TestMSP045VisibleCallbackPublishesAuthoritativeProjection(t *testing.T) {
 	tests := []struct {
 		name       string
 		mutate     func(*msp045ProductSetup)
@@ -422,10 +422,10 @@ func TestMSP045StartupPublishesAuthoritativeProjectionWithoutNetworkCallback(t *
 		wantPaired bool
 		wantReason string
 	}{
-		{name: "durably trusted", wantState: "paired", wantPaired: true, wantReason: "no-visible-services"},
+		{name: "durably trusted", wantState: "paired", wantPaired: true},
 		{name: "not yet trusted", mutate: func(setup *msp045ProductSetup) {
 			setup.view.associations = nil
-		}, wantState: "unpaired", wantReason: "no-visible-services"},
+		}, wantState: "unpaired"},
 		{name: "terminal denial", mutate: func(setup *msp045ProductSetup) {
 			msp045AddTombstone(t, setup)
 		}, wantState: "denied", wantReason: "denied-trust"},
@@ -837,7 +837,7 @@ func TestMSP045ScopedListenerLifecycleIsAvailableThroughTheInternalFacade(t *tes
 	service, err := newEEBusService(RuntimeConfig{
 		Interface: "fixture-interface", ListenPort: 4711,
 		ListenAddress: netip.MustParseAddrPort("127.0.0.1:4711"),
-	}, runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate)}, nil)
+	}, runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate), nodeToken: runtimeTestNodeToken}, nil)
 	if err != nil {
 		t.Fatalf("construct scoped listener service: %v", err)
 	}
@@ -869,6 +869,7 @@ type msp045ProductSetup struct {
 	wrapRuntime           func(*msp045Service, eebusapi.ServiceReaderInterface) runtimeService
 	withoutOutbound       bool
 	discoveryEnabled      bool
+	suppressVisible       bool
 }
 
 type msp045RuntimeHarness struct {
@@ -938,6 +939,7 @@ func newMSP045ProductHarness(t *testing.T, mutate func(*msp045ProductSetup)) *ms
 		remotePretrusted: setup.remotePretrusted, configureRemote: setup.configureRemote,
 		configureService: setup.configureService, withoutOutbound: setup.withoutOutbound,
 		wrapRuntime: setup.wrapRuntime, discoveryEnabled: setup.discoveryEnabled,
+		suppressVisible: setup.suppressVisible,
 	})
 }
 
@@ -957,6 +959,7 @@ type msp045AcquireOptions struct {
 	wrapRuntime      func(*msp045Service, eebusapi.ServiceReaderInterface) runtimeService
 	withoutOutbound  bool
 	discoveryEnabled bool
+	suppressVisible  bool
 }
 
 func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045RuntimeHarness {
@@ -987,6 +990,7 @@ func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045Run
 		return runtimeMaterial{
 			certificate: options.certificate,
 			localSKI:    options.localSKI,
+			nodeToken:   runtimeTestNodeToken,
 			pretrusted:  trusted,
 			firstTrust: &runtimeFirstTrustAuthorization{
 				adminRuntimeDir: options.adminRoot, keyProviders: options.keyProviders,
@@ -1036,6 +1040,9 @@ func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045Run
 	}
 	if bridge, ok := options.bridge.(*msp045Bridge); ok {
 		harness.bridge = bridge
+	}
+	if !options.suppressVisible {
+		reader.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{Ski: remoteSKI}})
 	}
 	t.Cleanup(func() {
 		if err := backend.Close(); err != nil {

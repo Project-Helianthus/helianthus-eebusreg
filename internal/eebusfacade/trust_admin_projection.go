@@ -35,12 +35,12 @@ func (handler *runtimeServiceHandler) bindTrustAdminProjection(coordinator *firs
 	if handler == nil || coordinator == nil {
 		return errors.New("trust admin projection runtime binding is incomplete")
 	}
-	graph := handler.reducer.Snapshot()
-	remotes := make([]string, len(graph))
-	decoded := make([][]byte, len(graph))
-	for index, observation := range graph {
-		remotes[index] = observation.RemoteSKI
-		remote, err := hex.DecodeString(observation.RemoteSKI)
+	handler.mu.Lock()
+	remotes := append([]string(nil), handler.policyRemotes...)
+	handler.mu.Unlock()
+	decoded := make([][]byte, len(remotes))
+	for index, ski := range remotes {
+		remote, err := hex.DecodeString(ski)
 		if err != nil || len(remote) != 20 {
 			return errors.New("trust admin projection runtime remote is invalid")
 		}
@@ -77,7 +77,7 @@ func (handler *runtimeServiceHandler) bindTrustAdminProjection(coordinator *firs
 }
 
 func applyTrustAdminProjection(graph []runtimeGraphObservation, remotes []string, projection trustAdminProjection) {
-	valid := projection.contract == trustAdminProjectionContract && projection.revision != 0 && len(graph) == len(remotes) && len(projection.remotes) == len(remotes)
+	valid := projection.contract == trustAdminProjectionContract && projection.revision != 0 && len(projection.remotes) == len(remotes)
 	if projection.degradation != "" && projection.degradation != "denied-trust" && projection.degradation != "certificate-unavailable" {
 		valid = false
 	}
@@ -92,14 +92,6 @@ func applyTrustAdminProjection(graph []runtimeGraphObservation, remotes []string
 			byRemote[remotes[index]] = result
 		}
 	}
-	if valid {
-		for _, observation := range graph {
-			if _, exists := byRemote[observation.RemoteSKI]; !exists {
-				valid = false
-				break
-			}
-		}
-	}
 	if !valid {
 		for index := range graph {
 			graph[index].PairingState = "unknown"
@@ -109,7 +101,10 @@ func applyTrustAdminProjection(graph []runtimeGraphObservation, remotes []string
 		return
 	}
 	for index := range graph {
-		result := byRemote[graph[index].RemoteSKI]
+		result, configured := byRemote[graph[index].RemoteSKI]
+		if !configured {
+			continue
+		}
 		graph[index].PairingState = result.state
 		graph[index].Paired = result.paired
 		graph[index].TrustDegradation = projection.degradation

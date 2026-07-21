@@ -3,6 +3,7 @@ package eebusfacade
 import (
 	"context"
 	"crypto"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -70,6 +71,7 @@ type serviceBackend struct {
 type runtimeMaterial struct {
 	certificate           tls.Certificate
 	localSKI              string
+	nodeToken             string
 	pretrusted            map[string]bool
 	firstTrust            *runtimeFirstTrustAuthorization
 	outgoingAttemptBridge *firstTrustOutgoingAttemptBridge
@@ -275,18 +277,14 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	}
 	for _, remote := range config.Remotes {
 		if firstTrust == nil {
+			if !remote.Pretrusted {
+				continue
+			}
 			service.RegisterRemoteSKI(remote.SKI)
 			continue
 		}
-		outcome, outbound := firstTrust.coordinator.registerConfiguredRemote(remote)
-		if outcome != "registered" {
-			continue
-		}
-		if outbound == nil {
-			return nil, closeRuntime(errRuntimeOutboundEndpointFailed)
-		}
-		if err := <-outbound; err != nil {
-			return nil, closeRuntime(errRuntimeOutboundEndpointFailed)
+		if firstTrust.coordinator.registerConfiguredRemote(remote) == "registered" {
+			service.RegisterRemoteSKI(remote.SKI)
 		}
 	}
 	backend := &serviceBackend{service: service, handler: handler, firstTrust: firstTrust}
@@ -433,7 +431,7 @@ func newProtectedTLSCertificate(certificateChain [][]byte, signer crypto.Signer)
 
 func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebusapi.ServiceReaderInterface) (runtimeService, error) {
 	configuration, err := eebusapi.NewConfiguration(
-		"Project-Helianthus", "Helianthus", "eebusreg", material.localSKI,
+		"Project-Helianthus", "Helianthus", "eebusreg", material.nodeToken,
 		spinemodel.DeviceTypeTypeEnergyManagementSystem,
 		[]spinemodel.EntityTypeType{spinemodel.EntityTypeTypeCEM},
 		config.ListenPort, material.certificate, 4*time.Second,
@@ -441,6 +439,8 @@ func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebu
 	if err != nil {
 		return nil, err
 	}
+	configuration.SetAlternateIdentifier("HLS-" + material.nodeToken)
+	configuration.SetAlternateMdnsServiceName("Helianthus EnergyManagementSystem eebusreg")
 	configuration.SetInterfaces([]string{config.Interface})
 	options := eebusservicebridge.ServiceOptions{
 		ListenerPolicy: &eebusservicebridge.ListenerPolicy{
@@ -477,7 +477,25 @@ func validateRuntimeMaterial(material runtimeMaterial) error {
 	if err != nil || certificateSKI != material.localSKI {
 		return errors.New("protected local SKI does not match the certificate")
 	}
+	if !validRuntimeNodeToken(material.nodeToken) {
+		return errors.New("protected node token must contain 32 lowercase hexadecimal characters")
+	}
 	return nil
+}
+
+func canonicalRuntimeNodeToken(storeInstance [sha256.Size]byte) string {
+	digest := sha256.New()
+	_, _ = digest.Write([]byte("helianthus-eebus-node-v1\x00"))
+	_, _ = digest.Write(storeInstance[:])
+	return hex.EncodeToString(digest.Sum(nil)[:16])
+}
+
+func validRuntimeNodeToken(value string) bool {
+	if len(value) != 32 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func validRuntimeSKI(value string) bool {
@@ -499,6 +517,7 @@ type runtimeServiceHandler struct {
 	projectionCapture         func() trustAdminProjection
 	projectionLivenessAllowed func(string) bool
 	projectionRemotes         []string
+	policyRemotes             []string
 	publishedTrustRevision    uint64
 	now                       func() time.Time
 	publish                   func([]byte)
@@ -521,23 +540,10 @@ func newRuntimeServiceHandler(config RuntimeConfig, localSKI string, now func() 
 		now:          now,
 		errors:       make(chan error, 1),
 	}
-	since := handler.timestamp()
 	for _, remote := range config.Remotes {
-		observation := runtimeGraphObservation{
-			RuntimeID:    handler.runtimeID,
-			LocalSKI:     localSKI,
-			RemoteSKI:    remote.SKI,
-			SessionState: "connecting",
-			PairingState: string(eebusraw.PairingStateUnpaired),
-			Since:        since,
-			ServiceIDs:   []string{"service:" + remote.SKI},
-		}
-		observation.SessionID = runtimeSessionIdentity(observation)
-		if err := handler.reducer.Replace(observation); err != nil {
-			return nil, err
-		}
-		handler.observations[remote.SKI] = observation
+		handler.policyRemotes = append(handler.policyRemotes, strings.ToLower(strings.TrimSpace(remote.SKI)))
 	}
+	sort.Strings(handler.policyRemotes)
 	return handler, nil
 }
 
@@ -557,7 +563,10 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		handler.report(err)
 		return
 	}
-	handler.updateRemote(ski, func(observation *runtimeGraphObservation) {
+	handler.updateRemote(ski, true, func(observation *runtimeGraphObservation) {
+		if len(observation.ServiceIDs) == 0 {
+			observation.ServiceIDs = []string{"service:" + ski}
+		}
 		observation.SessionIndex++
 		observation.SessionID = runtimeSessionIdentity(*observation)
 		observation.SessionState = "connected"
@@ -572,7 +581,10 @@ func (handler *runtimeServiceHandler) RemoteSKIDisconnected(_ eebusapi.ServiceIn
 	if !handler.remoteLivenessAllowed(ski) {
 		return
 	}
-	handler.updateRemote(ski, func(observation *runtimeGraphObservation) {
+	handler.updateRemote(ski, false, func(observation *runtimeGraphObservation) {
+		if observation.SessionID == "" {
+			return
+		}
 		observation.SessionState = "disconnected"
 		observation.Since = handler.timestamp()
 	})
@@ -589,6 +601,24 @@ func (handler *runtimeServiceHandler) VisibleRemoteServicesUpdated(_ eebusapi.Se
 
 	handler.mu.Lock()
 	changed := false
+	for ski := range visible {
+		if !handler.remoteLivenessAllowedLocked(ski) {
+			continue
+		}
+		if _, exists := handler.observations[ski]; exists {
+			continue
+		}
+		observation := handler.newRemoteObservation(ski)
+		observation.Visible = true
+		observation.ServiceIDs = []string{"service:" + ski}
+		if err := handler.reducer.Replace(observation); err != nil {
+			handler.mu.Unlock()
+			handler.report(err)
+			return
+		}
+		handler.observations[ski] = observation
+		changed = true
+	}
 	for ski, observation := range handler.observations {
 		if !handler.remoteLivenessAllowedLocked(ski) {
 			continue
@@ -622,9 +652,8 @@ func (handler *runtimeServiceHandler) ServiceShipIDUpdate(ski string, shipID str
 	if shipID == "" {
 		return
 	}
-	handler.updateRemote(ski, func(observation *runtimeGraphObservation) {
+	handler.updateRemote(ski, false, func(observation *runtimeGraphObservation) {
 		observation.ShipID = shipID
-		observation.SessionID = runtimeSessionIdentity(*observation)
 		observation.Since = handler.timestamp()
 	})
 }
@@ -651,20 +680,23 @@ func (handler *runtimeServiceHandler) ServicePairingDetailUpdate(ski string, det
 			sessionState = "degraded"
 		}
 	}
-	handler.updateRemote(ski, func(observation *runtimeGraphObservation) {
-		if sessionState == "degraded" {
+	handler.updateRemote(ski, false, func(observation *runtimeGraphObservation) {
+		if sessionState == "degraded" && observation.SessionID != "" {
 			observation.SessionState = sessionState
 		}
 		observation.Since = handler.timestamp()
 	})
 }
 
-func (handler *runtimeServiceHandler) updateRemote(ski string, update func(*runtimeGraphObservation)) {
+func (handler *runtimeServiceHandler) updateRemote(ski string, create bool, update func(*runtimeGraphObservation)) {
 	handler.mu.Lock()
 	observation, ok := handler.observations[ski]
 	if !ok {
-		handler.mu.Unlock()
-		return
+		if !create {
+			handler.mu.Unlock()
+			return
+		}
+		observation = handler.newRemoteObservation(ski)
 	}
 	update(&observation)
 	if err := handler.reducer.Replace(observation); err != nil {
@@ -675,6 +707,15 @@ func (handler *runtimeServiceHandler) updateRemote(ski string, update func(*runt
 	handler.observations[ski] = observation
 	handler.mu.Unlock()
 	handler.publishOrReport()
+}
+
+func (handler *runtimeServiceHandler) newRemoteObservation(ski string) runtimeGraphObservation {
+	return runtimeGraphObservation{
+		RuntimeID: handler.runtimeID,
+		LocalSKI:  handler.localSKI,
+		RemoteSKI: ski,
+		Since:     handler.timestamp(),
+	}
 }
 
 func (handler *runtimeServiceHandler) publishOrReport() {
@@ -921,7 +962,9 @@ func marshalRuntimeSnapshotWithIdentity(runtimeIdentity, localIdentity string, g
 		if err != nil {
 			return nil, err
 		}
-		payload.Pairing = append(payload.Pairing, runtimePairingPayload{Remote: remoteID, State: remote.PairingState, Since: remote.Since})
+		if remote.PairingState != "" {
+			payload.Pairing = append(payload.Pairing, runtimePairingPayload{Remote: remoteID, State: remote.PairingState, Since: remote.Since})
+		}
 		for _, serviceID := range remote.ServiceIDs {
 			id, err := eebusraw.RedactID(eebusraw.IDKindPeer, serviceID)
 			if err != nil {
@@ -929,11 +972,13 @@ func marshalRuntimeSnapshotWithIdentity(runtimeIdentity, localIdentity string, g
 			}
 			payload.Services = append(payload.Services, runtimeServicePayload{ID: id, Kind: "remote", Visible: remote.Visible, Paired: remote.Paired})
 		}
-		sessionID, err := eebusraw.RedactID(eebusraw.IDKindSession, remote.SessionID)
-		if err != nil {
-			return nil, err
+		if remote.SessionID != "" && remote.SessionState != "" {
+			sessionID, err := eebusraw.RedactID(eebusraw.IDKindSession, remote.SessionID)
+			if err != nil {
+				return nil, err
+			}
+			payload.Sessions = append(payload.Sessions, runtimeSessionPayload{ID: sessionID, Remote: remoteID, State: remote.SessionState, Since: remote.Since})
 		}
-		payload.Sessions = append(payload.Sessions, runtimeSessionPayload{ID: sessionID, Remote: remoteID, State: remote.SessionState, Since: remote.Since})
 		for _, device := range remote.Devices {
 			devicePayload, err := marshalRuntimeDevice(device)
 			if err != nil {
@@ -1067,19 +1112,22 @@ func normalizeRuntimeGraphObservation(source runtimeGraphObservation) (runtimeGr
 	result.SessionState = strings.TrimSpace(result.SessionState)
 	result.PairingState = strings.TrimSpace(result.PairingState)
 	result.TrustDegradation = strings.TrimSpace(result.TrustDegradation)
-	if result.RuntimeID == "" || result.LocalSKI == "" || result.RemoteSKI == "" || result.SessionID == "" {
+	if result.RuntimeID == "" || result.LocalSKI == "" || result.RemoteSKI == "" {
 		return runtimeGraphObservation{}, errors.New("runtime graph identities are required")
 	}
 	if !validRuntimeSKI(result.LocalSKI) || !validRuntimeSKI(result.RemoteSKI) {
 		return runtimeGraphObservation{}, errors.New("runtime graph SKIs must contain 40 hexadecimal characters")
 	}
 	switch result.SessionState {
-	case "unknown", "connecting", "connected", "disconnected", "degraded":
+	case "", "unknown", "connecting", "connected", "disconnected", "degraded":
 	default:
 		return runtimeGraphObservation{}, errors.New("runtime session state is unsupported")
 	}
+	if (result.SessionID == "") != (result.SessionState == "") {
+		return runtimeGraphObservation{}, errors.New("runtime session identity and state must be observed together")
+	}
 	switch result.PairingState {
-	case string(eebusraw.PairingStateUnknown), string(eebusraw.PairingStateUnpaired), string(eebusraw.PairingStatePaired), string(eebusraw.PairingStateDenied):
+	case "", string(eebusraw.PairingStateUnknown), string(eebusraw.PairingStateUnpaired), string(eebusraw.PairingStatePaired), string(eebusraw.PairingStateDenied):
 	default:
 		return runtimeGraphObservation{}, errors.New("runtime pairing state is unsupported")
 	}

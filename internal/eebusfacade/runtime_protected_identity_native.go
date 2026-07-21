@@ -232,6 +232,7 @@ func nativeProtectedMaterialFromControl(
 	return runtimeMaterial{
 		certificate: certificate,
 		localSKI:    hex.EncodeToString(record.LocalSKI),
+		nodeToken:   canonicalRuntimeNodeToken(record.StoreInstance),
 		pretrusted:  pretrusted,
 		firstTrust: &runtimeFirstTrustAuthorization{
 			adminRuntimeDir:  nativeProtectedAdminRuntimeDir(stateRoot),

@@ -42,8 +42,6 @@ type runtimeFirstTrustResources struct {
 	store       runtimeAssociationBridge
 	admin       firstTrustAdminEndpoint
 	adminDir    string
-	config      RuntimeConfig
-	outbound    *runtimeOutboundController
 }
 
 type runtimeServiceReader struct {
@@ -189,8 +187,7 @@ func classifyRuntimeFirstTrust(
 	if store == nil {
 		return nil, fmt.Errorf("first trust store unavailable: %s", outcome)
 	}
-	config.Remotes = append([]RuntimeRemote(nil), config.Remotes...)
-	resources := &runtimeFirstTrustResources{store: store, adminDir: adminRuntimeDir, config: config}
+	resources := &runtimeFirstTrustResources{store: store, adminDir: adminRuntimeDir}
 	monotonicOrigin := time.Now()
 	coordinator := newFirstTrustCoordinatorWithRecovery(
 		dependencies.now,
@@ -240,10 +237,8 @@ func attachRuntimeFirstTrust(
 	}
 	resources.reader = reader
 	resources.facade = facade
-	resources.outbound = newRuntimeOutboundController(resources.coordinator, trustService, service, resources.config)
 	resources.coordinator.mu.Lock()
 	resources.coordinator.effects = facade
-	resources.coordinator.outbound = resources.outbound
 	resources.coordinator.mu.Unlock()
 
 	lifetime, cancel := context.WithCancel(context.Background())
@@ -312,9 +307,6 @@ func (resources *runtimeFirstTrustResources) Close() error {
 		var registrationErr error
 		if resources.coordinator != nil {
 			registrationErr = resources.coordinator.shutdown()
-		}
-		if resources.outbound != nil {
-			resources.outbound.Close()
 		}
 		var storeErr error
 		if resources.store != nil {

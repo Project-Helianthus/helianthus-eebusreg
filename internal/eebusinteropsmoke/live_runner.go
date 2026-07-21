@@ -25,6 +25,7 @@ import (
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 	"github.com/Project-Helianthus/helianthus-ship-go/cert"
 	shiphub "github.com/Project-Helianthus/helianthus-ship-go/hub"
+	shipmdns "github.com/Project-Helianthus/helianthus-ship-go/mdns"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
 	"golang.org/x/sys/unix"
 )
@@ -107,8 +108,9 @@ type spineCapture struct {
 type liveServiceHandler struct {
 	expectedSKI string
 	service     *service.Service
-	hub         shipapi.HubInterface
+	hub         *shiphub.Hub
 	server      *instrumentedSHIPServer
+	pairingOpen bool
 
 	mu               sync.Mutex
 	expectedApproved bool
@@ -177,29 +179,17 @@ func runLiveVR940fProofWithDependencies(ctx context.Context, opts liveOptions, d
 	if dependencies.startService == nil || dependencies.startService(handler) != nil {
 		return liveProofFailures("live_service_start_failed")
 	}
-	publisher, err := startLANSHIPPublisher(
-		opts.Interface,
-		opts.Port,
-		handler.service.LocalService().SKI(),
-		handler.service.LocalService().ShipID(),
-		opts.PairingWindow,
-	)
-	if err != nil {
-		handler.shutdown()
-		return liveProofFailures("mdns_probe_unavailable")
-	}
 	shutdown := false
 	shutdownAll := func() {
 		if shutdown {
 			return
 		}
-		publisher.shutdown()
 		handler.shutdown()
 		shutdown = true
 	}
 	defer shutdownAll()
 
-	serviceFQDN := publisher.serviceFQDN
+	serviceFQDN := handler.serviceFQDN()
 	probeTimeout := 5 * time.Second
 	if opts.Timeout < probeTimeout {
 		probeTimeout = opts.Timeout
@@ -263,7 +253,7 @@ func runLiveVR940fProofWithDependencies(ctx context.Context, opts liveOptions, d
 		if err := windowTracker.observerReady(windowClock.Now()); err != nil {
 			return err
 		}
-		publisher.shutdown()
+		handler.withdrawAdvertisement()
 		if err := windowTracker.advertisementWithdrawn(windowClock.Now()); err != nil {
 			return err
 		}
@@ -337,6 +327,7 @@ func newLiveService(opts liveOptions, certificate tls.Certificate) (*liveService
 	handler := &liveServiceHandler{
 		expectedSKI: normalizeSKI(opts.RemoteSKI),
 		denied:      make(map[string]struct{}),
+		pairingOpen: opts.PairingWindow,
 	}
 	configuration, err := eebusapi.NewConfiguration(
 		"Helianthus",
@@ -354,13 +345,19 @@ func newLiveService(opts liveOptions, certificate tls.Certificate) (*liveService
 	}
 	configuration.SetAlternateIdentifier("Helianthus-EnergyManagementSystem-RawProbe")
 	configuration.SetAlternateMdnsServiceName(liveServiceName)
+	if strings.TrimSpace(opts.Interface) != "" {
+		configuration.SetInterfaces([]string{strings.TrimSpace(opts.Interface)})
+	}
 
 	handler.service = service.NewService(configuration, handler)
 	if err := handler.service.Setup(); err != nil {
 		return nil, err
 	}
 	localService := handler.service.LocalService()
-	discovery := &disabledInternalMDNS{}
+	discovery := shipmdns.NewMDNS(
+		localService.SKI(), configuration.DeviceBrand(), configuration.DeviceModel(), string(configuration.DeviceType()),
+		localService.ShipID(), configuration.MdnsServiceName(), configuration.Port(), configuration.Interfaces(), configuration.MdnsProviderSelection(),
+	)
 	hubReader := &liveHubReader{delegate: handler.service, handler: handler}
 	connectionHub := shiphub.NewHub(hubReader, discovery, configuration.Port(), certificate, localService)
 	handler.hub = connectionHub
@@ -375,25 +372,19 @@ func newLiveService(opts liveOptions, certificate tls.Certificate) (*liveService
 	return handler, nil
 }
 
-type disabledInternalMDNS struct{}
-
-func (*disabledInternalMDNS) Start(shipapi.MdnsReportInterface) error { return nil }
-func (*disabledInternalMDNS) Shutdown()                               {}
-func (*disabledInternalMDNS) AnnounceMdnsEntry() error                { return nil }
-func (*disabledInternalMDNS) UnannounceMdnsEntry()                    {}
-func (*disabledInternalMDNS) SetAutoAccept(bool)                      {}
-func (*disabledInternalMDNS) RequestMdnsEntries()                     {}
-
 func (h *liveServiceHandler) approveExpectedRemote() error {
 	if h == nil || h.service == nil || h.hub == nil || !validSKI(h.expectedSKI) {
 		return errors.New("expected remote approval configuration invalid")
 	}
 	h.service.SetAutoAccept(false)
-	if err := h.service.SetPairingRegistration(false); err != nil {
-		return fmt.Errorf("close expected remote pairing registration: %w", err)
+	if err := h.service.SetPairingRegistration(h.pairingOpen); err != nil {
+		return fmt.Errorf("set expected remote pairing registration: %w", err)
 	}
 	h.service.RegisterRemoteSKI(h.expectedSKI)
 	h.hub.SetAutoAccept(false)
+	if err := h.hub.SetPairingRegistration(h.pairingOpen); err != nil {
+		return fmt.Errorf("set SHIP pairing registration: %w", err)
+	}
 	h.hub.RegisterRemoteSKI(h.expectedSKI)
 	remote := h.hub.ServiceForSKI(h.expectedSKI)
 	if remote == nil || !remote.Trusted() || h.service.IsAutoAcceptEnabled() {
@@ -417,6 +408,17 @@ func (h *liveServiceHandler) shutdown() {
 		return
 	}
 	h.server.shutdown()
+}
+
+func (h *liveServiceHandler) serviceFQDN() string {
+	return h.service.Configuration().MdnsServiceName() + "._ship._tcp.local."
+}
+
+func (h *liveServiceHandler) withdrawAdvertisement() {
+	if h == nil || h.server == nil || h.server.discovery == nil {
+		return
+	}
+	h.server.discovery.UnannounceMdnsEntry()
 }
 
 func (h *liveServiceHandler) RemoteSKIConnected(_ eebusapi.ServiceInterface, ski string) {
@@ -446,6 +448,14 @@ func (h *liveServiceHandler) RemoteSKIConnected(_ eebusapi.ServiceInterface, ski
 		return
 	}
 	h.hub.SetAutoAccept(false)
+	if err := h.hub.SetPairingRegistration(false); err != nil {
+		h.mu.Lock()
+		h.connected = false
+		h.states = append(h.states, "pairing-registration-failed")
+		h.mu.Unlock()
+		go h.hub.CancelPairingWithSKI(ski)
+		return
+	}
 }
 
 func (h *liveServiceHandler) RemoteSKIDisconnected(_ eebusapi.ServiceInterface, ski string) {

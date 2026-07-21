@@ -109,7 +109,7 @@ func TestMSP05PServiceBackendReportsListenerTerminalAndClaimsPublisherOnce(t *te
 			if certificateErr != nil {
 				return runtimeMaterial{}, certificateErr
 			}
-			return runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate), pretrusted: map[string]bool{remoteSKI: true}}, nil
+			return runtimeMaterial{certificate: certificate, localSKI: certificateSKI(t, certificate), nodeToken: runtimeTestNodeToken, pretrusted: map[string]bool{remoteSKI: true}}, nil
 		},
 		newService: func(RuntimeConfig, runtimeMaterial, eebusapi.ServiceReaderInterface) (runtimeService, error) {
 			return service, nil

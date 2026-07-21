@@ -166,7 +166,7 @@ func TestOperatorProofRequiresPrivateKnownFields(t *testing.T) {
 	}
 }
 
-func TestLiveServicePreapprovesOnlyExpectedSKIAndDisablesInternalMDNS(t *testing.T) {
+func TestLiveServicePreapprovesOnlyExpectedSKIAndUsesIntegratedMDNS(t *testing.T) {
 	expected := "0123456789abcdef0123456789abcdef01234567"
 	certificate, err := cert.CreateCertificate("Helianthus", "Project", "RO", "pairing-test")
 	if err != nil {
@@ -190,16 +190,15 @@ func TestLiveServicePreapprovesOnlyExpectedSKIAndDisablesInternalMDNS(t *testing
 	if handler.hub.ServiceForSKI(competing).Trusted() {
 		t.Fatal("competing SKI was preapproved")
 	}
-	interfaces := handler.service.Configuration().Interfaces()
-	if len(interfaces) != 0 {
-		t.Fatalf("eebus discovery interfaces = %v, want no internal discovery configuration", interfaces)
+	if handler.server.discovery == nil {
+		t.Fatal("live service omitted integrated SHIP discovery")
 	}
-	if _, ok := handler.server.discovery.(*disabledInternalMDNS); !ok {
-		t.Fatalf("internal discovery = %T, want disabledInternalMDNS", handler.server.discovery)
+	if got := handler.serviceFQDN(); got != liveServiceName+"._ship._tcp.local." {
+		t.Fatalf("integrated service FQDN = %q", got)
 	}
 }
 
-func TestLiveServiceStartsWithInternalMDNSDisabled(t *testing.T) {
+func TestLiveServiceStartsWithIntegratedMDNS(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -223,7 +222,7 @@ func TestLiveServiceStartsWithInternalMDNSDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := handler.start(); err != nil {
-		t.Fatalf("live service startup with internal mDNS disabled: %v", err)
+		t.Fatalf("live service startup with integrated mDNS: %v", err)
 	}
 }
 

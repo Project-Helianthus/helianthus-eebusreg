@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	shipmdns "github.com/Project-Helianthus/helianthus-ship-go/mdns"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/sys/unix"
 )
@@ -38,58 +37,6 @@ type liveDiscovery struct {
 	SHIP            int
 	ExpectedActive  int
 	ExpectedGoodbye int
-}
-
-type lanSHIPPublisher struct {
-	provider    lanSHIPMDNSProvider
-	serviceFQDN string
-}
-
-type lanSHIPMDNSProvider interface {
-	Announce(serviceName string, port int, txt []string) error
-	Shutdown()
-}
-
-var lanSHIPInterfaceByName = net.InterfaceByName
-
-var newLANSHIPMDNSProvider = func(ifaces []net.Interface) lanSHIPMDNSProvider {
-	return shipmdns.NewZeroconfProvider(ifaces)
-}
-
-func startLANSHIPPublisher(ifaceName string, port int, ski, shipID string, pairingWindow bool) (*lanSHIPPublisher, error) {
-	ifaceName = strings.TrimSpace(ifaceName)
-	ski = normalizeSKI(ski)
-	shipID = strings.TrimSpace(shipID)
-	if ifaceName == "" || port < 1 || port > 65535 || !validSKI(ski) || shipID == "" {
-		return nil, errors.New("LAN SHIP publisher configuration invalid")
-	}
-	iface, err := lanSHIPInterfaceByName(ifaceName)
-	if err != nil {
-		return nil, fmt.Errorf("LAN SHIP publisher interface unavailable: %w", err)
-	}
-	txt := []string{
-		"txtvers=1",
-		"path=/ship/",
-		"id=" + shipID,
-		"ski=" + ski,
-		"brand=Helianthus",
-		"model=RawProbe",
-		"type=EnergyManagementSystem",
-		fmt.Sprintf("register=%t", pairingWindow),
-	}
-	provider := newLANSHIPMDNSProvider([]net.Interface{*iface})
-	if err := provider.Announce(liveServiceName, port, txt); err != nil {
-		return nil, fmt.Errorf("LAN SHIP publisher start failed: %w", err)
-	}
-	return &lanSHIPPublisher{provider: provider, serviceFQDN: liveServiceName + "._ship._tcp.local."}, nil
-}
-
-func (p *lanSHIPPublisher) shutdown() {
-	if p == nil || p.provider == nil {
-		return
-	}
-	p.provider.Shutdown()
-	p.provider = nil
 }
 
 func runLiveVR940fSmoke(ctx context.Context, opts liveOptions) caseResult {
