@@ -185,6 +185,17 @@ func main() { factory.ConstructPeer() }
 			want: "calls-upstream-service.ConstructPeer",
 		},
 		{
+			name: "aliased SHIP responder constructor",
+			path: filepath.Join("internal", "mutation", "main.go"),
+			source: `package main
+
+import responder "github.com/Project-Helianthus/helianthus-ship-go/hub"
+
+func main() { responder.ConstructPeer() }
+`,
+			want: "calls-ship-hub.ConstructPeer",
+		},
+		{
 			name: "renamed fake peer dispatch",
 			path: filepath.Join("internal", "mutation", "main.go"),
 			source: `package main
@@ -210,6 +221,8 @@ func main() { runFakePeerSmoke(fakePeerOptions{}) }
 const (
 	issue55UpstreamServicePath = "github.com/Project-Helianthus/helianthus-eebus-go/service"
 	issue55ServiceBridgePath   = "github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusservicebridge"
+	issue55ShipHubPath         = "github.com/Project-Helianthus/helianthus-ship-go/hub"
+	issue55ShipConnectionPath  = "github.com/Project-Helianthus/helianthus-ship-go/ship"
 	issue55ShipMDNSPath        = "github.com/Project-Helianthus/helianthus-ship-go/mdns"
 	issue55CanonicalBridgeFile = "internal/eebusservicebridge/service.go"
 	issue55CanonicalRuntime    = "internal/eebusfacade/runtime.go"
@@ -248,6 +261,12 @@ func inspectIssue55PublisherSource(root, filename string, source []byte, result 
 		if importPath == issue55ShipMDNSPath {
 			result.findings = append(result.findings, relative+":imports-ship-mdns")
 		}
+		if importPath == issue55ShipHubPath {
+			result.findings = append(result.findings, relative+":imports-ship-hub")
+		}
+		if importPath == issue55ShipConnectionPath {
+			result.findings = append(result.findings, relative+":imports-ship-connection")
+		}
 	}
 	ast.Inspect(parsed, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
@@ -277,6 +296,10 @@ func inspectIssue55PublisherSource(root, filename string, source []byte, result 
 			}
 		case issue55ShipMDNSPath:
 			result.findings = append(result.findings, relative+":calls-ship-mdns."+selector.Sel.Name)
+		case issue55ShipHubPath:
+			result.findings = append(result.findings, relative+":calls-ship-hub."+selector.Sel.Name)
+		case issue55ShipConnectionPath:
+			result.findings = append(result.findings, relative+":calls-ship-connection."+selector.Sel.Name)
 		}
 		return true
 	})
