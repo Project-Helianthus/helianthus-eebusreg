@@ -48,7 +48,7 @@ func TestMSP045AdmissionInputsNeverProveDurablePairing(t *testing.T) {
 				t.Fatal(err)
 			}
 			snapshot, _ := msp045Capture(t, handler)
-			msp045AssertTrust(t, snapshot, "unpaired", false, "no-visible-services")
+			issue54AssertNoRemoteEvidence(t, snapshot)
 		})
 	}
 }
@@ -511,6 +511,11 @@ func TestMSP045ProjectionOrderAndHashAreDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	visible := make([]shipapi.RemoteService, 0, len(remotes))
+	for _, remote := range remotes {
+		visible = append(visible, shipapi.RemoteService{Ski: remote.SKI})
+	}
+	handler.VisibleRemoteServicesUpdated(nil, visible)
 	graph := handler.reducer.Snapshot()
 	if len(graph) != len(wantOrder) {
 		t.Fatalf("graph cardinality = %d, want %d", len(graph), len(wantOrder))
@@ -540,19 +545,12 @@ func TestMSP045ProjectionOrderAndHashAreDeterministic(t *testing.T) {
 		}
 	}
 	snapshot := decodeRuntimePayload(t, wantPayload)
-	if len(snapshot.Pairing) != len(wantOrder) || len(snapshot.Services) != len(wantOrder) {
-		t.Fatalf("projection cardinality = pairing:%d services:%d, want %d each", len(snapshot.Pairing), len(snapshot.Services), len(wantOrder))
+	if len(snapshot.Pairing) != 0 || len(snapshot.Services) != len(wantOrder) || len(snapshot.Sessions) != 0 {
+		t.Fatalf("observed projection cardinality = pairing:%d services:%d sessions:%d, want 0/%d/0", len(snapshot.Pairing), len(snapshot.Services), len(snapshot.Sessions), len(wantOrder))
 	}
-	for index, remote := range wantOrder {
-		redacted, redactErr := eebusraw.RedactID(eebusraw.IDKindRemoteSKI, remote)
-		if redactErr != nil {
-			t.Fatal(redactErr)
-		}
-		if snapshot.Pairing[index].Remote != redacted {
-			t.Fatalf("pairing order[%d] = %+v, want %+v", index, snapshot.Pairing[index].Remote, redacted)
-		}
-		if snapshot.Pairing[index].State != "unpaired" || snapshot.Services[index].Paired {
-			t.Fatalf("admission-derived row[%d] = pairing:%q paired:%t, want unpaired/false", index, snapshot.Pairing[index].State, snapshot.Services[index].Paired)
+	for index := range wantOrder {
+		if !snapshot.Services[index].Visible || snapshot.Services[index].Paired {
+			t.Fatalf("visible observation row[%d] = visible:%t paired:%t", index, snapshot.Services[index].Visible, snapshot.Services[index].Paired)
 		}
 	}
 }

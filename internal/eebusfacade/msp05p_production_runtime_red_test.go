@@ -316,9 +316,7 @@ func TestMSP05PProductionRuntimeScopesListenerDisablesDiscoveryAndDeniesUnknownT
 	runCancel, runDone, initialPayload := msp05pProductionRun(t, instance)
 	defer runCancel()
 	initialSnapshot := decodeRuntimePayload(t, initialPayload)
-	if len(initialSnapshot.Pairing) != 1 || initialSnapshot.Pairing[0].State != "paired" {
-		t.Fatalf("initial paired snapshot = %+v", initialSnapshot.Pairing)
-	}
+	issue54AssertNoRemoteEvidence(t, initialSnapshot)
 
 	before := msp05pProductionStateDigest(t, stateRoot)
 	peerCertificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "unknown-peer")
@@ -371,9 +369,10 @@ func TestMSP05PProductionRuntimeScopesListenerDisablesDiscoveryAndDeniesUnknownT
 	}
 	restartCancel, restartDone, restartPayload := msp05pProductionRun(t, restarted)
 	restartSnapshot := decodeRuntimePayload(t, restartPayload)
-	if restartSnapshot.Meta.LocalSKI != initialSnapshot.Meta.LocalSKI || len(restartSnapshot.Pairing) != 1 || restartSnapshot.Pairing[0].Remote != initialSnapshot.Pairing[0].Remote || restartSnapshot.Pairing[0].State != initialSnapshot.Pairing[0].State {
-		t.Fatalf("restart identity/pairing changed: initial=%+v/%+v restart=%+v/%+v", initialSnapshot.Meta.LocalSKI, initialSnapshot.Pairing, restartSnapshot.Meta.LocalSKI, restartSnapshot.Pairing)
+	if restartSnapshot.Meta.LocalSKI != initialSnapshot.Meta.LocalSKI {
+		t.Fatalf("restart local SKI changed: initial=%+v restart=%+v", initialSnapshot.Meta.LocalSKI, restartSnapshot.Meta.LocalSKI)
 	}
+	issue54AssertNoRemoteEvidence(t, restartSnapshot)
 	restartCancel()
 	if err := restarted.Close(); err != nil {
 		t.Fatalf("close restarted same selected runtime: %v", err)

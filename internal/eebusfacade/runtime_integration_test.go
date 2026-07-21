@@ -84,23 +84,23 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	if initial.Status.State != "degraded" || initial.Status.Degradation == nil || initial.Status.Degradation.Reason != "no-visible-services" {
 		t.Fatalf("initial status = %+v", initial.Status)
 	}
-	initialSessionID := initial.Sessions[0].ID
-
-	clock.Advance(time.Second)
-	handler.ServiceShipIDUpdate(remoteSKI, "fixture-ship-id")
-	shipIDUpdate := decodeRuntimePayload(t, waitRuntimePayload(t, updates))
-	if shipIDUpdate.Sessions[0].ID == initialSessionID {
-		t.Fatal("SHIP ID callback did not replace the session identity")
-	}
-	if strings.Contains(shipIDUpdate.Sessions[0].ID.Digest, "fixture-ship-id") {
-		t.Fatal("SHIP ID escaped redaction")
-	}
+	issue54AssertNoRemoteEvidence(t, initial)
 
 	clock.Advance(time.Second)
 	handler.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{Ski: remoteSKI}})
 	visible := decodeRuntimePayload(t, waitRuntimePayload(t, updates))
 	if len(visible.Services) != 1 || !visible.Services[0].Visible || visible.Services[0].Paired {
 		t.Fatalf("visible services = %+v", visible.Services)
+	}
+	if len(visible.Sessions) != 0 {
+		t.Fatalf("visible callback fabricated sessions: %+v", visible.Sessions)
+	}
+
+	clock.Advance(time.Second)
+	handler.ServiceShipIDUpdate(remoteSKI, "fixture-ship-id")
+	shipIDUpdate := decodeRuntimePayload(t, waitRuntimePayload(t, updates))
+	if len(shipIDUpdate.Sessions) != 0 {
+		t.Fatalf("SHIP ID callback fabricated sessions: %+v", shipIDUpdate.Sessions)
 	}
 
 	remoteService := eebusServiceWithFeatureGraph(t, remoteSKI)
@@ -114,8 +114,8 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 		t.Fatalf("connected topology = %+v", connected.Topology)
 	}
 	connectedSessionID := connected.Sessions[0].ID
-	if connectedSessionID == shipIDUpdate.Sessions[0].ID {
-		t.Fatal("connected callback did not create a new session generation")
+	if strings.Contains(connectedSessionID.Digest, "fixture-ship-id") {
+		t.Fatal("SHIP ID escaped redaction")
 	}
 
 	clock.Advance(time.Second)
