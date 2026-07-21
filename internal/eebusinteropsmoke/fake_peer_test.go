@@ -38,8 +38,10 @@ func TestFakePeerHandshake(t *testing.T) {
 	wantEvidence := map[string]bool{
 		"single-canonical-inbound-service":             false,
 		"test-only-initiating-client-without-mdns":     false,
+		"listener-certificate-ski-and-subprotocol":     false,
 		"pairing-open-confirmed-ship-session":          false,
 		"pairing-closed-rejected-without-ship-session": false,
+		"listener-released-and-rebound":                false,
 	}
 	for _, evidence := range result.Evidence {
 		if _, ok := wantEvidence[evidence]; ok {
@@ -74,19 +76,40 @@ type fakePeerOptions struct {
 type peerHandler struct {
 	service *eebusservicebridge.Service
 
-	mu          sync.Mutex
-	pairingOpen bool
-	approvals   map[string]int
-	connected   map[string]int
-	states      map[string][]shipapi.ConnectionState
-	shipIDRefs  []string
+	mu                 sync.Mutex
+	pairingOpen        bool
+	approvals          map[string]int
+	connected          map[string]int
+	disconnected       map[string]int
+	states             map[string][]shipapi.ConnectionState
+	shipIDs            map[string][]string
+	stateEvents        chan peerStateEvent
+	connectedEvents    chan string
+	disconnectedEvents chan string
+	shipIDEvents       chan peerShipIDEvent
+}
+
+type peerStateEvent struct {
+	ski   string
+	state shipapi.ConnectionState
+}
+
+type peerShipIDEvent struct {
+	ski    string
+	shipID string
 }
 
 func newPeerHandler() *peerHandler {
 	return &peerHandler{
-		approvals: make(map[string]int),
-		connected: make(map[string]int),
-		states:    make(map[string][]shipapi.ConnectionState),
+		approvals:          make(map[string]int),
+		connected:          make(map[string]int),
+		disconnected:       make(map[string]int),
+		states:             make(map[string][]shipapi.ConnectionState),
+		shipIDs:            make(map[string][]string),
+		stateEvents:        make(chan peerStateEvent, 32),
+		connectedEvents:    make(chan string, 8),
+		disconnectedEvents: make(chan string, 8),
+		shipIDEvents:       make(chan peerShipIDEvent, 8),
 	}
 }
 
@@ -132,15 +155,24 @@ func runFakePeerSmoke(opts fakePeerOptions) caseResult {
 		return fakePeerFail("open-client-dial", err)
 	}
 	defer openClient.Close()
+	if !handler.waitForState(openClient.localSKI, shipapi.ConnectionStateReceivedPairingRequest, opts.Timeout) {
+		return fakePeerFail("open-server-pairing-observation", fmt.Errorf("states=%v", handler.statesFor(openClient.localSKI)))
+	}
 	if !openClient.waitForState(shipmodel.SmeStateComplete, opts.Timeout) {
 		return fakePeerFail("open-client-handshake", fmt.Errorf("states=%v errors=%v", openClient.states(), openClient.errors()))
 	}
-	if !waitForFakePeer(opts.Timeout, func() bool { return handler.connectedCount(openClient.localSKI) == 1 }) {
+	if !handler.waitForConnected(openClient.localSKI, opts.Timeout) {
 		return fakePeerFail("open-server-session", fmt.Errorf("connected=%d", handler.connectedCount(openClient.localSKI)))
 	}
 	openApprovals := handler.approvalCount(openClient.localSKI)
 	if openApprovals != 1 {
 		return fakePeerFail("open-trust-confirmation", fmt.Errorf("approvals=%d", openApprovals))
+	}
+	if connected := handler.connectedCount(openClient.localSKI); connected != 1 {
+		return fakePeerFail("open-connected-callback", fmt.Errorf("connected=%d", connected))
+	}
+	if !handler.waitForShipID(openClient.localSKI, openClient.localShipID, opts.Timeout) {
+		return fakePeerFail("open-remote-ship-id", fmt.Errorf("ship_ids=%v", handler.shipIDsFor(openClient.localSKI)))
 	}
 
 	if err := server.SetPairingRegistration(false); err != nil {
@@ -148,6 +180,12 @@ func runFakePeerSmoke(opts fakePeerOptions) caseResult {
 	}
 	handler.setPairingOpen(false)
 	openClient.Close()
+	if !handler.waitForDisconnected(openClient.localSKI, opts.Timeout) {
+		return fakePeerFail("open-server-disconnect", fmt.Errorf("disconnected=%d", handler.disconnectedCount(openClient.localSKI)))
+	}
+	if !openClient.waitForClosed(opts.Timeout) {
+		return fakePeerFail("open-client-close", fmt.Errorf("client close callback not received"))
+	}
 
 	closedCertificate, err := shipcert.CreateCertificate("Helianthus", "Project", "RO", "msp03d-closed-client")
 	if err != nil {
@@ -178,6 +216,18 @@ func runFakePeerSmoke(opts fakePeerOptions) caseResult {
 	if connected := handler.connectedCount(closedClient.localSKI); connected != 0 {
 		return fakePeerFail("closed-server-session", fmt.Errorf("connected=%d", connected))
 	}
+	if shipIDs := handler.shipIDsFor(closedClient.localSKI); len(shipIDs) != 0 {
+		return fakePeerFail("closed-server-ship-id", fmt.Errorf("ship_ids=%v", shipIDs))
+	}
+	closedClient.Close()
+	if !closedClient.waitForClosed(opts.Timeout) {
+		return fakePeerFail("closed-client-close", fmt.Errorf("client close callback not received"))
+	}
+
+	server.Shutdown()
+	if err := rebindTestEndpoint(opts.Endpoint); err != nil {
+		return fakePeerFail("listener-rebind", err)
+	}
 
 	return caseResult{
 		ID:     caseFakePeer,
@@ -185,8 +235,10 @@ func runFakePeerSmoke(opts fakePeerOptions) caseResult {
 		Evidence: []string{
 			"single-canonical-inbound-service",
 			"test-only-initiating-client-without-mdns",
+			"listener-certificate-ski-and-subprotocol",
 			"pairing-open-confirmed-ship-session",
 			"pairing-closed-rejected-without-ship-session",
+			"listener-released-and-rebound",
 		},
 		Details: map[string]string{
 			"server_ski_ref":        digestRef(serverSKI),
@@ -195,6 +247,14 @@ func runFakePeerSmoke(opts fakePeerOptions) caseResult {
 			"open_state_count_ref":  digestRef(fmt.Sprintf("%d", len(openClient.states()))),
 		},
 	}
+}
+
+func rebindTestEndpoint(endpoint netip.AddrPort) error {
+	listener, err := net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(endpoint))
+	if err != nil {
+		return err
+	}
+	return listener.Close()
 }
 
 func newInboundPeerService(endpoint netip.AddrPort, certificate tls.Certificate, handler *peerHandler) (*eebusservicebridge.Service, error) {
@@ -230,9 +290,10 @@ func newInboundPeerService(endpoint netip.AddrPort, certificate tls.Certificate,
 }
 
 type testSHIPClient struct {
-	localSKI   string
-	connection shipapi.ShipConnectionInterface
-	provider   *testSHIPClientProvider
+	localSKI    string
+	localShipID string
+	connection  shipapi.ShipConnectionInterface
+	provider    *testSHIPClientProvider
 }
 
 func newTestSHIPClient(endpoint netip.AddrPort, certificate tls.Certificate, remoteSKI, remoteShipID string, timeout time.Duration) (*testSHIPClient, error) {
@@ -273,17 +334,22 @@ func newTestSHIPClient(endpoint netip.AddrPort, certificate tls.Certificate, rem
 		_ = connection.Close()
 		return nil, fmt.Errorf("server SKI = %q, want %q", actualRemoteSKI, remoteSKI)
 	}
+	if subprotocol := connection.Subprotocol(); subprotocol != shipapi.ShipWebsocketSubProtocol {
+		_ = connection.Close()
+		return nil, fmt.Errorf("websocket subprotocol = %q, want %q", subprotocol, shipapi.ShipWebsocketSubProtocol)
+	}
 	provider := newTestSHIPClientProvider()
 	dataHandler := shipws.NewWebsocketConnection(connection, remoteSKI)
+	localShipID := "test-client-" + localSKI
 	shipConnection := ship.NewConnectionHandler(
 		provider,
 		dataHandler,
 		ship.ShipRoleClient,
-		"test-client-"+localSKI,
+		localShipID,
 		remoteSKI,
 		remoteShipID,
 	)
-	client := &testSHIPClient{localSKI: localSKI, connection: shipConnection, provider: provider}
+	client := &testSHIPClient{localSKI: localSKI, localShipID: localShipID, connection: shipConnection, provider: provider}
 	shipConnection.Run()
 	return client, nil
 }
@@ -295,18 +361,15 @@ func (client *testSHIPClient) Close() {
 }
 
 func (client *testSHIPClient) waitForState(state shipmodel.ShipMessageExchangeState, timeout time.Duration) bool {
-	return waitForFakePeer(timeout, func() bool { return client.hasState(state) })
+	return client.provider.waitForState(state, timeout)
 }
 
 func (client *testSHIPClient) waitForAnyState(timeout time.Duration, states ...shipmodel.ShipMessageExchangeState) bool {
-	return waitForFakePeer(timeout, func() bool {
-		for _, state := range states {
-			if client.hasState(state) {
-				return true
-			}
-		}
-		return false
-	})
+	return client.provider.waitForAnyState(timeout, states...)
+}
+
+func (client *testSHIPClient) waitForClosed(timeout time.Duration) bool {
+	return client.provider.waitForClosed(timeout)
 }
 
 func (client *testSHIPClient) hasState(want shipmodel.ShipMessageExchangeState) bool {
@@ -327,13 +390,19 @@ func (client *testSHIPClient) errors() []string {
 }
 
 type testSHIPClientProvider struct {
-	mu     sync.Mutex
-	states []shipmodel.ShipMessageExchangeState
-	errors []string
+	mu          sync.Mutex
+	states      []shipmodel.ShipMessageExchangeState
+	errors      []string
+	closed      bool
+	stateEvents chan shipmodel.ShipMessageExchangeState
+	closeEvents chan struct{}
 }
 
 func newTestSHIPClientProvider() *testSHIPClientProvider {
-	return &testSHIPClientProvider{}
+	return &testSHIPClientProvider{
+		stateEvents: make(chan shipmodel.ShipMessageExchangeState, 32),
+		closeEvents: make(chan struct{}, 1),
+	}
 }
 
 func (*testSHIPClientProvider) IsRemoteServiceForSKIPaired(string) bool { return true }
@@ -343,7 +412,15 @@ func (*testSHIPClientProvider) AllowWaitingForTrust(string) bool        { return
 func (*testSHIPClientProvider) SetupRemoteDevice(string, shipapi.ShipConnectionDataWriterInterface) shipapi.ShipConnectionDataReaderInterface {
 	return discardShipPayload{}
 }
-func (*testSHIPClientProvider) HandleConnectionClosed(shipapi.ShipConnectionInterface, bool) {}
+func (provider *testSHIPClientProvider) HandleConnectionClosed(shipapi.ShipConnectionInterface, bool) {
+	provider.mu.Lock()
+	provider.closed = true
+	provider.mu.Unlock()
+	select {
+	case provider.closeEvents <- struct{}{}:
+	default:
+	}
+}
 func (provider *testSHIPClientProvider) HandleShipHandshakeStateUpdate(_ string, state shipmodel.ShipState) {
 	provider.mu.Lock()
 	provider.states = append(provider.states, state.State)
@@ -351,6 +428,10 @@ func (provider *testSHIPClientProvider) HandleShipHandshakeStateUpdate(_ string,
 		provider.errors = append(provider.errors, state.Error.Error())
 	}
 	provider.mu.Unlock()
+	select {
+	case provider.stateEvents <- state.State:
+	default:
+	}
 }
 func (provider *testSHIPClientProvider) statesSnapshot() []shipmodel.ShipMessageExchangeState {
 	provider.mu.Lock()
@@ -362,6 +443,84 @@ func (provider *testSHIPClientProvider) errorsSnapshot() []string {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
 	return append([]string(nil), provider.errors...)
+}
+
+func (provider *testSHIPClientProvider) waitForState(want shipmodel.ShipMessageExchangeState, timeout time.Duration) bool {
+	if provider.hasState(want) {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case state := <-provider.stateEvents:
+			if state == want || provider.hasState(want) {
+				return true
+			}
+		case <-timer.C:
+			return provider.hasState(want)
+		}
+	}
+}
+
+func (provider *testSHIPClientProvider) waitForAnyState(timeout time.Duration, wants ...shipmodel.ShipMessageExchangeState) bool {
+	if provider.hasAnyState(wants...) {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case state := <-provider.stateEvents:
+			for _, want := range wants {
+				if state == want {
+					return true
+				}
+			}
+			if provider.hasAnyState(wants...) {
+				return true
+			}
+		case <-timer.C:
+			return provider.hasAnyState(wants...)
+		}
+	}
+}
+
+func (provider *testSHIPClientProvider) waitForClosed(timeout time.Duration) bool {
+	if provider.isClosed() {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-provider.closeEvents:
+		return true
+	case <-timer.C:
+		return provider.isClosed()
+	}
+}
+
+func (provider *testSHIPClientProvider) hasState(want shipmodel.ShipMessageExchangeState) bool {
+	return provider.hasAnyState(want)
+}
+
+func (provider *testSHIPClientProvider) hasAnyState(wants ...shipmodel.ShipMessageExchangeState) bool {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	for _, state := range provider.states {
+		for _, want := range wants {
+			if state == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (provider *testSHIPClientProvider) isClosed() bool {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	return provider.closed
 }
 
 type discardShipPayload struct{}
@@ -388,17 +547,6 @@ func testCertificateSKI(certificate tls.Certificate) (string, error) {
 	return shipcert.SkiFromCertificate(leaf)
 }
 
-func waitForFakePeer(timeout time.Duration, predicate func() bool) bool {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if predicate() {
-			return true
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	return predicate()
-}
-
 func (handler *peerHandler) setPairingOpen(open bool) {
 	handler.mu.Lock()
 	handler.pairingOpen = open
@@ -409,17 +557,24 @@ func (handler *peerHandler) RemoteSKIConnected(_ eebusapi.ServiceInterface, ski 
 	handler.mu.Lock()
 	handler.connected[ski]++
 	handler.mu.Unlock()
+	handler.connectedEvents <- ski
 }
 
-func (*peerHandler) RemoteSKIDisconnected(eebusapi.ServiceInterface, string) {}
+func (handler *peerHandler) RemoteSKIDisconnected(_ eebusapi.ServiceInterface, ski string) {
+	handler.mu.Lock()
+	handler.disconnected[ski]++
+	handler.mu.Unlock()
+	handler.disconnectedEvents <- ski
+}
 
 func (*peerHandler) VisibleRemoteServicesUpdated(eebusapi.ServiceInterface, []shipapi.RemoteService) {
 }
 
-func (handler *peerHandler) ServiceShipIDUpdate(_ string, shipID string) {
+func (handler *peerHandler) ServiceShipIDUpdate(ski string, shipID string) {
 	handler.mu.Lock()
-	handler.shipIDRefs = append(handler.shipIDRefs, digestRef(shipID))
+	handler.shipIDs[ski] = append(handler.shipIDs[ski], shipID)
 	handler.mu.Unlock()
+	handler.shipIDEvents <- peerShipIDEvent{ski: ski, shipID: shipID}
 }
 
 func (handler *peerHandler) ServicePairingDetailUpdate(ski string, detail *shipapi.ConnectionStateDetail) {
@@ -432,6 +587,7 @@ func (handler *peerHandler) ServicePairingDetailUpdate(ski string, detail *shipa
 		handler.approvals[ski]++
 	}
 	handler.mu.Unlock()
+	handler.stateEvents <- peerStateEvent{ski: ski, state: state}
 	if approve && service != nil {
 		service.RegisterRemoteSKI(ski)
 	}
@@ -449,19 +605,104 @@ func (handler *peerHandler) connectedCount(ski string) int {
 	return handler.connected[ski]
 }
 
+func (handler *peerHandler) disconnectedCount(ski string) int {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	return handler.disconnected[ski]
+}
+
 func (handler *peerHandler) statesFor(ski string) []shipapi.ConnectionState {
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
 	return append([]shipapi.ConnectionState(nil), handler.states[ski]...)
 }
 
+func (handler *peerHandler) shipIDsFor(ski string) []string {
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	return append([]string(nil), handler.shipIDs[ski]...)
+}
+
 func (handler *peerHandler) waitForState(ski string, want shipapi.ConnectionState, timeout time.Duration) bool {
-	return waitForFakePeer(timeout, func() bool {
-		for _, state := range handler.statesFor(ski) {
-			if state == want {
+	if handler.hasState(ski, want) {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case event := <-handler.stateEvents:
+			if event.ski == ski && event.state == want || handler.hasState(ski, want) {
 				return true
 			}
+		case <-timer.C:
+			return handler.hasState(ski, want)
 		}
-		return false
+	}
+}
+
+func (handler *peerHandler) waitForConnected(ski string, timeout time.Duration) bool {
+	return waitForSKINotification(timeout, ski, handler.connectedEvents, func() bool {
+		return handler.connectedCount(ski) > 0
 	})
+}
+
+func (handler *peerHandler) waitForDisconnected(ski string, timeout time.Duration) bool {
+	return waitForSKINotification(timeout, ski, handler.disconnectedEvents, func() bool {
+		return handler.disconnectedCount(ski) > 0
+	})
+}
+
+func (handler *peerHandler) waitForShipID(ski, shipID string, timeout time.Duration) bool {
+	if handler.hasShipID(ski, shipID) {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case event := <-handler.shipIDEvents:
+			if event.ski == ski && event.shipID == shipID || handler.hasShipID(ski, shipID) {
+				return true
+			}
+		case <-timer.C:
+			return handler.hasShipID(ski, shipID)
+		}
+	}
+}
+
+func (handler *peerHandler) hasState(ski string, want shipapi.ConnectionState) bool {
+	for _, state := range handler.statesFor(ski) {
+		if state == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (handler *peerHandler) hasShipID(ski, want string) bool {
+	for _, shipID := range handler.shipIDsFor(ski) {
+		if shipID == want {
+			return true
+		}
+	}
+	return false
+}
+
+func waitForSKINotification(timeout time.Duration, ski string, events <-chan string, ready func() bool) bool {
+	if ready() {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case eventSKI := <-events:
+			if eventSKI == ski || ready() {
+				return true
+			}
+		case <-timer.C:
+			return ready()
+		}
+	}
 }
