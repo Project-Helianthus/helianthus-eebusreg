@@ -533,7 +533,7 @@ func (coordinator *firstTrustCoordinator) prepareFirstTrustRepairLocked(request 
 		if request.kind == "adopt_copied_current" {
 			target.storeInstance = coordinator.anchorRecord.storeInstance
 		}
-		if request.kind == "recover_unavailable_host_key" {
+		if request.kind == "recover_unavailable_host_key" && target.storeInstance == [32]byte{} {
 			instance, available := firstTrustReadOrdinal(coordinator.random)
 			if !available {
 				return firstTrustControlView{}, firstTrustControlRecord{}, false
