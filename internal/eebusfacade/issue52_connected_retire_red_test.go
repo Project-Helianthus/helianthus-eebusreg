@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -226,10 +225,9 @@ type issue52RuntimeService struct {
 	*msp045Service
 	reader eebusapi.ServiceReaderInterface
 
-	stateMu       sync.Mutex
-	connections   map[string]bool
-	disconnects   int
-	queueFailures int
+	stateMu     sync.Mutex
+	connections map[string]bool
+	disconnects int
 }
 
 func newIssue52RuntimeService(base *msp045Service, reader eebusapi.ServiceReaderInterface) *issue52RuntimeService {
@@ -253,17 +251,6 @@ func (service *issue52RuntimeService) connected(ski string) bool {
 	return service.connections[ski]
 }
 
-func (service *issue52RuntimeService) QueueRemoteSKI(ski string) error {
-	service.stateMu.Lock()
-	if service.connections[ski] {
-		service.queueFailures++
-		service.stateMu.Unlock()
-		return errors.New("outbound endpoint still has a connected SHIP transport")
-	}
-	service.stateMu.Unlock()
-	return service.msp045Service.QueueRemoteSKI(ski)
-}
-
 func (service *issue52RuntimeService) DisconnectSKI(ski string, _ string) {
 	service.stateMu.Lock()
 	service.connections[ski] = false
@@ -278,10 +265,4 @@ func (service *issue52RuntimeService) disconnectCount() int {
 	service.stateMu.Lock()
 	defer service.stateMu.Unlock()
 	return service.disconnects
-}
-
-func (service *issue52RuntimeService) queueFailureCount() int {
-	service.stateMu.Lock()
-	defer service.stateMu.Unlock()
-	return service.queueFailures
 }

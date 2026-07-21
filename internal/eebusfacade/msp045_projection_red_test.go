@@ -866,7 +866,6 @@ type msp045ProductSetup struct {
 	remotePretrusted      *bool
 	configureService      func(*msp045Service)
 	wrapRuntime           func(*msp045Service, eebusapi.ServiceReaderInterface) runtimeService
-	withoutOutbound       bool
 	discoveryEnabled      bool
 	suppressVisible       bool
 }
@@ -936,8 +935,8 @@ func newMSP045ProductHarness(t *testing.T, mutate func(*msp045ProductSetup)) *ms
 		stateRoot: filepath.Join(root, "state"), adminRoot: filepath.Join(root, "admin"),
 		remote: setup.remote, bridge: bridge, anchor: anchor, identityProvider: anchor,
 		remotePretrusted: setup.remotePretrusted,
-		configureService: setup.configureService, withoutOutbound: setup.withoutOutbound,
-		wrapRuntime: setup.wrapRuntime, discoveryEnabled: setup.discoveryEnabled,
+		configureService: setup.configureService,
+		wrapRuntime:      setup.wrapRuntime, discoveryEnabled: setup.discoveryEnabled,
 		suppressVisible: setup.suppressVisible,
 	})
 }
@@ -955,7 +954,6 @@ type msp045AcquireOptions struct {
 	remotePretrusted *bool
 	configureService func(*msp045Service)
 	wrapRuntime      func(*msp045Service, eebusapi.ServiceReaderInterface) runtimeService
-	withoutOutbound  bool
 	discoveryEnabled bool
 	suppressVisible  bool
 }
@@ -1002,9 +1000,6 @@ func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045Run
 	dependencies.newService = func(_ RuntimeConfig, _ runtimeMaterial, callback eebusapi.ServiceReaderInterface) (runtimeService, error) {
 		reader = callback.(*runtimeServiceReader)
 		var runtime runtimeService = service
-		if options.withoutOutbound {
-			runtime = &msp05pServiceWithoutOutbound{service: service}
-		}
 		if options.wrapRuntime != nil {
 			runtime = options.wrapRuntime(service, callback)
 		}
@@ -1225,28 +1220,14 @@ func (*msp045Anchor) CreateSigningIdentity(context.Context) (firstTrustLocalIden
 }
 
 type msp045Service struct {
-	mu                      sync.Mutex
-	startOnce               sync.Once
-	started                 chan struct{}
-	shutdowns               int
-	registered              []string
-	queued                  []string
-	reported                []msp045EndpointReport
-	cancelled               []string
-	pairingRegistration     []bool
-	endpointOperationLocked bool
-	coordinatorLockIsHeld   func() bool
-	events                  []string
-	queueErr                error
-	reportErr               error
-	queueStarted            chan struct{}
-	queueRelease            <-chan struct{}
-	queueStartOnce          sync.Once
-}
-
-type msp045EndpointReport struct {
-	ski      string
-	endpoint shipapi.RemoteEndpoint
+	mu                  sync.Mutex
+	startOnce           sync.Once
+	started             chan struct{}
+	shutdowns           int
+	registered          []string
+	cancelled           []string
+	pairingRegistration []bool
+	events              []string
 }
 
 func (service *msp045Service) Setup() error {
@@ -1280,41 +1261,6 @@ func (service *msp045Service) RegisterRemoteSKI(ski string) {
 	service.mu.Unlock()
 }
 
-func (service *msp045Service) QueueRemoteSKI(ski string) error {
-	service.recordEndpointLockState()
-	service.mu.Lock()
-	err := service.queueErr
-	started := service.queueStarted
-	release := service.queueRelease
-	service.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if started != nil {
-		service.queueStartOnce.Do(func() { close(started) })
-	}
-	if release != nil {
-		<-release
-	}
-	service.mu.Lock()
-	service.queued = append(service.queued, ski)
-	service.events = append(service.events, "queue")
-	service.mu.Unlock()
-	return nil
-}
-
-func (service *msp045Service) ReportRemoteEndpoint(ski string, endpoint shipapi.RemoteEndpoint) error {
-	service.recordEndpointLockState()
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	if service.reportErr != nil {
-		return service.reportErr
-	}
-	service.reported = append(service.reported, msp045EndpointReport{ski: ski, endpoint: endpoint})
-	service.events = append(service.events, "report")
-	return nil
-}
-
 func (*msp045Service) LocalService() *shipapi.ServiceDetails      { return nil }
 func (*msp045Service) LocalDevice() spineapi.DeviceLocalInterface { return nil }
 func (*msp045Service) SetAutoAccept(bool)                         {}
@@ -1323,13 +1269,6 @@ func (service *msp045Service) CancelPairingWithSKI(ski string) {
 	service.mu.Lock()
 	service.cancelled = append(service.cancelled, ski)
 	service.events = append(service.events, "cancel")
-	retained := service.queued[:0]
-	for _, queued := range service.queued {
-		if queued != ski {
-			retained = append(retained, queued)
-		}
-	}
-	service.queued = retained
 	service.mu.Unlock()
 }
 
@@ -1343,18 +1282,6 @@ func (service *msp045Service) SetPairingRegistration(value bool) error {
 	}
 	service.mu.Unlock()
 	return nil
-}
-
-func (service *msp045Service) recordEndpointLockState() {
-	service.mu.Lock()
-	probe := service.coordinatorLockIsHeld
-	service.mu.Unlock()
-	if probe == nil || !probe() {
-		return
-	}
-	service.mu.Lock()
-	service.endpointOperationLocked = true
-	service.mu.Unlock()
 }
 
 type msp045AdminEndpoint struct{}
