@@ -82,13 +82,12 @@ func TestIssue52ConnectedCancellationUsesWithdrawalAndRetiresExactGeneration(t *
 	})
 }
 
-func TestIssue52RuntimeImmediateExpiryReopenDoesNotFailOutboundEndpoint(t *testing.T) {
+func TestIssue52RuntimeImmediateExpiryReopenRetiresEveryGeneration(t *testing.T) {
 	var service *issue52RuntimeService
 	pretrusted := false
 	harness := newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
 		setup.view.associations = nil
 		setup.remotePretrusted = &pretrusted
-		setup.configureRemote = configureMSP05POutboundEndpoint
 		setup.wrapRuntime = func(base *msp045Service, reader eebusapi.ServiceReaderInterface) runtimeService {
 			service = newIssue52RuntimeService(base, reader)
 			return service
@@ -123,9 +122,6 @@ func TestIssue52RuntimeImmediateExpiryReopenDoesNotFailOutboundEndpoint(t *testi
 
 	if got := service.disconnectCount(); got != 3 {
 		t.Fatalf("DisconnectSKI calls = %d, want 3", got)
-	}
-	if got := service.queueFailureCount(); got != 0 {
-		t.Fatalf("outbound queue failures = %d, want 0", got)
 	}
 	if state, recovery := harness.resources.coordinator.state(), harness.resources.coordinator.recoveryState(); state != "PAIRING_CLOSED" || recovery != "UNPAIRED_LOCKED" {
 		t.Fatalf("final runtime state = %s/%s, want PAIRING_CLOSED/UNPAIRED_LOCKED", state, recovery)

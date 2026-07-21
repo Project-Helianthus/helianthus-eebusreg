@@ -13,6 +13,7 @@ import (
 	"time"
 
 	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusstore"
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 	shipcert "github.com/Project-Helianthus/helianthus-ship-go/cert"
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
@@ -61,6 +62,98 @@ func TestIssue54CanonicalIdentityUsesProtectedStoreInstance(t *testing.T) {
 	}
 	if got := replacementConfiguration.DeviceSerialNumber(); got != wantToken {
 		t.Fatalf("replacement serial number = %q, want store-derived token %q", got, wantToken)
+	}
+}
+
+func TestIssue55HostKeyRepairPreservesCanonicalIdentityAcrossPersistedReload(t *testing.T) {
+	root := canonicalRuntimeTempDir(t)
+	stateRoot := filepath.Join(root, "state")
+	anchor := &runtimeStrictAnchor{}
+
+	initial := acquireMSP04CRuntimeResources(
+		t, stateRoot, filepath.Join(root, "admin-initial"), anchor,
+		&fakeRuntimeService{started: make(chan struct{})},
+	)
+	if got := initial.coordinator.recoveryState(); got != "NO_LOCAL_IDENTITY" {
+		t.Fatalf("initial recovery = %q, want NO_LOCAL_IDENTITY", got)
+	}
+	request := exactRuntimeRepairRequest(initial.coordinator, "recover_unavailable_host_key", msp04cOrdinal(8_100))
+	if got := initial.coordinator.repair(context.Background(), request); got != "repaired_unpaired" {
+		t.Fatalf("initial host-key repair = %q", got)
+	}
+	if err := initial.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := issue55ReloadPersistedIdentity(t, stateRoot, anchor)
+
+	anchor.loseSigningIdentity()
+	recovery := acquireMSP04CRuntimeResources(
+		t, stateRoot, filepath.Join(root, "admin-recovery"), anchor,
+		&fakeRuntimeService{started: make(chan struct{})},
+	)
+	if state, reason := recovery.coordinator.recoveryState(), recovery.coordinator.recoveryReason(); state != "NO_LOCAL_IDENTITY" || reason != "HOST_KEY_UNAVAILABLE" {
+		t.Fatalf("repair precondition = %s/%s", state, reason)
+	}
+	request = exactRuntimeRepairRequest(recovery.coordinator, "recover_unavailable_host_key", msp04cOrdinal(8_200))
+	if got := recovery.coordinator.repair(context.Background(), request); got != "repaired_unpaired" {
+		t.Fatalf("replacement host-key repair = %q", got)
+	}
+	if err := recovery.Close(); err != nil {
+		t.Fatal(err)
+	}
+	after := issue55ReloadPersistedIdentity(t, stateRoot, anchor)
+
+	if after.storeInstance != before.storeInstance {
+		t.Fatalf("StoreInstance rotated during host-key repair: before=%x after=%x", before.storeInstance, after.storeInstance)
+	}
+	if after.localSKI == before.localSKI {
+		t.Fatalf("certificate SKI did not change during host-key repair: %s", after.localSKI)
+	}
+	if after.nodeToken != before.nodeToken {
+		t.Fatalf("node token rotated during host-key repair: before=%s after=%s", before.nodeToken, after.nodeToken)
+	}
+	if after.shipID != before.shipID {
+		t.Fatalf("SHIP ID rotated during host-key repair: before=%s after=%s", before.shipID, after.shipID)
+	}
+}
+
+type issue55PersistedIdentity struct {
+	storeInstance [sha256.Size]byte
+	localSKI      string
+	nodeToken     string
+	shipID        string
+}
+
+func issue55ReloadPersistedIdentity(t *testing.T, stateRoot string, anchor *runtimeStrictAnchor) issue55PersistedIdentity {
+	t.Helper()
+	bridge, outcome := eebusstore.OpenAssociationBridge(stateRoot, []eebusstore.KeyProviderBinding{anchor.keyBinding()})
+	if bridge == nil {
+		t.Fatalf("reopen persisted identity = %q", outcome)
+	}
+	view, outcome := bridge.ReloadControl(context.Background())
+	if outcome != "opened_current" && outcome != "opened_migrated" {
+		_ = bridge.Close()
+		t.Fatalf("reload persisted identity = %q", outcome)
+	}
+	if err := bridge.Close(); err != nil {
+		t.Fatal(err)
+	}
+	signer, err := anchor.Unseal(view.Control.LocalSealedBlob)
+	if err != nil {
+		t.Fatalf("unseal persisted identity: %v", err)
+	}
+	nodeToken := canonicalRuntimeNodeToken(view.Control.StoreInstance)
+	material := runtimeMaterial{
+		certificate: newProtectedTLSCertificate(view.Control.LocalCertificateChainDER, signer),
+		localSKI:    hex.EncodeToString(view.Control.LocalSKI),
+		nodeToken:   nodeToken,
+	}
+	configuration := issue54Configuration(t, material)
+	return issue55PersistedIdentity{
+		storeInstance: view.Control.StoreInstance,
+		localSKI:      material.localSKI,
+		nodeToken:     nodeToken,
+		shipID:        configuration.Identifier(),
 	}
 }
 

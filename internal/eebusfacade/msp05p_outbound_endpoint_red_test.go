@@ -2,8 +2,6 @@ package eebusfacade
 
 import (
 	"context"
-	"net/netip"
-	"reflect"
 	"testing"
 	"time"
 
@@ -11,12 +9,8 @@ import (
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 )
 
-var msp05pOutboundEndpoint = netip.MustParseAddrPort("192.0.2.201:54981")
-
-const msp05pOutboundPath = "/ship/"
-
 func TestIssue54OpeningPairingOnlyChangesLocalRegistration(t *testing.T) {
-	harness := newMSP05POutboundHarness(t, true, false)
+	harness := newMSP05POutboundHarness(t, false)
 
 	if got := harness.resources.coordinator.openPairingWindow(context.Background(), msp045RunToken(t, "registration-only-open"), time.Minute); got != "open_empty" {
 		t.Fatalf("open pairing window = %q", got)
@@ -36,9 +30,8 @@ func TestIssue54OpeningPairingOnlyChangesLocalRegistration(t *testing.T) {
 	issue54AssertNoRemoteEvidence(t, snapshot)
 }
 
-func TestIssue54ConfiguredTrustedEndpointIsPolicyWithoutSyntheticObservation(t *testing.T) {
+func TestIssue54ConfiguredTrustedSKIIsPolicyWithoutSyntheticObservation(t *testing.T) {
 	harness := newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
-		setup.configureRemote = configureMSP05POutboundEndpoint
 		setup.suppressVisible = true
 	})
 	time.Sleep(20 * time.Millisecond)
@@ -47,7 +40,7 @@ func TestIssue54ConfiguredTrustedEndpointIsPolicyWithoutSyntheticObservation(t *
 		t.Fatalf("durable trust policy registrations = %v", state.registered)
 	}
 	if len(state.queued) != 0 || len(state.reported) != 0 {
-		t.Fatalf("configured endpoint caused outbound observation effects: queued=%v reported=%v", state.queued, state.reported)
+		t.Fatalf("configured SKI caused outbound observation effects: queued=%v reported=%v", state.queued, state.reported)
 	}
 	snapshot, _ := msp045Capture(t, harness.handler)
 	issue54AssertNoRemoteEvidence(t, snapshot)
@@ -82,7 +75,7 @@ func (service *msp05pServiceWithoutOutbound) SetPairingRegistration(value bool) 
 	return service.service.SetPairingRegistration(value)
 }
 
-func newMSP05POutboundHarness(t *testing.T, endpoint, discovery bool) *msp045RuntimeHarness {
+func newMSP05POutboundHarness(t *testing.T, discovery bool) *msp045RuntimeHarness {
 	t.Helper()
 	pretrusted := false
 	return newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
@@ -90,21 +83,7 @@ func newMSP05POutboundHarness(t *testing.T, endpoint, discovery bool) *msp045Run
 		setup.remotePretrusted = &pretrusted
 		setup.discoveryEnabled = discovery
 		setup.suppressVisible = true
-		if endpoint {
-			setup.configureRemote = configureMSP05POutboundEndpoint
-		}
 	})
-}
-
-func configureMSP05POutboundEndpoint(remote *RuntimeRemote) {
-	value := reflect.ValueOf(remote).Elem()
-	endpoint := value.FieldByName("Endpoint")
-	path := value.FieldByName("SHIPPath")
-	if !endpoint.IsValid() || endpoint.Type() != reflect.TypeOf(netip.AddrPort{}) || !path.IsValid() || path.Kind() != reflect.String {
-		return
-	}
-	endpoint.Set(reflect.ValueOf(msp05pOutboundEndpoint))
-	path.SetString(msp05pOutboundPath)
 }
 
 type msp05pOutboundState struct {

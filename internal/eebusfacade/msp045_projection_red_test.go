@@ -864,7 +864,6 @@ type msp045ProductSetup struct {
 	remote                []byte
 	remoteSKI             string
 	remotePretrusted      *bool
-	configureRemote       func(*RuntimeRemote)
 	configureService      func(*msp045Service)
 	wrapRuntime           func(*msp045Service, eebusapi.ServiceReaderInterface) runtimeService
 	withoutOutbound       bool
@@ -936,7 +935,7 @@ func newMSP045ProductHarness(t *testing.T, mutate func(*msp045ProductSetup)) *ms
 	return msp045AcquireHarness(t, msp045AcquireOptions{
 		stateRoot: filepath.Join(root, "state"), adminRoot: filepath.Join(root, "admin"),
 		remote: setup.remote, bridge: bridge, anchor: anchor, identityProvider: anchor,
-		remotePretrusted: setup.remotePretrusted, configureRemote: setup.configureRemote,
+		remotePretrusted: setup.remotePretrusted,
 		configureService: setup.configureService, withoutOutbound: setup.withoutOutbound,
 		wrapRuntime: setup.wrapRuntime, discoveryEnabled: setup.discoveryEnabled,
 		suppressVisible: setup.suppressVisible,
@@ -954,7 +953,6 @@ type msp045AcquireOptions struct {
 	identityProvider firstTrustIdentityProvider
 	keyProviders     []eebusstore.KeyProviderBinding
 	remotePretrusted *bool
-	configureRemote  func(*RuntimeRemote)
 	configureService func(*msp045Service)
 	wrapRuntime      func(*msp045Service, eebusapi.ServiceReaderInterface) runtimeService
 	withoutOutbound  bool
@@ -1021,9 +1019,6 @@ func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045Run
 		return msp045AdminEndpoint{}, nil
 	}
 	remoteConfig := RuntimeRemote{SKI: remoteSKI, Pretrusted: pretrusted, Allowlisted: true}
-	if options.configureRemote != nil {
-		options.configureRemote(&remoteConfig)
-	}
 	backendInterface, err := acquireRuntime(context.Background(), RuntimeConfig{
 		StateRoot: options.stateRoot, Interface: "synthetic-interface", ListenPort: 47_11,
 		DiscoveryEnabled: options.discoveryEnabled,
