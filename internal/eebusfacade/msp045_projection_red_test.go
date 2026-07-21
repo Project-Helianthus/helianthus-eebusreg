@@ -868,6 +868,7 @@ type msp045ProductSetup struct {
 	remotePretrusted      *bool
 	configureRemote       func(*RuntimeRemote)
 	configureService      func(*msp045Service)
+	wrapRuntime           func(*msp045Service, eebusapi.ServiceReaderInterface) runtimeService
 	withoutOutbound       bool
 	discoveryEnabled      bool
 }
@@ -938,7 +939,7 @@ func newMSP045ProductHarness(t *testing.T, mutate func(*msp045ProductSetup)) *ms
 		remote: setup.remote, bridge: bridge, anchor: anchor, identityProvider: anchor,
 		remotePretrusted: setup.remotePretrusted, configureRemote: setup.configureRemote,
 		configureService: setup.configureService, withoutOutbound: setup.withoutOutbound,
-		discoveryEnabled: setup.discoveryEnabled,
+		wrapRuntime: setup.wrapRuntime, discoveryEnabled: setup.discoveryEnabled,
 	})
 }
 
@@ -955,6 +956,7 @@ type msp045AcquireOptions struct {
 	remotePretrusted *bool
 	configureRemote  func(*RuntimeRemote)
 	configureService func(*msp045Service)
+	wrapRuntime      func(*msp045Service, eebusapi.ServiceReaderInterface) runtimeService
 	withoutOutbound  bool
 	discoveryEnabled bool
 }
@@ -997,12 +999,15 @@ func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045Run
 	if options.configureService != nil {
 		options.configureService(service)
 	}
-	var runtime runtimeService = service
-	if options.withoutOutbound {
-		runtime = &msp05pServiceWithoutOutbound{service: service}
-	}
 	dependencies.newService = func(_ RuntimeConfig, _ runtimeMaterial, callback eebusapi.ServiceReaderInterface) (runtimeService, error) {
 		reader = callback.(*runtimeServiceReader)
+		var runtime runtimeService = service
+		if options.withoutOutbound {
+			runtime = &msp05pServiceWithoutOutbound{service: service}
+		}
+		if options.wrapRuntime != nil {
+			runtime = options.wrapRuntime(service, callback)
+		}
 		return runtime, nil
 	}
 	if options.bridge != nil {
