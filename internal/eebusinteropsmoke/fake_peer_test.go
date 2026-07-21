@@ -1,10 +1,11 @@
-package main
+package eebusinteropsmoke
 
 import (
 	"crypto/tls"
 	"fmt"
 	"net"
 	"sync"
+	"testing"
 	"time"
 
 	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
@@ -14,6 +15,43 @@ import (
 	shipmdns "github.com/Project-Helianthus/helianthus-ship-go/mdns"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
+
+func TestFakePeerHandshake(t *testing.T) {
+	portA := availableTestPort(t)
+	portB := availableTestPort(t)
+	if portA == portB {
+		portB = availableTestPort(t)
+	}
+	result := runFakePeerSmoke(fakePeerOptions{
+		Interface: defaultLoopbackInterface(),
+		Timeout:   30 * time.Second,
+		PortA:     portA,
+		PortB:     portB,
+	})
+	if result.Status != resultPass {
+		t.Fatalf("fake peer handshake failed: %+v", result)
+	}
+	const connectedEvidence = "fake-peer-ship-session-connected-both-directions"
+	for _, evidence := range result.Evidence {
+		if evidence == connectedEvidence {
+			return
+		}
+	}
+	t.Fatalf("fake peer handshake evidence = %v, want %q", result.Evidence, connectedEvidence)
+}
+
+func availableTestPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
 
 type fakePeerOptions struct {
 	Interface string
