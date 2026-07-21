@@ -7,13 +7,13 @@ import (
 )
 
 func TestIssue54OpeningPairingOnlyChangesLocalRegistration(t *testing.T) {
-	harness := newMSP05POutboundHarness(t, false)
+	harness := newIssue54PolicyHarness(t, false)
 
 	if got := harness.resources.coordinator.openPairingWindow(context.Background(), msp045RunToken(t, "registration-only-open"), time.Minute); got != "open_empty" {
 		t.Fatalf("open pairing window = %q", got)
 	}
 	time.Sleep(20 * time.Millisecond)
-	state := snapshotMSP05POutboundState(harness.service)
+	state := snapshotIssue54PolicyState(harness.service)
 	if len(state.pairingRegistration) == 0 || !state.pairingRegistration[len(state.pairingRegistration)-1] {
 		t.Fatalf("pairing registration events = %v, want final register=true", state.pairingRegistration)
 	}
@@ -32,9 +32,9 @@ func TestIssue54ConfiguredTrustedSKIIsPolicyWithoutSyntheticObservation(t *testi
 		setup.suppressVisible = true
 	})
 	time.Sleep(20 * time.Millisecond)
-	state := snapshotMSP05POutboundState(harness.service)
-	if len(state.registered) != 1 || state.registered[0] != harness.remoteSKI {
-		t.Fatalf("durable trust policy registrations = %v", state.registered)
+	state := snapshotIssue54PolicyState(harness.service)
+	if len(state.registered) != 0 {
+		t.Fatalf("durable trust policy produced registration observations = %v", state.registered)
 	}
 	snapshot, _ := msp045Capture(t, harness.handler)
 	issue54AssertNoRemoteEvidence(t, snapshot)
@@ -43,7 +43,7 @@ func TestIssue54ConfiguredTrustedSKIIsPolicyWithoutSyntheticObservation(t *testi
 	}
 }
 
-func newMSP05POutboundHarness(t *testing.T, discovery bool) *msp045RuntimeHarness {
+func newIssue54PolicyHarness(t *testing.T, discovery bool) *msp045RuntimeHarness {
 	t.Helper()
 	pretrusted := false
 	return newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
@@ -54,16 +54,16 @@ func newMSP05POutboundHarness(t *testing.T, discovery bool) *msp045RuntimeHarnes
 	})
 }
 
-type msp05pOutboundState struct {
+type issue54PolicyState struct {
 	registered          []string
 	cancelled           []string
 	pairingRegistration []bool
 }
 
-func snapshotMSP05POutboundState(service *msp045Service) msp05pOutboundState {
+func snapshotIssue54PolicyState(service *msp045Service) issue54PolicyState {
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	return msp05pOutboundState{
+	return issue54PolicyState{
 		registered:          append([]string(nil), service.registered...),
 		cancelled:           append([]string(nil), service.cancelled...),
 		pairingRegistration: append([]bool(nil), service.pairingRegistration...),

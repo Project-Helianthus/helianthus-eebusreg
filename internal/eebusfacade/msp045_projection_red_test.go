@@ -373,20 +373,6 @@ func TestMSP045FuturePrepareOutcomeFailsClosedAcrossCallers(t *testing.T) {
 		}
 	})
 
-	t.Run("predial", func(t *testing.T) {
-		harness := newMSP045ProductHarness(t, nil)
-		setFuture(harness)
-		coordinator := harness.resources.coordinator
-		coordinator.mu.Lock()
-		epoch := coordinator.controlView.control.controlEpoch
-		target := cloneFirstTrustControlRecord(coordinator.controlView.control)
-		target.controlEpoch++
-		coordinator.mu.Unlock()
-		_, outcome := coordinator.publishOutgoingAttemptControl(context.Background(), epoch, target, msp045Opaque(t), "attempt_prepare")
-		if outcome != "unknown" || coordinator.recoveryState() != "QUARANTINED" || coordinator.recoveryReason() != "DURABILITY_UNKNOWN" {
-			t.Fatalf("predial = %q %s/%s, want unknown QUARANTINED/DURABILITY_UNKNOWN", outcome, coordinator.recoveryState(), coordinator.recoveryReason())
-		}
-	})
 }
 
 func TestMSP045RepairAndRevocationPublishWithoutNetworkCallback(t *testing.T) {
@@ -460,9 +446,6 @@ func TestMSP045UnknownAndImpossibleProductsAreDeterministic(t *testing.T) {
 		{name: "unknown quarantine", mutate: func(coordinator *firstTrustCoordinator) {
 			coordinator.recovery = "QUARANTINED"
 			coordinator.controlView.control.quarantines = []firstTrustQuarantineRecord{{scope: msp045Opaque(t), state: "FUTURE_QUARANTINE"}}
-		}},
-		{name: "unknown attempt", mutate: func(coordinator *firstTrustCoordinator) {
-			coordinator.controlView.control.attempts = []firstTrustOutgoingAttemptRecord{{state: "FUTURE_ATTEMPT", attemptID: msp045Opaque(t)}}
 		}},
 		{name: "reopen in progress", mutate: func(coordinator *firstTrustCoordinator) { coordinator.reopening = true }},
 		{name: "repair in progress", mutate: func(coordinator *firstTrustCoordinator) {
@@ -731,9 +714,7 @@ func TestMSP045ProjectionPrivacyCanariesStayOutOfObservationChannels(t *testing.
 	candidateSKI := msp045RandomSKI(t)
 	harness.reader.ServicePairingDetailUpdate(candidateSKI, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateReceivedPairingRequest, nil))
 	privateKey := msp045RunToken(t, "idem"+"potency")
-	privateEndpoint := msp045RunToken(t, "endpoint") + ".invalid"
-	privatePath := "/" + msp045RunToken(t, "admin") + "/" + msp045RunToken(t, "operation")
-	privateOperation := msp045Opaque(t)
+	privateInterface := msp045RunToken(t, "interface") + ".invalid"
 	harness.resources.coordinator.mu.Lock()
 	candidate := harness.resources.coordinator.currentCandidate
 	candidate.shipID = msp045RunToken(t, "candidate-service")
@@ -742,10 +723,6 @@ func TestMSP045ProjectionPrivacyCanariesStayOutOfObservationChannels(t *testing.
 		fingerprint: msp045RunToken(t, "candidate-proof"),
 		nonce:       msp045RunToken(t, "candidate-challenge"),
 	}
-	harness.resources.coordinator.controlView.control.attempts = []firstTrustOutgoingAttemptRecord{{
-		state: "RESERVED", attemptID: privateOperation, remoteSKI: append([]byte(nil), candidate.remote...),
-		endpoint: firstTrustOutgoingAttemptEndpoint{host: privateEndpoint, port: 9}, path: privatePath,
-	}}
 	privateValues := []string{
 		candidateSKI,
 		candidate.shipID,
@@ -753,15 +730,13 @@ func TestMSP045ProjectionPrivacyCanariesStayOutOfObservationChannels(t *testing.
 		privateKey,
 		candidate.requests[privateKey].fingerprint,
 		candidate.requests[privateKey].nonce,
-		privateEndpoint,
-		privatePath,
-		hex.EncodeToString(privateOperation[:]),
+		privateInterface,
 		harness.resources.adminDir,
 	}
 	harness.resources.coordinator.mu.Unlock()
 
 	_, snapshotPayload := msp045Capture(t, harness.handler)
-	_, diagnosticErr := newEEBusService(RuntimeConfig{Interface: privateEndpoint}, runtimeMaterial{}, nil)
+	_, diagnosticErr := newEEBusService(RuntimeConfig{Interface: privateInterface}, runtimeMaterial{}, nil)
 	channels := map[string][]byte{
 		"snapshot": snapshotPayload,
 		"error":    []byte(diagnosticErr.Error()),

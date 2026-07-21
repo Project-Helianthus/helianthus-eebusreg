@@ -15,7 +15,6 @@ type storeConfig struct {
 	root                            string
 	backend                         *nativeSyscallBackend
 	providers                       map[providerKey]protectedKeyProvider
-	migrations                      migrationGraph
 	retainUnavailableProtectedState bool
 }
 
@@ -40,7 +39,6 @@ type store struct {
 	mu             sync.Mutex
 	backend        *nativeSyscallBackend
 	providers      map[providerKey]protectedKeyProvider
-	migrations     migrationGraph
 	configuredPath string
 	parent         *os.File
 	rootName       string
@@ -88,7 +86,6 @@ func openStore(config storeConfig) openResult {
 	opened := &store{
 		backend:        config.backend,
 		providers:      config.providers,
-		migrations:     config.migrations,
 		configuredPath: prepared.configuredPath,
 		parent:         prepared.parent,
 		rootName:       prepared.rootName,
@@ -117,13 +114,6 @@ func openStore(config storeConfig) openResult {
 				opened.abort()
 				return openFailure(newStoreError(outcomeFilesystemCapabilityUnavailable, "resume_bootstrap", errors.New("lock identity changed")))
 			}
-		}
-	}
-	if opened.migrations.current == 0 {
-		opened.migrations, err = currentMigrationGraph()
-		if err != nil {
-			opened.abort()
-			return openFailure(err)
 		}
 	}
 	if err := opened.openGenerationDirectory(); err != nil {
@@ -175,8 +165,7 @@ func openStore(config storeConfig) openResult {
 		opened.abort()
 		return openFailure(err)
 	}
-	path, err := opened.migrations.pathFrom(manifest.current.schemaVersion)
-	if err != nil {
+	if err := validateCurrentManifestSchemas(manifest); err != nil {
 		opened.abort()
 		return openFailure(err)
 	}
@@ -198,20 +187,6 @@ func openStore(config storeConfig) openResult {
 	opened.selected = &selected
 	opened.manifest = &manifest
 	opened.state = cloneStateV1(current.state)
-	if len(path) != 0 {
-		migrated, err := opened.migrations.apply(manifest.current.schemaVersion, current.state)
-		if err != nil {
-			opened.abort()
-			return openFailure(err)
-		}
-		committed := opened.commit(migrated)
-		if committed.outcome != outcomeCommitDurable {
-			opened.abort()
-			return openResult{outcome: committed.outcome, err: committed.err}
-		}
-		state := cloneStateV1(opened.state)
-		return openResult{outcome: outcomeOpenedMigrated, store: opened, state: &state}
-	}
 	state := cloneStateV1(current.state)
 	return openResult{outcome: outcomeOpenedCurrent, store: opened, state: &state}
 }
@@ -225,6 +200,16 @@ func versionError(operation string, found, current uint64) error {
 		return newStoreError(outcomeUnsupportedFutureVersion, operation, errors.New("future version"))
 	}
 	return newStoreError(outcomeUnsupportedLegacyVersion, operation, errors.New("legacy version"))
+}
+
+func validateCurrentManifestSchemas(manifest manifestPayloadV1) error {
+	if manifest.current.schemaVersion != currentSchemaVersion {
+		return versionError("schema_version", manifest.current.schemaVersion, currentSchemaVersion)
+	}
+	if manifest.parent != nil && manifest.parent.schemaVersion != currentSchemaVersion {
+		return versionError("parent_schema_version", manifest.parent.schemaVersion, currentSchemaVersion)
+	}
+	return nil
 }
 
 func decodeSelectedManifest(payload []byte) (manifestPayloadV1, error) {
@@ -416,8 +401,8 @@ func publicationGenerationReferences(layout layoutSnapshot, requireSafe bool) (m
 
 func (opened *store) loadCurrentGeneration(manifest manifestPayloadV1) (generationV1, error) {
 	reference := manifest.current
-	if _, err := opened.migrations.pathFrom(reference.schemaVersion); err != nil {
-		return generationV1{}, err
+	if reference.schemaVersion != currentSchemaVersion {
+		return generationV1{}, versionError("schema_version", reference.schemaVersion, currentSchemaVersion)
 	}
 	exists, err := objectExistsAt(opened.generations, reference.generationFile)
 	if err != nil {
@@ -457,7 +442,7 @@ func (opened *store) classifyRecovery(manifest manifestPayloadV1, currentErr err
 		opened.abort()
 		return openFailure(currentErr)
 	}
-	if !hasDirectParentChronology(manifest) || manifest.parent == nil || manifest.parent.schemaVersion > opened.migrations.current {
+	if !hasDirectParentChronology(manifest) || manifest.parent == nil || manifest.parent.schemaVersion != currentSchemaVersion {
 		opened.abort()
 		return openFailure(newStoreError(outcomeNoValidCurrent, "classify_recovery", currentErr))
 	}

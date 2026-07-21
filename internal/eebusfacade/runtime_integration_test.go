@@ -63,7 +63,7 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	if err != nil {
 		t.Fatalf("acquireRuntime() error = %v", err)
 	}
-	if !service.setup || len(service.registered) != 1 || service.registered[0] != remoteSKI {
+	if !service.setup || len(service.registered) != 0 {
 		t.Fatalf("service setup=%t registered=%v", service.setup, service.registered)
 	}
 	if handler == nil {

@@ -10,13 +10,7 @@ import (
 
 	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
 	eebusservice "github.com/Project-Helianthus/helianthus-eebus-go/service"
-	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 )
-
-type OutgoingAttemptBridgeConfiguration struct {
-	Gate shipapi.OutgoingAttemptGate
-	Sink shipapi.OutgoingAttemptHubReaderInterface
-}
 
 type ListenerPolicy struct {
 	ListenAddress    netip.AddrPort
@@ -24,8 +18,7 @@ type ListenerPolicy struct {
 }
 
 type ServiceOptions struct {
-	ListenerPolicy        *ListenerPolicy
-	OutgoingAttemptBridge *OutgoingAttemptBridgeConfiguration
+	ListenerPolicy *ListenerPolicy
 }
 
 type Service struct {
@@ -50,12 +43,6 @@ func NewServiceWithOptions(
 		translated.ListenerPolicy = &eebusservice.ListenerPolicy{
 			ListenAddress:    options.ListenerPolicy.ListenAddress,
 			DiscoveryEnabled: options.ListenerPolicy.DiscoveryEnabled,
-		}
-	}
-	if options.OutgoingAttemptBridge != nil {
-		translated.OutgoingAttemptBridge = &eebusservice.OutgoingAttemptBridgeConfiguration{
-			Gate: options.OutgoingAttemptBridge.Gate,
-			Sink: options.OutgoingAttemptBridge.Sink,
 		}
 	}
 	candidate := eebusservice.NewServiceWithOptions(configuration, reader, translated)
@@ -146,16 +133,4 @@ func (service *Service) monitorListener() {
 			}
 		}
 	}
-}
-
-func NewServiceWithOutgoingAttemptBridge(
-	configuration *eebusapi.Configuration,
-	reader eebusapi.ServiceReaderInterface,
-	bridge OutgoingAttemptBridgeConfiguration,
-) *eebusservice.Service {
-	return eebusservice.NewServiceWithOutgoingAttemptBridge(
-		configuration,
-		reader,
-		eebusservice.OutgoingAttemptBridgeConfiguration{Gate: bridge.Gate, Sink: bridge.Sink},
-	)
 }

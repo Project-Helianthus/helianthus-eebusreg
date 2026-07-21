@@ -65,7 +65,7 @@ func TestMSP05PScopedStartupRollbackClosesTrustAndPreservesPrimaryError(t *testi
 	if failed != nil || !errors.Is(err, primary) {
 		t.Fatalf("scoped startup result backend=%v error=%v, want primary bind error", failed, err)
 	}
-	if got, want := service.eventsSnapshot(), []string{"setup", "register:" + remoteSKI, "start-policy", "shutdown"}; !slices.Equal(got, want) {
+	if got, want := service.eventsSnapshot(), []string{"setup", "start-policy", "shutdown"}; !slices.Equal(got, want) {
 		t.Fatalf("scoped startup events = %v, want %v", got, want)
 	}
 	if service.shutdownCount() != 1 {

@@ -205,11 +205,6 @@ type firstTrustCoordinator struct {
 	recoveryOperation    *firstTrustRecoveryOperation
 	trustAdminProjection *trustAdminProjectionBinding
 	trustAdminRevision   uint64
-
-	outgoingAttemptLanes                  [32]sync.Mutex
-	outgoingAttemptContexts               map[[32]byte]firstTrustOutgoingAttemptRuntime
-	outgoingAttemptReservationOrder       uint64
-	outgoingAttemptCancellationGeneration uint64
 }
 
 func newFirstTrustCoordinator(now func() time.Time, random io.Reader, store firstTrustPersistence, effects firstTrustEffects) *firstTrustCoordinator {
@@ -220,17 +215,16 @@ func newFirstTrustCoordinator(now func() time.Time, random io.Reader, store firs
 		random = rand.Reader
 	}
 	coordinator := &firstTrustCoordinator{
-		now:                     now,
-		random:                  random,
-		store:                   store,
-		effects:                 effects,
-		commitWait:              firstTrustCommitWait,
-		withdrawalWait:          firstTrustWithdrawalWait,
-		phase:                   firstTrustDisabled,
-		trustedRemotes:          make(map[string]string),
-		replays:                 make(map[string]firstTrustReplay),
-		retired:                 make(map[string]firstTrustRetired),
-		outgoingAttemptContexts: make(map[[32]byte]firstTrustOutgoingAttemptRuntime),
+		now:            now,
+		random:         random,
+		store:          store,
+		effects:        effects,
+		commitWait:     firstTrustCommitWait,
+		withdrawalWait: firstTrustWithdrawalWait,
+		phase:          firstTrustDisabled,
+		trustedRemotes: make(map[string]string),
+		replays:        make(map[string]firstTrustReplay),
+		retired:        make(map[string]firstTrustRetired),
 	}
 	coordinator.mu.coordinator = coordinator
 	return coordinator
@@ -306,7 +300,7 @@ func (coordinator *firstTrustCoordinator) reopen(ctx context.Context) string {
 	if ctx.Err() != nil {
 		return "reopen_cancelled"
 	}
-	if outcome != "opened_empty" && outcome != "opened_current" && outcome != "opened_migrated" {
+	if outcome != "opened_empty" && outcome != "opened_current" {
 		return outcome
 	}
 	trusted := make(map[string]string, len(associations))
@@ -800,7 +794,6 @@ func (coordinator *firstTrustCoordinator) shutdown() error {
 	coordinator.recoveryOperation = nil
 	coordinator.retryArms = nil
 	coordinator.retryInflight = nil
-	coordinator.cancelAllOutgoingAttemptContextsLocked()
 	coordinator.effects = nil
 	coordinator.unlockAndNotifyTrustAdminProjectionChange(before)
 	return registrationErr

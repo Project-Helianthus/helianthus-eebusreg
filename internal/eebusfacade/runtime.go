@@ -64,12 +64,11 @@ type serviceBackend struct {
 }
 
 type runtimeMaterial struct {
-	certificate           tls.Certificate
-	localSKI              string
-	nodeToken             string
-	pretrusted            map[string]bool
-	firstTrust            *runtimeFirstTrustAuthorization
-	outgoingAttemptBridge *firstTrustOutgoingAttemptBridge
+	certificate tls.Certificate
+	localSKI    string
+	nodeToken   string
+	pretrusted  map[string]bool
+	firstTrust  *runtimeFirstTrustAuthorization
 }
 
 const redactedRuntimeMaterial = "eebusfacade.runtime_material{redacted}"
@@ -233,8 +232,6 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		}
 		return firstTrust.Close()
 	}
-	outgoingAttemptBridge := newFirstTrustOutgoingAttemptBridge(firstTrust)
-	material.outgoingAttemptBridge = outgoingAttemptBridge
 	if dependencies.newService == nil {
 		return nil, errors.Join(errors.New("runtime service dependency is incomplete"), closeFirstTrust())
 	}
@@ -256,27 +253,12 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		service.Shutdown()
 		return errors.Join(cause, trustErr)
 	}
-	if outgoingAttemptBridge != nil {
-		outgoingAttemptBridge.bindLifecycle(service)
-	}
 	if err := service.Setup(); err != nil {
 		return nil, closeRuntime(fmt.Errorf("setup eebus runtime service: %w", err))
 	}
 	if firstTrust != nil {
 		if err := attachRuntimeFirstTrust(ctx, firstTrust, service, reader, dependencies); err != nil {
 			return nil, closeRuntime(err)
-		}
-	}
-	for _, remote := range config.Remotes {
-		if firstTrust == nil {
-			if !remote.Pretrusted {
-				continue
-			}
-			service.RegisterRemoteSKI(remote.SKI)
-			continue
-		}
-		if firstTrust.coordinator.registerConfiguredRemote(remote) == "registered" {
-			service.RegisterRemoteSKI(remote.SKI)
 		}
 	}
 	backend := &serviceBackend{service: service, handler: handler, firstTrust: firstTrust}
@@ -404,12 +386,6 @@ func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebu
 			ListenAddress:    config.ListenAddress,
 			DiscoveryEnabled: config.DiscoveryEnabled,
 		},
-	}
-	if material.outgoingAttemptBridge != nil {
-		options.OutgoingAttemptBridge = &eebusservicebridge.OutgoingAttemptBridgeConfiguration{
-			Gate: material.outgoingAttemptBridge,
-			Sink: material.outgoingAttemptBridge,
-		}
 	}
 	candidate := eebusservicebridge.NewServiceWithOptions(configuration, reader, options)
 	if candidate == nil {

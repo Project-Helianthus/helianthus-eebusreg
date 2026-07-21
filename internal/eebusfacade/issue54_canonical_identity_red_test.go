@@ -131,7 +131,7 @@ func issue55ReloadPersistedIdentity(t *testing.T, stateRoot string, anchor *runt
 		t.Fatalf("reopen persisted identity = %q", outcome)
 	}
 	view, outcome := bridge.ReloadControl(context.Background())
-	if outcome != "opened_current" && outcome != "opened_migrated" {
+	if outcome != "opened_current" {
 		_ = bridge.Close()
 		t.Fatalf("reload persisted identity = %q", outcome)
 	}
@@ -203,7 +203,7 @@ func issue54ProtectedStoreInstance(t *testing.T, stateRoot string, material runt
 		}
 	}()
 	view, outcome := bridge.ReloadControl(context.Background())
-	if outcome != "opened_current" && outcome != "opened_migrated" {
+	if outcome != "opened_current" {
 		t.Fatalf("reload protected store = %q", outcome)
 	}
 	if view.control.storeInstance == [sha256.Size]byte{} {

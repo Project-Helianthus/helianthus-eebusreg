@@ -134,7 +134,7 @@ func loadNativeProtectedRuntimeMaterial(ctx context.Context, stateRoot string) (
 
 func nativeProtectedOpenOutcome(outcome string) bool {
 	switch outcome {
-	case "opened_empty", "opened_current", "opened_migrated":
+	case "opened_empty", "opened_current":
 		return true
 	default:
 		return false

@@ -139,3 +139,24 @@ func sha256Hex(payload []byte) string {
 func generationFilename(sequence uint64) string {
 	return fmt.Sprintf("g-%020d.json", sequence)
 }
+
+func cloneStateV1(source stateV1) stateV1 {
+	cloned := stateV1{remoteIdentities: make([]remoteIdentityV1, len(source.remoteIdentities))}
+	if source.localIdentity != nil {
+		identity := *source.localIdentity
+		identity.certificateChainDER = make([][]byte, len(source.localIdentity.certificateChainDER))
+		for index, certificate := range source.localIdentity.certificateChainDER {
+			identity.certificateChainDER[index] = append([]byte(nil), certificate...)
+		}
+		identity.keyReference.sealedBlob = append([]byte(nil), source.localIdentity.keyReference.sealedBlob...)
+		identity.localSKI = append([]byte(nil), source.localIdentity.localSKI...)
+		cloned.localIdentity = &identity
+	}
+	for index, identity := range source.remoteIdentities {
+		cloned.remoteIdentities[index] = identity
+		cloned.remoteIdentities[index].recordID = append([]byte(nil), identity.recordID...)
+		cloned.remoteIdentities[index].remoteSKI = append([]byte(nil), identity.remoteSKI...)
+	}
+	cloned.controlEnvelope = append([]byte(nil), source.controlEnvelope...)
+	return cloned
+}

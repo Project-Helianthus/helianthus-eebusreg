@@ -47,10 +47,7 @@ func (opened *store) commit(state stateV1) commitResult {
 		metadata.parentSequence = &parentSequence
 		metadata.parentSHA256 = &parentSHA
 	}
-	schemaVersion := opened.migrations.current
-	if schemaVersion == 0 {
-		schemaVersion = currentSchemaVersion
-	}
+	schemaVersion := currentSchemaVersion
 	generation := generationV1{metadata: metadata, state: cloneStateV1(state), schemaVersion: schemaVersion}
 	generationBytes, err := encodeGenerationV1(generation)
 	if err != nil {

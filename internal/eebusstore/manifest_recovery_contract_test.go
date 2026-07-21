@@ -116,13 +116,14 @@ func TestCurrentAcceptsMonotonicNoncontiguousExactParent(t *testing.T) {
 			parentSequence: &parentSequence,
 			parentSHA256:   &parentSHA256,
 		},
-		state: emptyLogicalState(t),
+		state:         emptyLogicalState(t),
+		schemaVersion: currentSchemaVersion,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstRef := testGenerationRef{sequence: 1, sha256: parentSHA256, schema: 1}
-	thirdRef := testGenerationRef{sequence: 3, sha256: testDigestHex(third), schema: 1}
+	firstRef := testGenerationRef{sequence: 1, sha256: parentSHA256, schema: currentSchemaVersion}
+	thirdRef := testGenerationRef{sequence: 3, sha256: testDigestHex(third), schema: currentSchemaVersion}
 	installStoreLayout(
 		t,
 		root,
@@ -146,8 +147,8 @@ func TestRecoveryCandidateRejectsParentAtOrAfterCurrent(t *testing.T) {
 				[]byte(fmt.Sprintf(`"sequence":%d`, parentSequence)),
 				1,
 			)
-			missingCurrentRef := testGenerationRef{sequence: 2, sha256: strings.Repeat("a", 64), schema: 1}
-			parentRef := testGenerationRef{sequence: parentSequence, sha256: testDigestHex(parentGeneration), schema: 1}
+			missingCurrentRef := testGenerationRef{sequence: 2, sha256: strings.Repeat("a", 64), schema: currentSchemaVersion}
+			parentRef := testGenerationRef{sequence: parentSequence, sha256: testDigestHex(parentGeneration), schema: currentSchemaVersion}
 			installStoreLayout(
 				t,
 				root,
@@ -168,8 +169,8 @@ func TestRecoveryCandidateRejectsParentAtOrAfterCurrent(t *testing.T) {
 func TestOversizedExactParentIsInvalidRecoveryEvidence(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "store")
 	parent := bytes.Repeat([]byte{'x'}, maxGenerationBytes+1)
-	currentRef := testGenerationRef{sequence: 2, sha256: strings.Repeat("a", 64), schema: 1}
-	parentRef := testGenerationRef{sequence: 1, sha256: testDigestHex(parent), schema: 1}
+	currentRef := testGenerationRef{sequence: 2, sha256: strings.Repeat("a", 64), schema: currentSchemaVersion}
+	parentRef := testGenerationRef{sequence: 1, sha256: testDigestHex(parent), schema: currentSchemaVersion}
 	installStoreLayout(
 		t,
 		root,
@@ -204,8 +205,8 @@ func TestInvalidExactParentDoesNotFallBackToLowerSlotOrScanOrphans(t *testing.T)
 func TestFutureManifestVersionIsTerminalAfterEpochSelection(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "store")
 	first := readFixture(t, "generation-v1-empty.json")
-	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
-	futureRef := testGenerationRef{sequence: 99, sha256: strings.Repeat("a", 64), schema: 1}
+	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: currentSchemaVersion}
+	futureRef := testGenerationRef{sequence: 99, sha256: strings.Repeat("a", 64), schema: currentSchemaVersion}
 	installStoreLayout(
 		t,
 		root,
@@ -225,8 +226,8 @@ func TestFutureManifestVersionIsTerminalAfterEpochSelection(t *testing.T) {
 
 func TestSelectedFutureManifestVersionPrecedesV1Validation(t *testing.T) {
 	first := readFixture(t, "generation-v1-empty.json")
-	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
-	malformedRef := testGenerationRef{sequence: 0, sha256: "not-a-sha256-digest", schema: 1}
+	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: currentSchemaVersion}
+	malformedRef := testGenerationRef{sequence: 0, sha256: "not-a-sha256-digest", schema: currentSchemaVersion}
 	tests := []struct {
 		name    string
 		payload []byte
@@ -270,7 +271,7 @@ func TestSelectedFutureManifestVersionPrecedesV1Validation(t *testing.T) {
 func TestFutureSlotEnvelopeIsTerminalAndCannotBeBypassed(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "store")
 	first := readFixture(t, "generation-v1-empty.json")
-	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
+	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: currentSchemaVersion}
 	payload := testManifestPayloadBytes(firstRef, nil, 1)
 	installStoreLayout(
 		t,
@@ -292,18 +293,18 @@ func TestSelectedGenerationVersionClassifiesLegacyAndFutureWithoutFallback(t *te
 		version uint64
 		want    outcome
 	}{
-		"legacy": {version: 0, want: outcomeUnsupportedLegacyVersion},
-		"future": {version: 2, want: outcomeUnsupportedFutureVersion},
+		"legacy": {version: 2, want: outcomeUnsupportedLegacyVersion},
+		"future": {version: 4, want: outcomeUnsupportedFutureVersion},
 	} {
 		t.Run(name, func(t *testing.T) {
 			first := readFixture(t, "generation-v1-empty.json")
 			second := bytes.Replace(
 				readFixture(t, "generation-v1-child-empty.json"),
-				[]byte(`"schema_version":1}`),
+				[]byte(`"schema_version":3}`),
 				[]byte(fmt.Sprintf(`"schema_version":%d}`, schema.version)),
 				1,
 			)
-			firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
+			firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: currentSchemaVersion}
 			secondRef := testGenerationRef{sequence: 2, sha256: testDigestHex(second), schema: schema.version}
 			root := filepath.Join(t.TempDir(), "store")
 			installStoreLayout(
@@ -351,7 +352,7 @@ func TestOpenAccepts128ArtifactsIndependentOfReferencedGenerations(t *testing.T)
 
 func TestOpenRejects129UnreferencedGenerationsAtArtifactBound(t *testing.T) {
 	first := readFixture(t, "generation-v1-empty.json")
-	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
+	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: currentSchemaVersion}
 	root := filepath.Join(t.TempDir(), "store")
 	installStoreLayout(
 		t,
@@ -383,8 +384,8 @@ func TestFutureSelectedSlotArtifactLimitPrecedesVersionClassification(t *testing
 			root := filepath.Join(t.TempDir(), "store")
 			first := readFixture(t, "generation-v1-empty.json")
 			future := testGenerationWithParent(t, 50, 1, testDigestHex(first))
-			firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
-			futureRef := testGenerationRef{sequence: 50, sha256: testDigestHex(future), schema: 1}
+			firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: currentSchemaVersion}
+			futureRef := testGenerationRef{sequence: 50, sha256: testDigestHex(future), schema: currentSchemaVersion}
 			installStoreLayout(
 				t,
 				root,
@@ -408,9 +409,9 @@ func TestLowerEpochFutureSlotReferencesAreExcludedFromArtifactCount(t *testing.T
 	first := readFixture(t, "generation-v1-empty.json")
 	second := readFixture(t, "generation-v1-child-empty.json")
 	future := testGenerationWithParent(t, 50, 1, testDigestHex(first))
-	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
-	secondRef := testGenerationRef{sequence: 2, sha256: testDigestHex(second), schema: 1}
-	futureRef := testGenerationRef{sequence: 50, sha256: testDigestHex(future), schema: 1}
+	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: currentSchemaVersion}
+	secondRef := testGenerationRef{sequence: 2, sha256: testDigestHex(second), schema: currentSchemaVersion}
+	futureRef := testGenerationRef{sequence: 50, sha256: testDigestHex(future), schema: currentSchemaVersion}
 	installStoreLayout(
 		t,
 		root,
@@ -455,7 +456,8 @@ func testGenerationWithParent(t *testing.T, sequence, parentSequence uint64, par
 			parentSequence: &parentSequence,
 			parentSHA256:   &parentSHA256,
 		},
-		state: emptyLogicalState(t),
+		state:         emptyLogicalState(t),
+		schemaVersion: currentSchemaVersion,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -475,14 +477,15 @@ func installThreeGenerationStore(t *testing.T, root string) {
 			parentSequence: &parentSequence,
 			parentSHA256:   &parentSHA256,
 		},
-		state: emptyLogicalState(t),
+		state:         emptyLogicalState(t),
+		schemaVersion: currentSchemaVersion,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: 1}
-	secondRef := testGenerationRef{sequence: 2, sha256: testDigestHex(second), schema: 1}
-	thirdRef := testGenerationRef{sequence: 3, sha256: testDigestHex(third), schema: 1}
+	firstRef := testGenerationRef{sequence: 1, sha256: testDigestHex(first), schema: currentSchemaVersion}
+	secondRef := testGenerationRef{sequence: 2, sha256: testDigestHex(second), schema: currentSchemaVersion}
+	thirdRef := testGenerationRef{sequence: 3, sha256: testDigestHex(third), schema: currentSchemaVersion}
 	installStoreLayout(
 		t,
 		root,

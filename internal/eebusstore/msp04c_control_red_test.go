@@ -14,24 +14,9 @@ import (
 	"time"
 )
 
-func TestMSP04CControlRecordAdvancesTheInternalSchema(t *testing.T) {
+func TestMSP04CControlRecordUsesOnlyCurrentSchema(t *testing.T) {
 	if currentSchemaVersion != 3 {
 		t.Fatalf("current internal schema = %d, want 3", currentSchemaVersion)
-	}
-	source := stateV1{}
-	first, err := migrateMSP04BStateToMSP04C(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := migrateMSP04BStateToMSP04C(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(first, second) {
-		t.Fatal("v1-to-v2 migration is not deterministic")
-	}
-	if _, ok := controlRecordFromStateV1(first); ok {
-		t.Fatal("legacy state was silently enrolled into a control lineage")
 	}
 }
 
@@ -39,8 +24,8 @@ func TestMSP04CControlRecordRoundTripsCanonicalMechanicalState(t *testing.T) {
 	record := msp04cStoreControlFixture()
 	generation := generationV1{
 		metadata:      generationMetadata{sequence: 19},
-		state:         withControlRecordV2(stateV1{}, record),
-		schemaVersion: 2,
+		state:         withControlRecordV3(stateV1{}, record),
+		schemaVersion: currentSchemaVersion,
 	}
 	first, err := encodeGenerationV1(generation)
 	if err != nil {
@@ -64,7 +49,7 @@ func TestMSP04CControlRecordRoundTripsCanonicalMechanicalState(t *testing.T) {
 
 func TestMSP04CControlCloneOwnsEveryMutableField(t *testing.T) {
 	source := msp04cStoreControlFixture()
-	clone := cloneControlRecordV2(source)
+	clone := cloneControlRecordV3(source)
 	source.storeInstance[0]++
 	source.associationLineage[0]++
 	source.tombstones[0].associationRef[0]++
@@ -83,23 +68,23 @@ func TestMSP04CControlCloneOwnsEveryMutableField(t *testing.T) {
 func TestMSP04CControlValidationIsClosedAndBounded(t *testing.T) {
 	tests := []struct {
 		name   string
-		mutate func(*controlRecordV2)
+		mutate func(*controlRecordV3)
 	}{
-		{name: "store instance absent", mutate: func(record *controlRecordV2) { record.storeInstance = nil }},
-		{name: "lineage absent", mutate: func(record *controlRecordV2) { record.associationLineage = nil }},
-		{name: "control epoch exhausted", mutate: func(record *controlRecordV2) { record.controlEpoch = ^uint64(0) }},
-		{name: "duplicate tombstone", mutate: func(record *controlRecordV2) { record.tombstones = append(record.tombstones, record.tombstones[0]) }},
-		{name: "duplicate quarantine", mutate: func(record *controlRecordV2) { record.quarantines = append(record.quarantines, record.quarantines[0]) }},
-		{name: "duplicate receipt", mutate: func(record *controlRecordV2) { record.receipts = append(record.receipts, record.receipts[0]) }},
-		{name: "negative remainder", mutate: func(record *controlRecordV2) { record.quarantines[0].remainingDelay = -1 }},
-		{name: "negative retention", mutate: func(record *controlRecordV2) { record.quarantines[0].retentionBudget = -1 }},
-		{name: "publication epoch mismatch", mutate: func(record *controlRecordV2) { record.publication.targetControlEpoch += 2 }},
+		{name: "store instance absent", mutate: func(record *controlRecordV3) { record.storeInstance = nil }},
+		{name: "lineage absent", mutate: func(record *controlRecordV3) { record.associationLineage = nil }},
+		{name: "control epoch exhausted", mutate: func(record *controlRecordV3) { record.controlEpoch = ^uint64(0) }},
+		{name: "duplicate tombstone", mutate: func(record *controlRecordV3) { record.tombstones = append(record.tombstones, record.tombstones[0]) }},
+		{name: "duplicate quarantine", mutate: func(record *controlRecordV3) { record.quarantines = append(record.quarantines, record.quarantines[0]) }},
+		{name: "duplicate receipt", mutate: func(record *controlRecordV3) { record.receipts = append(record.receipts, record.receipts[0]) }},
+		{name: "negative remainder", mutate: func(record *controlRecordV3) { record.quarantines[0].remainingDelay = -1 }},
+		{name: "negative retention", mutate: func(record *controlRecordV3) { record.quarantines[0].retentionBudget = -1 }},
+		{name: "publication epoch mismatch", mutate: func(record *controlRecordV3) { record.publication.targetControlEpoch += 2 }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			record := msp04cStoreControlFixture()
 			test.mutate(&record)
-			if err := validateStateV1(withControlRecordV2(stateV1{}, record)); err == nil {
+			if err := validateStateV1(withControlRecordV3(stateV1{}, record)); err == nil {
 				t.Fatal("invalid mechanical control record was accepted")
 			}
 		})
@@ -107,21 +92,21 @@ func TestMSP04CControlValidationIsClosedAndBounded(t *testing.T) {
 
 	boundTests := []struct {
 		name   string
-		mutate func(*controlRecordV2)
+		mutate func(*controlRecordV3)
 	}{
-		{name: "tombstones", mutate: func(record *controlRecordV2) {
-			record.tombstones = make([]controlTombstoneV2, maxControlTombstoneCount+1)
+		{name: "tombstones", mutate: func(record *controlRecordV3) {
+			record.tombstones = make([]controlTombstone, maxControlTombstoneCount+1)
 		}},
-		{name: "quarantines", mutate: func(record *controlRecordV2) {
-			record.quarantines = make([]controlQuarantineV2, maxControlQuarantineCount+1)
+		{name: "quarantines", mutate: func(record *controlRecordV3) {
+			record.quarantines = make([]controlQuarantine, maxControlQuarantineCount+1)
 		}},
-		{name: "receipts", mutate: func(record *controlRecordV2) { record.receipts = make([]controlReceiptV2, maxControlReceiptCount+1) }},
+		{name: "receipts", mutate: func(record *controlRecordV3) { record.receipts = make([]controlReceipt, maxControlReceiptCount+1) }},
 	}
 	for _, test := range boundTests {
 		t.Run(test.name, func(t *testing.T) {
 			record := msp04cStoreControlFixture()
 			test.mutate(&record)
-			if err := validateStateV1(withControlRecordV2(stateV1{}, record)); err == nil {
+			if err := validateStateV1(withControlRecordV3(stateV1{}, record)); err == nil {
 				t.Fatal("out-of-bound control record was accepted")
 			}
 		})
@@ -200,27 +185,27 @@ func TestMSP04CStoreProductionCodeContainsNoRecoveryPolicy(t *testing.T) {
 	}
 }
 
-func msp04cStoreControlFixture() controlRecordV2 {
-	previous := generationReference{generation: 17, generationFile: generationFilename(17), generationSHA256: strings.Repeat("1", 64), schemaVersion: 2}
-	target := generationReference{generation: 18, generationFile: generationFilename(18), generationSHA256: strings.Repeat("2", 64), schemaVersion: 2}
-	return controlRecordV2{
+func msp04cStoreControlFixture() controlRecordV3 {
+	previous := generationReference{generation: 17, generationFile: generationFilename(17), generationSHA256: strings.Repeat("1", 64), schemaVersion: currentSchemaVersion}
+	target := generationReference{generation: 18, generationFile: generationFilename(18), generationSHA256: strings.Repeat("2", 64), schemaVersion: currentSchemaVersion}
+	return controlRecordV3{
 		storeInstance:      msp04cStoreOrdinal(1),
 		controlEpoch:       9,
 		associationLineage: msp04cStoreOrdinal(2),
-		tombstones: []controlTombstoneV2{{
+		tombstones: []controlTombstone{{
 			associationRef: msp04cStoreOrdinal(3), revocationEpoch: 8,
 			operationID: msp04cStoreOrdinal(4), effectiveGeneration: target,
 		}},
-		quarantines: []controlQuarantineV2{{
+		quarantines: []controlQuarantine{{
 			scope: msp04cStoreOrdinal(5), reasonCode: 2, stateCode: 1, attemptCount: 3,
 			backoffStep: 2, remainingDelay: int64(10 * time.Second), retentionBudget: int64(30 * time.Second), lastControlEpoch: 8,
 		}},
-		receipts: []controlReceiptV2{{
+		receipts: []controlReceipt{{
 			operationID: msp04cStoreOrdinal(6), operationClass: 2, bindingSHA256: msp04cStoreOrdinal(7), resultCode: 1, terminal: true,
 		}},
 		operationHighWater: 6,
 		repairSequence:     4,
-		publication: &controlPublicationV2{
+		publication: &controlPublication{
 			operationID: msp04cStoreOrdinal(8), operationClass: 1, storeInstance: msp04cStoreOrdinal(1),
 			previousControlEpoch: 8, targetControlEpoch: 9, previousGeneration: previous, targetGeneration: target,
 		},

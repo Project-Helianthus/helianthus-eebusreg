@@ -7,31 +7,6 @@ import (
 	"testing"
 )
 
-func TestMSP04CR2RuntimeInstallsReleasedOutgoingBridgeBeforeServiceSetup(t *testing.T) {
-	runtimeSource := readMSP04CR2ProductionFile(t, "runtime.go")
-	allSource := runtimeSource + readMSP04CR2ProductionFile(t, "runtime_first_trust.go") + readOptionalMSP04CR2ProductionFile(t, "runtime_outgoing_attempt.go")
-
-	bridge := strings.Index(runtimeSource, "newFirstTrustOutgoingAttemptBridge")
-	serviceFactory := strings.Index(runtimeSource, "dependencies.newService")
-	setup := strings.Index(runtimeSource, "service.Setup")
-	if bridge < 0 {
-		t.Fatal("production acquireRuntime lacks newFirstTrustOutgoingAttemptBridge")
-	}
-	if serviceFactory < 0 || setup < 0 || bridge > serviceFactory || serviceFactory > setup {
-		t.Fatalf("runtime bridge/service/setup order = %d/%d/%d, want bridge < service < setup", bridge, serviceFactory, setup)
-	}
-	if !strings.Contains(allSource, "NewServiceWithOptions") {
-		t.Fatal("production runtime does not use the released scoped service constructor")
-	}
-	if !strings.Contains(allSource, "ListenerPolicy") || !strings.Contains(allSource, "OutgoingAttemptBridgeConfiguration") {
-		t.Fatal("production runtime does not bind the listener and outgoing-attempt policies together")
-	}
-	outgoingSource := readOptionalMSP04CR2ProductionFile(t, "runtime_outgoing_attempt.go")
-	if strings.Contains(outgoingSource, "internal/eebusstore") {
-		t.Fatal("released lifecycle adapter writes the store directly instead of using the coordinator")
-	}
-}
-
 func TestMSP04CR2ProductionFacadeUsesOnlyReviewedForkIdentities(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -75,18 +50,6 @@ func readMSP04CR2ProductionFile(t *testing.T, name string) string {
 	payload, err := os.ReadFile(filepath.Clean(name))
 	if err != nil {
 		t.Fatalf("read production facade %s: %v", name, err)
-	}
-	return string(payload)
-}
-
-func readOptionalMSP04CR2ProductionFile(t *testing.T, name string) string {
-	t.Helper()
-	payload, err := os.ReadFile(filepath.Clean(name))
-	if os.IsNotExist(err) {
-		return ""
-	}
-	if err != nil {
-		t.Fatalf("read optional production facade %s: %v", name, err)
 	}
 	return string(payload)
 }

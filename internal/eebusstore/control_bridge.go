@@ -61,22 +61,6 @@ type ControlReceipt struct {
 	Terminal       bool
 }
 
-type ControlAttempt struct {
-	StateCode              uint64
-	AttemptID              [32]uint8
-	RemoteSKI              []uint8
-	Scope                  [32]uint8
-	ControlEpoch           uint64
-	AssociationLineage     [32]uint8
-	EndpointHost           string
-	EndpointPort           uint16
-	Path                   string
-	CancellationGeneration uint64
-	ReservationOrder       uint64
-	ReservationTimestamp   int64
-	AttemptCountBefore     uint64
-}
-
 type ControlPublication struct {
 	OperationID          [32]byte
 	OperationClass       uint64
@@ -95,7 +79,6 @@ type ControlRecord struct {
 	Tombstones                 []ControlTombstone
 	Quarantines                []ControlQuarantine
 	Receipts                   []ControlReceipt
-	Attempts                   []ControlAttempt
 	OperationHighWater         uint64
 	RepairSequence             uint64
 	Publication                *ControlPublication
@@ -189,12 +172,12 @@ func (bridge *AssociationBridge) PrepareControl(ctx context.Context, previous Co
 	parent := bridge.opened.manifest.current
 	parentSequence, parentDigest := parent.generation, parent.generationSHA256
 	metadata.parentSequence, metadata.parentSHA256 = &parentSequence, &parentDigest
-	generation := generationV1{metadata: metadata, state: cloneStateV1(state), schemaVersion: bridge.opened.migrations.current}
+	generation := generationV1{metadata: metadata, state: cloneStateV1(state), schemaVersion: currentSchemaVersion}
 	generationBytes, err := encodeGenerationV1(generation)
 	if err != nil {
 		return PreparedControlPublication{}, "validation_failed"
 	}
-	reference := generationReference{generation: sequence, generationFile: generationFilename(sequence), generationSHA256: sha256Hex(generationBytes), schemaVersion: bridge.opened.migrations.current}
+	reference := generationReference{generation: sequence, generationFile: generationFilename(sequence), generationSHA256: sha256Hex(generationBytes), schemaVersion: currentSchemaVersion}
 	manifest := manifestPayloadV1{manifestVersion: currentManifestVersion, current: reference, parent: &parent}
 	manifestBytes, err := encodeManifestPayloadV1(manifest)
 	if err != nil {
@@ -307,12 +290,6 @@ func controlGenerationToInternal(reference ControlGenerationBinding) generationR
 func controlRecordFromStore(state stateV1) ControlRecord {
 	record, ok := controlRecordV3FromStateV1(state)
 	if !ok {
-		legacy, legacyOK := controlRecordFromStateV1(state)
-		if legacyOK {
-			record, ok = controlRecordV3FromV2(legacy), true
-		}
-	}
-	if !ok {
 		return ControlRecord{}
 	}
 	result := ControlRecord{Present: true, ControlEpoch: record.controlEpoch, OperationHighWater: record.operationHighWater, RepairSequence: record.repairSequence}
@@ -338,18 +315,6 @@ func controlRecordFromStore(state stateV1) ControlRecord {
 		copy(result.Receipts[index].OperationID[:], value.operationID)
 		copy(result.Receipts[index].BindingSHA256[:], value.bindingSHA256)
 		result.Receipts[index].OperationClass, result.Receipts[index].ResultCode, result.Receipts[index].Terminal = value.operationClass, value.resultCode, value.terminal
-	}
-	result.Attempts = make([]ControlAttempt, len(record.attempts))
-	for index, value := range record.attempts {
-		result.Attempts[index] = ControlAttempt{
-			StateCode: value.stateCode, RemoteSKI: bytes.Clone(value.remoteSKI), ControlEpoch: value.controlEpoch,
-			EndpointHost: value.endpointHost, EndpointPort: value.endpointPort, Path: value.path,
-			CancellationGeneration: value.cancellationGeneration, ReservationOrder: value.reservationOrder,
-			ReservationTimestamp: value.reservationTimestamp, AttemptCountBefore: value.attemptCountBefore,
-		}
-		copy(result.Attempts[index].AttemptID[:], value.attemptID)
-		copy(result.Attempts[index].Scope[:], value.scope)
-		copy(result.Attempts[index].AssociationLineage[:], value.associationLineage)
 	}
 	if record.publication != nil {
 		publication := ControlPublication{
@@ -383,31 +348,20 @@ func controlRecordToInternal(record ControlRecord) (controlRecordV3, bool) {
 	result := controlRecordV3{
 		storeInstance: append([]byte(nil), record.StoreInstance[:]...), controlEpoch: record.ControlEpoch,
 		associationLineage: append([]byte(nil), record.AssociationLineage[:]...), operationHighWater: record.OperationHighWater,
-		repairSequence: record.RepairSequence, tombstones: make([]controlTombstoneV2, len(record.Tombstones)),
-		quarantines: make([]controlQuarantineV2, len(record.Quarantines)), receipts: make([]controlReceiptV2, len(record.Receipts)),
-		attempts: make([]controlAttemptV3, len(record.Attempts)),
+		repairSequence: record.RepairSequence, tombstones: make([]controlTombstone, len(record.Tombstones)),
+		quarantines: make([]controlQuarantine, len(record.Quarantines)), receipts: make([]controlReceipt, len(record.Receipts)),
 	}
 	for index, value := range record.Tombstones {
-		result.tombstones[index] = controlTombstoneV2{associationRef: append([]byte(nil), value.AssociationRef[:]...), revocationEpoch: value.RevocationEpoch, operationID: append([]byte(nil), value.OperationID[:]...), effectiveGeneration: controlGenerationToInternal(value.EffectiveGeneration)}
+		result.tombstones[index] = controlTombstone{associationRef: append([]byte(nil), value.AssociationRef[:]...), revocationEpoch: value.RevocationEpoch, operationID: append([]byte(nil), value.OperationID[:]...), effectiveGeneration: controlGenerationToInternal(value.EffectiveGeneration)}
 	}
 	for index, value := range record.Quarantines {
-		result.quarantines[index] = controlQuarantineV2{scope: append([]byte(nil), value.Scope[:]...), reasonCode: value.ReasonCode, stateCode: value.StateCode, attemptCount: value.AttemptCount, backoffStep: value.BackoffStep, remainingDelay: value.RemainingDelay, retentionBudget: value.RetentionBudget, lastControlEpoch: value.LastControlEpoch}
+		result.quarantines[index] = controlQuarantine{scope: append([]byte(nil), value.Scope[:]...), reasonCode: value.ReasonCode, stateCode: value.StateCode, attemptCount: value.AttemptCount, backoffStep: value.BackoffStep, remainingDelay: value.RemainingDelay, retentionBudget: value.RetentionBudget, lastControlEpoch: value.LastControlEpoch}
 	}
 	for index, value := range record.Receipts {
-		result.receipts[index] = controlReceiptV2{operationID: append([]byte(nil), value.OperationID[:]...), operationClass: value.OperationClass, bindingSHA256: append([]byte(nil), value.BindingSHA256[:]...), resultCode: value.ResultCode, terminal: value.Terminal}
-	}
-	for index, value := range record.Attempts {
-		result.attempts[index] = controlAttemptV3{
-			stateCode: value.StateCode, attemptID: append([]byte(nil), value.AttemptID[:]...), remoteSKI: bytes.Clone(value.RemoteSKI),
-			scope: append([]byte(nil), value.Scope[:]...), controlEpoch: value.ControlEpoch,
-			associationLineage: append([]byte(nil), value.AssociationLineage[:]...),
-			endpointHost:       value.EndpointHost, endpointPort: value.EndpointPort, path: value.Path,
-			cancellationGeneration: value.CancellationGeneration, reservationOrder: value.ReservationOrder,
-			reservationTimestamp: value.ReservationTimestamp, attemptCountBefore: value.AttemptCountBefore,
-		}
+		result.receipts[index] = controlReceipt{operationID: append([]byte(nil), value.OperationID[:]...), operationClass: value.OperationClass, bindingSHA256: append([]byte(nil), value.BindingSHA256[:]...), resultCode: value.ResultCode, terminal: value.Terminal}
 	}
 	if record.Publication != nil {
-		result.publication = &controlPublicationV2{
+		result.publication = &controlPublication{
 			operationID: append([]byte(nil), record.Publication.OperationID[:]...), operationClass: record.Publication.OperationClass,
 			storeInstance: append([]byte(nil), record.Publication.StoreInstance[:]...), previousControlEpoch: record.Publication.PreviousControlEpoch,
 			targetControlEpoch: record.Publication.TargetControlEpoch, previousGeneration: controlGenerationToInternal(record.Publication.PreviousGeneration),
@@ -446,7 +400,7 @@ func controlAssociationsFromState(state stateV1, lineage [32]byte) ([]ControlAss
 }
 
 func loadControlGenerationState(opened *store, reference generationReference) (stateV1, bool) {
-	if opened == nil || reference.generation == 0 || reference.schemaVersion > opened.migrations.current {
+	if opened == nil || reference.generation == 0 || reference.schemaVersion != currentSchemaVersion {
 		return stateV1{}, false
 	}
 	payload, err := readVerifiedFile(opened.generations, reference.generationFile, maxGenerationBytes)
@@ -457,8 +411,8 @@ func loadControlGenerationState(opened *store, reference generationReference) (s
 	if err != nil || generation.metadata.sequence != reference.generation || generationSchemaVersion(payload) != reference.schemaVersion {
 		return stateV1{}, false
 	}
-	state, err := opened.migrations.apply(reference.schemaVersion, generation.state)
-	if err != nil || validateStateV1(state) != nil {
+	state := cloneStateV1(generation.state)
+	if validateStateV1(state) != nil {
 		return stateV1{}, false
 	}
 	return state, true
@@ -499,11 +453,6 @@ func cloneControlView(source ControlView) ControlView {
 	result.Control.Tombstones = append([]ControlTombstone(nil), source.Control.Tombstones...)
 	result.Control.Quarantines = append([]ControlQuarantine(nil), source.Control.Quarantines...)
 	result.Control.Receipts = append([]ControlReceipt(nil), source.Control.Receipts...)
-	result.Control.Attempts = make([]ControlAttempt, len(source.Control.Attempts))
-	for index, attempt := range source.Control.Attempts {
-		result.Control.Attempts[index] = attempt
-		result.Control.Attempts[index].RemoteSKI = bytes.Clone(attempt.RemoteSKI)
-	}
 	result.Control.LocalCertificateChainDER = make([][]byte, len(source.Control.LocalCertificateChainDER))
 	for index, certificate := range source.Control.LocalCertificateChainDER {
 		result.Control.LocalCertificateChainDER[index] = bytes.Clone(certificate)

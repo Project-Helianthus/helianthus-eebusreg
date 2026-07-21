@@ -277,11 +277,6 @@ func (coordinator *firstTrustCoordinator) trustAdminStructuralIndeterminateLocke
 			return true
 		}
 	}
-	for _, attempt := range coordinator.controlView.control.attempts {
-		if attempt.state != firstTrustAttemptReserved && attempt.state != firstTrustAttemptLaunchAuthorized {
-			return true
-		}
-	}
 	if coordinator.recovery != "NO_LOCAL_IDENTITY" && coordinator.firstTrustAnchorProductReasonLocked() != "" {
 		return true
 	}
