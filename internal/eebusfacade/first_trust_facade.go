@@ -167,20 +167,7 @@ func (facade *firstTrustFacade) RemoteSKIConnected(_ eebusapi.ServiceInterface, 
 		facade.coordinator.connectionClosed(remote, stale.generation)
 	}
 	if !cancel && bindCandidateTLS {
-		if sink, ok := facade.coordinator.(firstTrustTLSBindingSink); ok {
-			if sink.remoteSKIConnected(remote, generation) != "tls_bound" {
-				cancel = true
-			} else {
-				facade.mu.Lock()
-				current := facade.connections[normalized]
-				if current == nil || current.generation != generation || current.cancelled || current.blocked {
-					cancel = true
-				} else {
-					current.tlsBound = true
-				}
-				facade.mu.Unlock()
-			}
-		}
+		cancel = !facade.bindAttemptTLSUnderCallbackLock(remote, normalized, generation)
 	}
 	if cancel {
 		facade.cancelBySKI(normalized)
@@ -194,6 +181,10 @@ func (facade *firstTrustFacade) outgoingAttemptTLSBound(remote []byte, generatio
 	facade.callbackMu.Lock()
 	defer facade.callbackMu.Unlock()
 	normalized := hex.EncodeToString(remote)
+	return facade.bindAttemptTLSUnderCallbackLock(remote, normalized, generation)
+}
+
+func (facade *firstTrustFacade) bindAttemptTLSUnderCallbackLock(remote []byte, normalized string, generation uint64) bool {
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
 	if connection == nil || connection.generation != generation || connection.attemptClass != "pairing_authorized" ||
@@ -463,8 +454,15 @@ func (facade *firstTrustFacade) handlePairingRequest(remote []byte, normalized s
 	connection.active = true
 	shipID := connection.shipID
 	generation := connection.generation
+	attemptClass := connection.attemptClass
+	tlsBound := connection.tlsBound
 	facade.mu.Unlock()
-	if connection.attemptClass == "pairing_authorized" && shipID != "" {
+	if attemptClass == "pairing_authorized" && !tlsBound &&
+		!facade.bindAttemptTLSUnderCallbackLock(remote, normalized, generation) {
+		facade.cancelBySKI(normalized)
+		return
+	}
+	if attemptClass == "pairing_authorized" && shipID != "" {
 		facade.coordinator.serviceShipIDUpdate(remote, generation, shipID)
 	}
 }
