@@ -433,6 +433,11 @@ func (fixture *msp04crRuntimeFixture) acquire(t *testing.T, service *msp04crServ
 		service.reader = reader
 		return service, nil
 	}
+	startAdmin := dependencies.startFirstTrustAdmin
+	dependencies.startFirstTrustAdmin = func(ctx context.Context, path string, coordinator *firstTrustCoordinator) (firstTrustAdminEndpoint, error) {
+		fixture.events.add("admin_start")
+		return startAdmin(ctx, path, coordinator)
+	}
 	dependencies.openAssociationBridge = func(root string, bindings []eebusstore.KeyProviderBinding) (runtimeAssociationBridge, string) {
 		fixture.events.add("store_open")
 		return openRuntimeAssociationBridge(root, bindings)

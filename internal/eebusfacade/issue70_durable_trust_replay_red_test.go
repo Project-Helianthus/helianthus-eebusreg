@@ -26,8 +26,12 @@ func TestIssue70ReplaysDurableTrustAfterSetupBeforeListenerStart(t *testing.T) {
 	events := fixture.events.snapshot()
 	setup := slices.Index(events, "listener_setup")
 	register := slices.Index(events, "register_remote")
+	admin := slices.Index(events, "admin_start")
 	if setup < 0 || register <= setup {
 		t.Fatalf("restart event order = %v, want setup before durable trust replay", events)
+	}
+	if admin <= register {
+		t.Fatalf("restart event order = %v, want admin endpoint after durable trust replay", events)
 	}
 	if count := countIssue70Events(events, "register_remote"); count != 1 {
 		t.Fatalf("restart registrations = %d, want exactly 1: %v", count, events)
@@ -54,9 +58,10 @@ func TestIssue70ReplaysDurableTrustAfterSetupBeforeListenerStart(t *testing.T) {
 
 	events = fixture.events.snapshot()
 	register = slices.Index(events, "register_remote")
+	admin = slices.Index(events, "admin_start")
 	start := slices.Index(events, "listener_start")
-	if register < 0 || start <= register {
-		t.Fatalf("runtime event order = %v, want durable trust replay before listener start", events)
+	if register < 0 || admin <= register || start <= admin {
+		t.Fatalf("runtime event order = %v, want trust replay before admin and listener start", events)
 	}
 }
 

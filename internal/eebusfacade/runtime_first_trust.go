@@ -251,16 +251,6 @@ func attachRuntimeFirstTrust(
 	resources.coordinator.effects = facade
 	resources.coordinator.mu.Unlock()
 
-	lifetime, cancel := context.WithCancel(context.Background())
-	resources.cancel = cancel
-	admin, err := dependencies.startFirstTrustAdmin(lifetime, resources.adminDir, resources.coordinator)
-	resources.admin = admin
-	if err == nil && admin == nil {
-		err = errors.New("first trust admin factory returned nil")
-	}
-	if err != nil {
-		return fmt.Errorf("first trust admin startup failed: %w", err)
-	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -280,6 +270,21 @@ func attachRuntimeFirstTrust(
 	}
 	for _, ski := range recoveredSKIs {
 		trustService.RegisterRemoteSKI(ski)
+	}
+	if err := ctx.Err(); err != nil {
+		reader.detachFirstTrust(facade)
+		return err
+	}
+	lifetime, cancel := context.WithCancel(context.Background())
+	resources.cancel = cancel
+	admin, err := dependencies.startFirstTrustAdmin(lifetime, resources.adminDir, resources.coordinator)
+	resources.admin = admin
+	if err == nil && admin == nil {
+		err = errors.New("first trust admin factory returned nil")
+	}
+	if err != nil {
+		reader.detachFirstTrust(facade)
+		return fmt.Errorf("first trust admin startup failed: %w", err)
 	}
 	return nil
 }
