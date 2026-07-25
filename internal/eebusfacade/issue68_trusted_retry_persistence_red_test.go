@@ -92,6 +92,38 @@ func TestIssue68StartupKeepsUnrelatedRetryHoldFailClosed(t *testing.T) {
 	}
 }
 
+func TestIssue68StartupReconciliationPublicationFailureStaysFailClosed(t *testing.T) {
+	tests := []struct {
+		name          string
+		commitOutcome string
+		wantReason    string
+		wantPending   bool
+	}{
+		{name: "not published", commitOutcome: "commit_not_published", wantReason: "HANDSHAKE_ATTEMPT_LIMIT"},
+		{name: "durability unknown", commitOutcome: "commit_durability_unknown", wantReason: "DURABILITY_UNKNOWN", wantPending: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newMSP04CFixture(t)
+			lineage := fixture.store.view.control.associationLineage
+			association := msp04cAssociation(1, lineage, true, true, true, true)
+			scope := firstTrustRuntimeRetryScope(firstTrustNormalizedSKI(association.subject))
+			fixture.store.view.associations = []firstTrustAssociationRecord{association}
+			fixture.store.view.control.quarantines = []firstTrustQuarantineRecord{
+				issue68RetryHold(scope, fixture.store.view.control.controlEpoch),
+			}
+			fixture.store.commitOutcome = test.commitOutcome
+
+			coordinator := fixture.newCoordinator()
+			_ = coordinator.reopen(context.Background())
+			assertMSP04CState(t, coordinator, "QUARANTINED", test.wantReason)
+			if got := fixture.anchor.record.pending != nil; got != test.wantPending {
+				t.Fatalf("pending publication retained = %t, want %t", got, test.wantPending)
+			}
+		})
+	}
+}
+
 func issue68RetryHold(scope [32]byte, controlEpoch uint64) firstTrustQuarantineRecord {
 	return firstTrustQuarantineRecord{
 		scope:            scope,

@@ -45,6 +45,7 @@ func (coordinator *firstTrustCoordinator) reopenWithRecovery(ctx context.Context
 	coordinator.retryInflight = make(map[[32]byte]bool)
 	coordinator.trustedRemotes = make(map[string]string)
 	coordinator.cancelAllOutgoingAttemptContextsLocked()
+	coordinator.reconcileTrustedRetryQuarantinesLocked(ctx, storeOutcome, anchorOutcome)
 	prechargeState, prechargeReason := coordinator.classifyFirstTrustStartupLocked(storeOutcome, anchorOutcome)
 	chargeAllowed := prechargeState == "PAIRED_TRUSTED" || prechargeState == "UNPAIRED_LOCKED" ||
 		prechargeState == "QUARANTINED" && prechargeReason != "DURABILITY_UNKNOWN" && prechargeReason != "HOST_BINDING_MISMATCH" &&
@@ -88,6 +89,73 @@ func (coordinator *firstTrustCoordinator) reopenWithRecovery(ctx context.Context
 		return "pairing_closed"
 	}
 	return storeOutcome
+}
+
+func (coordinator *firstTrustCoordinator) reconcileTrustedRetryQuarantinesLocked(
+	ctx context.Context,
+	storeOutcome, anchorOutcome string,
+) {
+	if firstTrustStructuralStoreOutcome(storeOutcome) != "" || firstTrustDurabilityUnknownOutcome(storeOutcome) ||
+		anchorOutcome != "opened_anchor" || coordinator.anchorRecord.pending != nil ||
+		coordinator.firstTrustAnchorProductReasonLocked() != "" || len(coordinator.controlView.control.attempts) != 0 ||
+		coordinator.controlView.control.controlEpoch == ^uint64(0) {
+		return
+	}
+
+	trustedScopes := make(map[[32]byte]struct{})
+	for _, association := range coordinator.controlView.associations {
+		if !firstTrustAssociationUsable(association, coordinator.controlView.control.associationLineage) ||
+			coordinator.firstTrustTombstonedLocked(association) || len(association.subject) != 20 || association.service == "" {
+			continue
+		}
+		scope := firstTrustRuntimeRetryScope(firstTrustNormalizedSKI(association.subject))
+		trustedScopes[scope] = struct{}{}
+	}
+	if len(trustedScopes) == 0 {
+		return
+	}
+	for _, quarantine := range coordinator.controlView.control.quarantines {
+		if !firstTrustQuarantineRecordValid(quarantine, coordinator.backoffPolicy) {
+			return
+		}
+	}
+
+	target := cloneFirstTrustControlRecord(coordinator.controlView.control)
+	target.controlEpoch++
+	reset := false
+	for _, quarantine := range target.quarantines {
+		if _, trusted := trustedScopes[quarantine.scope]; !trusted ||
+			quarantine.state != "ADMIN_HOLD" && quarantine.state != "BACKOFF_ACTIVE" {
+			continue
+		}
+		coordinator.firstTrustResetOutgoingAttemptRetryLocked(&target, quarantine.scope)
+		reset = true
+	}
+	if !reset {
+		return
+	}
+	operationID, ok := firstTrustReadOrdinal(coordinator.random)
+	if !ok {
+		return
+	}
+
+	working := cloneFirstTrustControlView(coordinator.controlView)
+	selected := cloneFirstTrustControlView(coordinator.controlView)
+	anchor := cloneFirstTrustAnchorRecord(coordinator.anchorRecord)
+	coordinator.recoveryOperation = &firstTrustRecoveryOperation{
+		operationID: operationID, operationClass: "release_retry_quarantine",
+	}
+	coordinator.mu.Unlock()
+	publication, outcome, anchor := coordinator.publishFirstTrustControl(
+		ctx, working, target, operationID, "release_retry_quarantine", selected, anchor,
+	)
+	coordinator.mu.Lock()
+	coordinator.anchorRecord = cloneFirstTrustAnchorRecord(anchor)
+	if outcome == "durable" {
+		coordinator.controlView = cloneFirstTrustControlView(publication.target)
+		coordinator.storeGeneration = publication.target.manifest.current.sequence
+	}
+	coordinator.recoveryOperation = nil
 }
 
 func (coordinator *firstTrustCoordinator) classifyFirstTrustStartupLocked(storeOutcome, anchorOutcome string) (string, string) {
@@ -575,6 +643,10 @@ func (coordinator *firstTrustCoordinator) confirmWithRecoveryLocked(
 		return coordinator.finishRecoveryConfirmationLocked(token, inflight, remote, connection, previousRecovery, "prepare_failed")
 	}
 	target.controlEpoch++
+	coordinator.firstTrustResetOutgoingAttemptRetryLocked(
+		&target,
+		firstTrustRuntimeRetryScope(firstTrustNormalizedSKI(remote)),
+	)
 	working.associations = append(working.associations, firstTrustAssociationRecord{
 		reference: reference, lineage: target.associationLineage, subject: bytes.Clone(remote), service: shipID,
 		active: true, trusted: true, allowlisted: true, reconnectable: true,
