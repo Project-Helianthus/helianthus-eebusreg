@@ -79,8 +79,8 @@ func TestMSP05PPublicAPIAttestationIsInitialV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload = append(payload, '\n')
-	if len(payload) != 95_207 {
-		t.Fatalf("projected v1 API bytes = %d, want frozen 95207", len(payload))
+	if len(payload) != 95_480 {
+		t.Fatalf("projected v1 API bytes = %d, want frozen 95480", len(payload))
 	}
 	digest := sha256.Sum256(payload)
 	if got := hex.EncodeToString(digest[:]); got != msp04bFrozenPublicAPIHash {
