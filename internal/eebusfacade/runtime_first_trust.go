@@ -3,9 +3,11 @@ package eebusfacade
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -162,7 +164,7 @@ func acquireRuntimeFirstTrust(
 	if err != nil || resources == nil {
 		return resources, err
 	}
-	if err := attachRuntimeFirstTrust(ctx, resources, service, reader, dependencies); err != nil {
+	if err := attachRuntimeFirstTrust(ctx, resources, config, service, reader, dependencies); err != nil {
 		return nil, errors.Join(err, resources.Close())
 	}
 	return resources, nil
@@ -224,6 +226,7 @@ func classifyRuntimeFirstTrust(
 func attachRuntimeFirstTrust(
 	ctx context.Context,
 	resources *runtimeFirstTrustResources,
+	config RuntimeConfig,
 	service runtimeService,
 	reader *runtimeServiceReader,
 	dependencies runtimeDependencies,
@@ -248,16 +251,6 @@ func attachRuntimeFirstTrust(
 	resources.coordinator.effects = facade
 	resources.coordinator.mu.Unlock()
 
-	lifetime, cancel := context.WithCancel(context.Background())
-	resources.cancel = cancel
-	admin, err := dependencies.startFirstTrustAdmin(lifetime, resources.adminDir, resources.coordinator)
-	resources.admin = admin
-	if err == nil && admin == nil {
-		err = errors.New("first trust admin factory returned nil")
-	}
-	if err != nil {
-		return fmt.Errorf("first trust admin startup failed: %w", err)
-	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -270,7 +263,63 @@ func attachRuntimeFirstTrust(
 			return err
 		}
 	}
+	recoveredSKIs, err := recoveredRuntimeTrustSKIs(configuredRuntimeRemotes(config), resources.coordinator)
+	if err != nil {
+		reader.detachFirstTrust(facade)
+		return err
+	}
+	for _, ski := range recoveredSKIs {
+		trustService.RegisterRemoteSKI(ski)
+	}
+	if err := ctx.Err(); err != nil {
+		reader.detachFirstTrust(facade)
+		return err
+	}
+	lifetime, cancel := context.WithCancel(context.Background())
+	resources.cancel = cancel
+	admin, err := dependencies.startFirstTrustAdmin(lifetime, resources.adminDir, resources.coordinator)
+	resources.admin = admin
+	if err == nil && admin == nil {
+		err = errors.New("first trust admin factory returned nil")
+	}
+	if err != nil {
+		reader.detachFirstTrust(facade)
+		return fmt.Errorf("first trust admin startup failed: %w", err)
+	}
 	return nil
+}
+
+func configuredRuntimeRemotes(config RuntimeConfig) map[string]struct{} {
+	configured := make(map[string]struct{}, len(config.Remotes))
+	for _, remote := range config.Remotes {
+		configured[strings.ToLower(strings.TrimSpace(remote.SKI))] = struct{}{}
+	}
+	return configured
+}
+
+func recoveredRuntimeTrustSKIs(configured map[string]struct{}, coordinator *firstTrustCoordinator) ([]string, error) {
+	if coordinator == nil {
+		return nil, errors.New("first trust coordinator is unavailable")
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.reopening || coordinator.recoveryOperation != nil ||
+		coordinator.phase != firstTrustPairingClosed || coordinator.recovery != "PAIRED_TRUSTED" {
+		return nil, nil
+	}
+	recovered := make([]string, 0, len(coordinator.trustedRemotes))
+	for subject, shipID := range coordinator.trustedRemotes {
+		remote := []byte(subject)
+		if len(remote) != 20 || strings.TrimSpace(shipID) == "" {
+			return nil, errors.New("recovered durable trust contains an invalid remote identity")
+		}
+		ski := hex.EncodeToString(remote)
+		if _, allowed := configured[ski]; allowed {
+			recovered = append(recovered, ski)
+		}
+	}
+	sort.Strings(recovered)
+	return recovered, nil
 }
 
 func validateRuntimeFirstTrustAuthorization(stateRoot string, authorization *runtimeFirstTrustAuthorization) (string, error) {

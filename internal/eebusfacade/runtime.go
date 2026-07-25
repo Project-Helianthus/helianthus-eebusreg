@@ -266,7 +266,7 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		return nil, closeRuntime(fmt.Errorf("setup eebus runtime service: %w", err))
 	}
 	if firstTrust != nil {
-		if err := attachRuntimeFirstTrust(ctx, firstTrust, service, reader, dependencies); err != nil {
+		if err := attachRuntimeFirstTrust(ctx, firstTrust, config, service, reader, dependencies); err != nil {
 			return nil, closeRuntime(err)
 		}
 		outgoingAttemptBridge.bindTLSLifecycle(firstTrust.facade)
