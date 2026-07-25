@@ -3,6 +3,7 @@ package eebusfacade
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -17,9 +18,8 @@ func TestIssue60ExactOutgoingHandshakeBindsTransientTrustBeforeAccessMethods(t *
 	if got := coordinator.reopen(context.Background()); got != "pairing_closed" {
 		t.Fatalf("reopen = %q, want pairing_closed", got)
 	}
-	eventSink := &issue60OutgoingGateCoordinator{firstTrustCoordinator: coordinator}
 	service := &issue60Service{}
-	facade, err := newFirstTrustFacade(service, eventSink)
+	facade, err := newFirstTrustFacade(service, coordinator)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,6 +203,134 @@ func TestIssue60OutgoingAttemptDoesNotAdoptUnrelatedGeneration(t *testing.T) {
 	}
 	if got := service.registerCount(); got != 0 {
 		t.Fatalf("unrelated generation transient registrations = %d, want 0", got)
+	}
+}
+
+func TestIssue60ExactOutgoingErrorRevokesTransientTrustExactlyOnce(t *testing.T) {
+	product := newMSP04CFixture(t)
+	coordinator := product.newCoordinator()
+	if got := coordinator.reopen(context.Background()); got != "pairing_closed" {
+		t.Fatalf("reopen = %q, want pairing_closed", got)
+	}
+	eventSink := &issue60OutgoingGateCoordinator{firstTrustCoordinator: coordinator}
+	service := &issue60Service{}
+	facade, err := newFirstTrustFacade(service, eventSink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.mu.Lock()
+	coordinator.effects = facade
+	coordinator.mu.Unlock()
+	bridge := newFirstTrustOutgoingAttemptBridge(&runtimeFirstTrustResources{coordinator: coordinator})
+	bridge.bindLifecycle(facade)
+	bridge.bindTLSLifecycle(facade)
+	if got := coordinator.openPairingWindow(context.Background(), "open-exact-error", firstTrustMaximumWindow); got != "open_empty" {
+		t.Fatalf("open = %q, want open_empty", got)
+	}
+
+	var permit shipapi.OutgoingAttemptPermit
+	service.queue = func(_ string, expectedSKI string) error {
+		facade.ServicePairingDetailUpdate(
+			expectedSKI,
+			shipapi.NewConnectionStateDetail(shipapi.ConnectionStateQueued, nil),
+		)
+		handle, prepareErr := bridge.Prepare(shipapi.OutgoingAttemptRequest{
+			RemoteSKI: expectedSKI,
+			Endpoint:  shipapi.OutgoingAttemptEndpoint{Host: "peer.invalid", Port: 4712},
+			Path:      "/ship/",
+		})
+		if prepareErr != nil {
+			return prepareErr
+		}
+		var authorizeErr error
+		permit, authorizeErr = bridge.AuthorizeLaunch(handle)
+		if authorizeErr != nil {
+			return authorizeErr
+		}
+		if permit.Decision != shipapi.OutgoingAttemptDecisionPermit {
+			return errors.New("outgoing attempt was denied")
+		}
+		return nil
+	}
+	facade.VisiblePairingCandidatesUpdated(nil, []shipapi.PairingCandidateRef{{
+		CandidateRef: "candidate-exact-error",
+		SKI:          issue56SKIA,
+	}})
+	if got := coordinator.selectCandidate(
+		context.Background(), "select-exact-error", "candidate-exact-error", issue56SKIA,
+	); got != "candidate_queued" {
+		t.Fatalf("select = %q, want candidate_queued", got)
+	}
+
+	fingerprint, nonce, expiresAt, connection, generation, _, ok := coordinator.candidate()
+	if !ok || connection == 0 {
+		t.Fatal("exact outgoing candidate binding is unavailable")
+	}
+	_, remoteSKI, ok := decodeFirstTrustSKI(issue56SKIA)
+	if !ok {
+		t.Fatal("fixture SKI is invalid")
+	}
+	bridge.OutgoingAttemptHandshakeStateUpdate(
+		remoteSKI,
+		shipmodel.ShipState{State: shipmodel.CmiStateInitStart},
+		permit.Metadata,
+	)
+	confirm := func() string {
+		return coordinator.confirm(
+			context.Background(), "confirm-exact-error", fingerprint, nonce, expiresAt, connection, generation,
+		)
+	}
+	if got := confirm(); got != "transient_trusted" {
+		t.Fatalf("confirm = %q, want transient_trusted", got)
+	}
+	if got := service.registerCount(); got != 1 {
+		t.Fatalf("transient registrations = %d, want 1", got)
+	}
+
+	terminal := shipmodel.ShipState{State: shipmodel.SmeStateError, Error: errors.New("exact TLS terminal")}
+	bridge.OutgoingAttemptHandshakeStateUpdate(remoteSKI, terminal, permit.Metadata)
+	bridge.OutgoingAttemptHandshakeStateUpdate(remoteSKI, terminal, permit.Metadata)
+	if got := service.unregisterCount(); got != 1 {
+		t.Fatalf("exact terminal unregistrations = %d, want 1", got)
+	}
+	if got := confirm(); got != "connection_closed" {
+		t.Fatalf("terminal confirmation replay = %q, want connection_closed", got)
+	}
+	if _, _, _, _, _, _, ok := coordinator.candidate(); ok {
+		t.Fatal("exact terminal retained transient candidate")
+	}
+}
+
+func TestIssue60MismatchedTransientCancelsDoNotConsumeIdempotencyCapacity(t *testing.T) {
+	fixture := newIssue60Fixture(t)
+	if got := fixture.confirm("confirm-cancel-capacity"); got != "transient_trusted" {
+		t.Fatalf("confirm = %q, want transient_trusted", got)
+	}
+
+	for index := 0; index < 32; index++ {
+		key := fmt.Sprintf("cancel-mismatch-%02d", index)
+		if got := fixture.coordinator.cancel(
+			context.Background(), key, "mismatched-nonce", fixture.binding.connection, fixture.binding.store,
+		); got != "confirmation_mismatch" {
+			t.Fatalf("mismatched cancel %d = %q, want confirmation_mismatch", index, got)
+		}
+	}
+
+	const validKey = "cancel-after-mismatches"
+	if got := fixture.coordinator.cancel(
+		context.Background(), validKey, fixture.binding.nonce, fixture.binding.connection, fixture.binding.store,
+	); got != "cancelled" {
+		t.Fatalf("valid cancel after mismatches = %q, want cancelled", got)
+	}
+	if got := fixture.coordinator.cancel(
+		context.Background(), validKey, fixture.binding.nonce, fixture.binding.connection, fixture.binding.store,
+	); got != "cancelled" {
+		t.Fatalf("valid cancel replay = %q, want cancelled", got)
+	}
+	if got := fixture.coordinator.cancel(
+		context.Background(), validKey, "different-nonce", fixture.binding.connection, fixture.binding.store,
+	); got != "idempotency_conflict" {
+		t.Fatalf("valid cancel key conflict = %q, want idempotency_conflict", got)
 	}
 }
 
