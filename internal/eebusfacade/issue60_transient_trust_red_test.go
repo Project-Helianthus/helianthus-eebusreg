@@ -206,7 +206,7 @@ func TestIssue60OutgoingAttemptDoesNotAdoptUnrelatedGeneration(t *testing.T) {
 	}
 }
 
-func TestIssue60ExactOutgoingErrorRevokesTransientTrustExactlyOnce(t *testing.T) {
+func TestIssue60ExactOutgoingErrorRevokesTransientTrustExactlyOnceWithSynchronousUnregisterReentry(t *testing.T) {
 	product := newMSP04CFixture(t)
 	coordinator := product.newCoordinator()
 	if got := coordinator.reopen(context.Background()); got != "pairing_closed" {
@@ -287,9 +287,23 @@ func TestIssue60ExactOutgoingErrorRevokesTransientTrustExactlyOnce(t *testing.T)
 		t.Fatalf("transient registrations = %d, want 1", got)
 	}
 
+	service.onUnregister = func(ski string) {
+		facade.ServicePairingDetailUpdate(
+			ski,
+			shipapi.NewConnectionStateDetail(
+				shipapi.ConnectionStateError,
+				errors.New("synchronous unregister reentry"),
+			),
+		)
+	}
 	terminal := shipmodel.ShipState{State: shipmodel.SmeStateError, Error: errors.New("exact TLS terminal")}
-	bridge.OutgoingAttemptHandshakeStateUpdate(remoteSKI, terminal, permit.Metadata)
-	bridge.OutgoingAttemptHandshakeStateUpdate(remoteSKI, terminal, permit.Metadata)
+	terminalDone := make(chan struct{})
+	go func() {
+		bridge.OutgoingAttemptHandshakeStateUpdate(remoteSKI, terminal, permit.Metadata)
+		bridge.OutgoingAttemptHandshakeStateUpdate(remoteSKI, terminal, permit.Metadata)
+		close(terminalDone)
+	}()
+	waitIssue60Done(t, terminalDone, "exact terminal")
 	if got := service.unregisterCount(); got != 1 {
 		t.Fatalf("exact terminal unregistrations = %d, want 1", got)
 	}
@@ -1031,10 +1045,11 @@ func (fixture *issue60Fixture) bindTLS(t *testing.T) {
 
 type issue60Service struct {
 	msp04bServiceSpy
-	queue       func(string, string) error
-	onRegister  func(string)
-	unregisters int
-	disconnects int
+	queue        func(string, string) error
+	onRegister   func(string)
+	onUnregister func(string)
+	unregisters  int
+	disconnects  int
 }
 
 func (service *issue60Service) QueuePairingCandidate(candidateRef, expectedSKI string) error {
@@ -1057,10 +1072,14 @@ func (service *issue60Service) DisconnectSKI(string, string) {
 	service.mu.Unlock()
 }
 
-func (service *issue60Service) UnregisterRemoteSKI(string) {
+func (service *issue60Service) UnregisterRemoteSKI(ski string) {
 	service.mu.Lock()
 	service.unregisters++
+	callback := service.onUnregister
 	service.mu.Unlock()
+	if callback != nil {
+		callback(ski)
+	}
 }
 
 func (service *issue60Service) registerCount() int {
