@@ -125,6 +125,7 @@ func (facade *firstTrustFacade) RemoteSKIConnected(_ eebusapi.ServiceInterface, 
 	}
 	var stale *firstTrustConnection
 	cancel := false
+	bindCandidateTLS := false
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
 	switch {
@@ -142,12 +143,13 @@ func (facade *firstTrustFacade) RemoteSKIConnected(_ eebusapi.ServiceInterface, 
 	default:
 		connection.connected = true
 		connection.active = true
+		bindCandidateTLS = connection.attemptClass == "pairing_authorized"
 	}
 	facade.mu.Unlock()
 	if stale != nil && facade.coordinator != nil {
 		facade.coordinator.connectionClosed(remote, stale.generation)
 	}
-	if !cancel && connection != nil {
+	if !cancel && bindCandidateTLS {
 		if sink, ok := facade.coordinator.(firstTrustTLSBindingSink); ok {
 			if sink.remoteSKIConnected(remote, connection.generation) != "tls_bound" {
 				cancel = true
@@ -164,6 +166,8 @@ func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterfac
 	if !ok {
 		return
 	}
+	var retryScope [32]byte
+	releaseRetry := false
 	facade.mu.Lock()
 	if acknowledgment := facade.withdrawals[normalized]; acknowledgment != nil {
 		delete(facade.withdrawals, normalized)
@@ -176,6 +180,12 @@ func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterfac
 			delete(facade.connections, normalized)
 		}
 		connection = nil
+	} else if connection != nil && (connection.registered || connection.attemptClass == "reconnect_authorized") {
+		retryScope = connection.retryScope
+		releaseRetry = connection.retryAdmitted
+		connection.retryAdmitted = false
+		delete(facade.connections, normalized)
+		connection = nil
 	} else if connection != nil && !connection.blocked {
 		connection.active = false
 		connection.cancelled = true
@@ -185,6 +195,11 @@ func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterfac
 		connection = nil
 	}
 	facade.mu.Unlock()
+	if releaseRetry {
+		if retry, enabled := facade.retrySink(); enabled {
+			retry.completeRetry(retryScope)
+		}
+	}
 	if connection != nil && facade.coordinator != nil {
 		facade.coordinator.connectionClosed(remote, connection.generation)
 	}

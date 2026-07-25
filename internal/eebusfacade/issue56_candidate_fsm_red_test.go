@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusstore"
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 )
 
@@ -34,6 +36,14 @@ type issue56CandidateService struct {
 	queueMu    sync.Mutex
 	queueCalls [][2]string
 	queue      func(string, string) error
+}
+
+type issue56RuntimeCandidateService struct {
+	*fakeRuntimeService
+}
+
+func (*issue56RuntimeCandidateService) QueuePairingCandidate(string, string) error {
+	return nil
 }
 
 func (service *issue56CandidateService) QueuePairingCandidate(candidateRef, expectedSKI string) error {
@@ -407,6 +417,118 @@ func TestIssue56ReentrantCallbacksRequireTLSAndSHIPIDBeforeDurableConfirm(t *tes
 	}
 }
 
+func TestIssue56SameProcessDurableReconnectBypassesCandidateTLSBinder(t *testing.T) {
+	fixture := newIssue56Fixture(t)
+	fixture.service.queue = func(_ string, expectedSKI string) error {
+		fixture.facade.ServiceShipIDUpdate(expectedSKI, "ship-id-a")
+		fixture.facade.RemoteSKIConnected(nil, expectedSKI)
+		return nil
+	}
+	fixture.facade.VisiblePairingCandidatesUpdated(nil, []shipapi.PairingCandidateRef{{
+		CandidateRef: "candidate-a",
+		SKI:          issue56SKIA,
+	}})
+	reply := issue56Admin(t, fixture.handler, issue56SelectCommand("select", "candidate-a", issue56SKIA))
+	if issue56String(t, reply, "outcome") != "candidate_queued" {
+		t.Fatalf("select outcome = %s", issue56JSON(t, reply))
+	}
+	binding := issue56CurrentBinding(t, fixture)
+	if got := confirmMSP04B(fixture.coordinator, "confirm", binding); got != "trusted" {
+		t.Fatalf("durable confirm outcome = %q", got)
+	}
+
+	fixture.facade.mu.Lock()
+	original := fixture.facade.connections[issue56SKIA]
+	var originalGeneration uint64
+	if original != nil {
+		originalGeneration = original.generation
+	}
+	fixture.facade.mu.Unlock()
+	if originalGeneration == 0 {
+		t.Fatal("durably trusted connection generation is absent")
+	}
+	cancelsBefore := fixture.service.cancelCount()
+	fixture.facade.RemoteSKIDisconnected(nil, issue56SKIA)
+	fixture.facade.RemoteSKIConnected(nil, issue56SKIA)
+
+	if got := fixture.service.cancelCount(); got != cancelsBefore {
+		t.Fatalf("trusted reconnect was cancelled %d times", got)
+	}
+	fixture.facade.mu.Lock()
+	connection := fixture.facade.connections[issue56SKIA]
+	fixture.facade.mu.Unlock()
+	if connection == nil || connection.attemptClass != "reconnect_authorized" ||
+		connection.generation <= originalGeneration || !connection.connected ||
+		!connection.active || connection.cancelled || connection.blocked {
+		t.Fatalf("same-process trusted reconnect = %+v", connection)
+	}
+}
+
+func TestIssue56RestartedDurableReconnectBypassesCandidateTLSBinder(t *testing.T) {
+	root := canonicalRuntimeTempDir(t)
+	stateRoot := filepath.Join(root, "state")
+	anchor := &runtimeStrictAnchor{}
+
+	firstService := &fakeRuntimeService{started: make(chan struct{})}
+	first := acquireMSP04CRuntimeResources(t, stateRoot, filepath.Join(root, "admin-one"), anchor, firstService)
+	request := exactRuntimeRepairRequest(first.coordinator, "recover_unavailable_host_key", msp04cOrdinal(5600))
+	if got := first.coordinator.repair(context.Background(), request); got != "repaired_unpaired" {
+		t.Fatalf("host-key recovery = %q", got)
+	}
+	pairRuntimeRemote(t, first, issue56SKIA, 5601)
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reconnectService := &issue56RuntimeCandidateService{
+		fakeRuntimeService: &fakeRuntimeService{started: make(chan struct{})},
+	}
+	restarted := acquireIssue56RuntimeResources(
+		t,
+		stateRoot,
+		filepath.Join(root, "admin-two"),
+		anchor,
+		reconnectService,
+	)
+	defer restarted.Close()
+	if got := restarted.coordinator.recoveryState(); got != "PAIRED_TRUSTED" {
+		t.Fatalf("restart recovery state = %q", got)
+	}
+	restarted.reader.RemoteSKIConnected(nil, issue56SKIA)
+
+	reconnectService.mu.Lock()
+	cancels := reconnectService.cancels
+	reconnectService.mu.Unlock()
+	if cancels != 0 {
+		t.Fatalf("post-restart trusted reconnect was cancelled %d times", cancels)
+	}
+	restarted.facade.mu.Lock()
+	connection := restarted.facade.connections[issue56SKIA]
+	restarted.facade.mu.Unlock()
+	if connection == nil || connection.attemptClass != "reconnect_authorized" ||
+		!connection.connected || !connection.active || connection.cancelled || connection.blocked {
+		t.Fatalf("post-restart trusted reconnect = %+v", connection)
+	}
+	firstGeneration := connection.generation
+	restarted.reader.RemoteSKIDisconnected(nil, issue56SKIA)
+	restarted.reader.RemoteSKIConnected(nil, issue56SKIA)
+
+	reconnectService.mu.Lock()
+	cancels = reconnectService.cancels
+	reconnectService.mu.Unlock()
+	if cancels != 0 {
+		t.Fatalf("trusted reconnect after disconnect was cancelled %d times", cancels)
+	}
+	restarted.facade.mu.Lock()
+	connection = restarted.facade.connections[issue56SKIA]
+	restarted.facade.mu.Unlock()
+	if connection == nil || connection.generation <= firstGeneration ||
+		connection.attemptClass != "reconnect_authorized" || !connection.connected ||
+		!connection.active || connection.cancelled || connection.blocked {
+		t.Fatalf("trusted reconnect after disconnect = %+v", connection)
+	}
+}
+
 func TestIssue56TLSBoundAndSHIPIDFencesAreIndependent(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -658,6 +780,37 @@ func newIssue56Fixture(t *testing.T) *issue56Fixture {
 		service:     service,
 		handler:     &firstTrustAdminHandler{coordinator: coordinator, random: strings.NewReader(strings.Repeat("x", 4096))},
 	}
+}
+
+func acquireIssue56RuntimeResources(
+	t *testing.T,
+	stateRoot string,
+	adminRoot string,
+	anchor *runtimeStrictAnchor,
+	service *issue56RuntimeCandidateService,
+) *runtimeFirstTrustResources {
+	t.Helper()
+	reader := newRuntimeServiceReader(nil)
+	service.disconnected = func(ski string) { reader.RemoteSKIDisconnected(nil, ski) }
+	dependencies := defaultRuntimeDependencies
+	dependencies.now = time.Now
+	resources, err := acquireRuntimeFirstTrust(
+		context.Background(),
+		RuntimeConfig{StateRoot: stateRoot},
+		runtimeMaterial{firstTrust: &runtimeFirstTrustAuthorization{
+			adminRuntimeDir:  adminRoot,
+			hostAnchor:       anchor,
+			identityProvider: anchor,
+			keyProviders:     []eebusstore.KeyProviderBinding{anchor.keyBinding()},
+		}},
+		service,
+		reader,
+		dependencies,
+	)
+	if err != nil {
+		t.Fatalf("acquireRuntimeFirstTrust(%s): %v", filepath.Base(adminRoot), err)
+	}
+	return resources
 }
 
 func issue56CurrentBinding(t *testing.T, fixture *issue56Fixture) msp04bBindings {
