@@ -709,14 +709,14 @@ func (facade *firstTrustFacade) registerRemoteSKI(remote []byte, generation uint
 	}
 }
 
-func (facade *firstTrustFacade) registerTransientRemoteSKI(remote []byte, generation uint64) {
+func (facade *firstTrustFacade) registerTransientRemoteSKI(remote []byte, generation uint64) bool {
 	normalized := hex.EncodeToString(remote)
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
 	if facade.pairingRegistrationFault || connection == nil || connection.generation != generation ||
 		!connection.active || connection.cancelled || connection.blocked || connection.registered {
 		facade.mu.Unlock()
-		return
+		return false
 	}
 	connection.registered = true
 	connection.transient = true
@@ -726,7 +726,9 @@ func (facade *firstTrustFacade) registerTransientRemoteSKI(remote []byte, genera
 	facade.mu.Unlock()
 	if service != nil {
 		service.RegisterRemoteSKI(normalized)
+		return true
 	}
+	return false
 }
 
 func (facade *firstTrustFacade) unregisterTransientRemoteSKI(remote []byte, generation uint64) {

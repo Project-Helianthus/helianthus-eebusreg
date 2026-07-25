@@ -628,13 +628,12 @@ func TestIssue60PostAuthorizationEvidenceCommitsInEitherOrder(t *testing.T) {
 	}
 }
 
-func TestIssue60PreAuthorizationSHIPIDAndStaleGenerationDoNotCommit(t *testing.T) {
+func TestIssue60PreAuthorizationSHIPIDRequiresExactCompletion(t *testing.T) {
 	fixture := newIssue60Fixture(t)
 	fixture.facade.ServiceShipIDUpdate(issue56SKIA, "pre-authorization")
 	if got := fixture.confirm("confirm"); got != "transient_trusted" {
 		t.Fatalf("confirm = %q", got)
 	}
-	fixture.completed()
 	assertMSP04BCommitCount(t, fixture.base.store, 0)
 
 	fixture.coordinator.serviceShipIDUpdate(fixture.remote, fixture.binding.connection+1, "stale")
@@ -644,7 +643,7 @@ func TestIssue60PreAuthorizationSHIPIDAndStaleGenerationDoNotCommit(t *testing.T
 		t.Fatalf("stale generation revoked live transient trust %d times", got)
 	}
 
-	fixture.shipID()
+	fixture.completed()
 	assertMSP04BCommitCount(t, fixture.base.store, 1)
 }
 
