@@ -117,7 +117,7 @@ func TestIssue72RefreshesTopologyFromDetailedDiscoveryAndStopsBeforeShutdown(t *
 	}
 
 	remoteService.EXPECT().LocalDevice().Return(localDevice)
-	localDevice.EXPECT().RemoteDeviceForSki(remoteSKI).Return(remoteDevice)
+	localDevice.EXPECT().RemoteDeviceForSki(remoteSKI).Return(remoteDevice).Once()
 	foreignRemote := spinemocks.NewDeviceRemoteInterface(t)
 	eventHandler.HandleEvent(spineapi.EventPayload{
 		Ski:        remoteSKI,
@@ -132,7 +132,9 @@ func TestIssue72RefreshesTopologyFromDetailedDiscoveryAndStopsBeforeShutdown(t *
 	}
 
 	remoteService.EXPECT().LocalDevice().Return(localDevice)
-	localDevice.EXPECT().RemoteDeviceForSki(remoteSKI).Return(remoteDevice)
+	// Capture the graph while the native callback still serializes the SPINE
+	// mutation. A background worker must not traverse the mutable remote again.
+	localDevice.EXPECT().RemoteDeviceForSki(remoteSKI).Return(remoteDevice).Once()
 	clock.Advance(time.Second)
 	eventHandler.HandleEvent(spineapi.EventPayload{
 		Ski:        remoteSKI,
