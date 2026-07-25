@@ -422,8 +422,11 @@ func (fixture *msp04crRuntimeFixture) acquire(t *testing.T, service *msp04crServ
 			},
 		}, nil
 	}
-	dependencies.newService = func(_ RuntimeConfig, _ runtimeMaterial, callback eebusapi.ServiceReaderInterface) (runtimeService, error) {
+	dependencies.newService = func(_ RuntimeConfig, material runtimeMaterial, callback eebusapi.ServiceReaderInterface) (runtimeService, error) {
 		fixture.events.add("service_factory")
+		if material.outgoingAttemptBridge == nil {
+			t.Fatal("production runtime reached the service factory without a durable outgoing-attempt bridge")
+		}
 		reader = callback.(*runtimeServiceReader)
 		service.outerEvents = fixture.events
 		service.expectedSKI = fixture.remoteSKI
