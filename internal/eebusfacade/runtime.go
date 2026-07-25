@@ -269,6 +269,7 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		if err := attachRuntimeFirstTrust(ctx, firstTrust, service, reader, dependencies); err != nil {
 			return nil, closeRuntime(err)
 		}
+		outgoingAttemptBridge.bindTLSLifecycle(firstTrust.facade)
 	}
 	backend := &serviceBackend{
 		service: service, handler: handler, firstTrust: firstTrust, outgoingAttempts: outgoingAttemptBridge,

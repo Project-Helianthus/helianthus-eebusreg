@@ -150,6 +150,7 @@ type firstTrustOutgoingAttemptRuntime struct {
 	context                context.Context
 	cancel                 context.CancelFunc
 	cancellationGeneration uint64
+	candidateConnection    uint64
 	leaseDeadline          time.Duration
 	leaseTimer             firstTrustOutgoingAttemptTimer
 }

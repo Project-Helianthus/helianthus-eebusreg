@@ -8,7 +8,384 @@ import (
 	"time"
 
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	shipmodel "github.com/Project-Helianthus/helianthus-ship-go/model"
 )
+
+func TestIssue60ExactOutgoingHandshakeBindsTransientTrustBeforeAccessMethods(t *testing.T) {
+	product := newMSP04CFixture(t)
+	coordinator := product.newCoordinator()
+	if got := coordinator.reopen(context.Background()); got != "pairing_closed" {
+		t.Fatalf("reopen = %q, want pairing_closed", got)
+	}
+	eventSink := &issue60OutgoingGateCoordinator{firstTrustCoordinator: coordinator}
+	service := &issue60Service{}
+	facade, err := newFirstTrustFacade(service, eventSink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.mu.Lock()
+	coordinator.effects = facade
+	coordinator.mu.Unlock()
+	bridge := newFirstTrustOutgoingAttemptBridge(&runtimeFirstTrustResources{coordinator: coordinator})
+	bridge.bindTLSLifecycle(facade)
+	if got := coordinator.openPairingWindow(context.Background(), "open-exact-outgoing", firstTrustMaximumWindow); got != "open_empty" {
+		t.Fatalf("open = %q, want open_empty", got)
+	}
+	var permit shipapi.OutgoingAttemptPermit
+	service.queue = func(_ string, expectedSKI string) error {
+		facade.ServicePairingDetailUpdate(
+			expectedSKI,
+			shipapi.NewConnectionStateDetail(shipapi.ConnectionStateQueued, nil),
+		)
+		handle, prepareErr := bridge.Prepare(shipapi.OutgoingAttemptRequest{
+			RemoteSKI: expectedSKI,
+			Endpoint:  shipapi.OutgoingAttemptEndpoint{Host: "peer.invalid", Port: 4712},
+			Path:      "/ship/",
+		})
+		if prepareErr != nil {
+			return prepareErr
+		}
+		var authorizeErr error
+		permit, authorizeErr = bridge.AuthorizeLaunch(handle)
+		if authorizeErr != nil {
+			return authorizeErr
+		}
+		if permit.Decision != shipapi.OutgoingAttemptDecisionPermit {
+			return errors.New("outgoing attempt was denied")
+		}
+		return nil
+	}
+	facade.VisiblePairingCandidatesUpdated(nil, []shipapi.PairingCandidateRef{{
+		CandidateRef: "candidate-exact-outgoing",
+		SKI:          issue56SKIA,
+	}})
+	if got := coordinator.selectCandidate(
+		context.Background(), "select-exact-outgoing", "candidate-exact-outgoing", issue56SKIA,
+	); got != "candidate_queued" {
+		t.Fatalf("select = %q, want candidate_queued", got)
+	}
+	remote, remoteSKI, ok := decodeFirstTrustSKI(issue56SKIA)
+	if !ok {
+		t.Fatal("fixture SKI is invalid")
+	}
+	if permit.Decision != shipapi.OutgoingAttemptDecisionPermit {
+		t.Fatal("normal candidate queue did not authorize an outgoing attempt")
+	}
+
+	fingerprint, nonce, expiresAt, candidateConnection, generation, _, ok := coordinator.candidate()
+	if !ok || candidateConnection == 0 {
+		t.Fatal("exact outgoing candidate binding is unavailable")
+	}
+	confirm := func() string {
+		return coordinator.confirm(
+			context.Background(), "confirm-exact-outgoing", fingerprint, nonce, expiresAt, candidateConnection, generation,
+		)
+	}
+	if got := confirm(); got != "association_incomplete" {
+		t.Fatalf("confirmation before exact TLS callback = %q, want association_incomplete", got)
+	}
+
+	stale := permit.Metadata
+	stale.ControlEpoch++
+	tlsReady := shipmodel.ShipState{State: shipmodel.CmiStateInitStart}
+	bridge.OutgoingAttemptHandshakeStateUpdate(remoteSKI, tlsReady, stale)
+	bridge.OutgoingAttemptHandshakeStateUpdate(issue56SKIB, tlsReady, permit.Metadata)
+	if got := confirm(); got != "association_incomplete" {
+		t.Fatalf("confirmation after stale TLS callbacks = %q, want association_incomplete", got)
+	}
+
+	bridge.OutgoingAttemptHandshakeStateUpdate(remoteSKI, tlsReady, permit.Metadata)
+	bridge.OutgoingAttemptHandshakeStateUpdate(remoteSKI, tlsReady, permit.Metadata)
+	if got := confirm(); got != "transient_trusted" {
+		t.Fatalf("confirmation after exact TLS callback = %q, want transient_trusted", got)
+	}
+	if got := service.registerCount(); got != 1 {
+		t.Fatalf("transient registration calls = %d, want 1", got)
+	}
+
+	facade.RemoteSKIConnected(nil, remoteSKI)
+	facade.ServiceShipIDUpdate(remoteSKI, "ship-id-after-access")
+	facade.ServicePairingDetailUpdate(
+		remoteSKI,
+		shipapi.NewConnectionStateDetail(shipapi.ConnectionStateCompleted, nil),
+	)
+	if got := confirm(); got != "trusted" {
+		t.Fatalf("terminal confirmation replay = %q, want trusted", got)
+	}
+	if !coordinator.trusted(remote) {
+		t.Fatal("Access Methods evidence did not publish durable trust")
+	}
+	if got := service.registerCount(); got != 1 {
+		t.Fatalf("durable trust registration calls = %d, want 1", got)
+	}
+	if got := service.unregisterCount(); got != 0 {
+		t.Fatalf("successful trust unregistration calls = %d, want 0", got)
+	}
+}
+
+func TestIssue60OutgoingAttemptDoesNotAdoptUnrelatedGeneration(t *testing.T) {
+	product := newMSP04CFixture(t)
+	coordinator := product.newCoordinator()
+	if got := coordinator.reopen(context.Background()); got != "pairing_closed" {
+		t.Fatalf("reopen = %q, want pairing_closed", got)
+	}
+	eventSink := &issue60OutgoingGateCoordinator{firstTrustCoordinator: coordinator}
+	service := &issue60Service{}
+	facade, err := newFirstTrustFacade(service, eventSink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.mu.Lock()
+	coordinator.effects = facade
+	coordinator.mu.Unlock()
+	bridge := newFirstTrustOutgoingAttemptBridge(&runtimeFirstTrustResources{coordinator: coordinator})
+	bridge.bindTLSLifecycle(facade)
+	if got := coordinator.openPairingWindow(context.Background(), "open-stale-generation", firstTrustMaximumWindow); got != "open_empty" {
+		t.Fatalf("open = %q, want open_empty", got)
+	}
+
+	var permit shipapi.OutgoingAttemptPermit
+	var generationAfterPrepare uint64
+	service.queue = func(_ string, expectedSKI string) error {
+		facade.ServicePairingDetailUpdate(
+			expectedSKI,
+			shipapi.NewConnectionStateDetail(shipapi.ConnectionStateQueued, nil),
+		)
+		handle, prepareErr := bridge.Prepare(shipapi.OutgoingAttemptRequest{
+			RemoteSKI: expectedSKI,
+			Endpoint:  shipapi.OutgoingAttemptEndpoint{Host: "peer.invalid", Port: 4712},
+			Path:      "/ship/",
+		})
+		if prepareErr != nil {
+			return prepareErr
+		}
+		_, _, _, _, generationAfterPrepare, _, _ = coordinator.candidate()
+		product.store.mu.Lock()
+		product.store.view.manifest.current.sequence = generationAfterPrepare + 100
+		product.store.mu.Unlock()
+		var authorizeErr error
+		permit, authorizeErr = bridge.AuthorizeLaunch(handle)
+		if authorizeErr != nil {
+			return authorizeErr
+		}
+		if permit.Decision != shipapi.OutgoingAttemptDecisionPermit {
+			return errors.New("outgoing attempt was denied")
+		}
+		return nil
+	}
+	facade.VisiblePairingCandidatesUpdated(nil, []shipapi.PairingCandidateRef{{
+		CandidateRef: "candidate-stale-generation",
+		SKI:          issue56SKIA,
+	}})
+	if got := coordinator.selectCandidate(
+		context.Background(), "select-stale-generation", "candidate-stale-generation", issue56SKIA,
+	); got != "candidate_queued" {
+		t.Fatalf("select = %q, want candidate_queued", got)
+	}
+
+	fingerprint, nonce, expiresAt, connection, candidateGeneration, _, ok := coordinator.candidate()
+	if !ok || generationAfterPrepare == 0 || candidateGeneration != generationAfterPrepare {
+		t.Fatalf("candidate generation = %d, want exact prepared generation %d", candidateGeneration, generationAfterPrepare)
+	}
+	_, remoteSKI, ok := decodeFirstTrustSKI(issue56SKIA)
+	if !ok {
+		t.Fatal("fixture SKI is invalid")
+	}
+	bridge.OutgoingAttemptHandshakeStateUpdate(
+		remoteSKI,
+		shipmodel.ShipState{State: shipmodel.CmiStateInitStart},
+		permit.Metadata,
+	)
+	if got := coordinator.confirm(
+		context.Background(), "confirm-stale-generation", fingerprint, nonce, expiresAt, connection, candidateGeneration,
+	); got != "store_generation_conflict" {
+		t.Fatalf("confirmation after unrelated generation = %q, want store_generation_conflict", got)
+	}
+	if got := service.registerCount(); got != 0 {
+		t.Fatalf("unrelated generation transient registrations = %d, want 0", got)
+	}
+}
+
+type issue60OutgoingGateCoordinator struct {
+	*firstTrustCoordinator
+}
+
+func (*issue60OutgoingGateCoordinator) retryRuntimeEnabled() bool {
+	return false
+}
+
+func TestIssue60EvidenceAndDisconnectAreSerialized(t *testing.T) {
+	tests := []struct {
+		name       string
+		prime      func(*issue60Fixture)
+		send       func(*issue60Fixture)
+		setBarrier func(*issue60CoordinatorBarrier, *issue60CallBarrier)
+	}{
+		{
+			name:  "SHIP ID",
+			prime: func(fixture *issue60Fixture) { fixture.completed() },
+			send:  func(fixture *issue60Fixture) { fixture.shipID() },
+			setBarrier: func(coordinator *issue60CoordinatorBarrier, barrier *issue60CallBarrier) {
+				coordinator.shipID = barrier
+			},
+		},
+		{
+			name:  "Completed",
+			prime: func(fixture *issue60Fixture) { fixture.shipID() },
+			send:  func(fixture *issue60Fixture) { fixture.completed() },
+			setBarrier: func(coordinator *issue60CoordinatorBarrier, barrier *issue60CallBarrier) {
+				coordinator.completed = barrier
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name+" evidence first", func(t *testing.T) {
+			fixture := newIssue60Fixture(t)
+			if got := fixture.confirm("confirm"); got != "transient_trusted" {
+				t.Fatalf("confirm = %q, want transient_trusted", got)
+			}
+			fixture.connectAccessMethods()
+			test.prime(fixture)
+
+			evidenceBarrier := newIssue60CallBarrier()
+			closedBarrier := newIssue60CallBarrier()
+			coordinator := &issue60CoordinatorBarrier{
+				firstTrustCoordinator: fixture.coordinator,
+				closed:                closedBarrier,
+			}
+			test.setBarrier(coordinator, evidenceBarrier)
+			fixture.facade.coordinator = coordinator
+
+			evidenceDone := make(chan struct{})
+			go func() {
+				test.send(fixture)
+				close(evidenceDone)
+			}()
+			evidenceBarrier.waitEntered(t)
+			disconnectDone := make(chan struct{})
+			go func() {
+				fixture.facade.RemoteSKIDisconnected(nil, issue56SKIA)
+				close(disconnectDone)
+			}()
+			select {
+			case <-closedBarrier.entered:
+				t.Fatal("disconnect overtook evidence after the evidence callback was ordered first")
+			case <-time.After(50 * time.Millisecond):
+			}
+
+			evidenceBarrier.releaseCall()
+			waitIssue60Done(t, evidenceDone, "evidence")
+			waitIssue60Done(t, disconnectDone, "disconnect")
+			if got := fixture.confirm("confirm"); got != "trusted" {
+				t.Fatalf("evidence-first terminal replay = %q, want trusted", got)
+			}
+		})
+
+		t.Run(test.name+" disconnect first", func(t *testing.T) {
+			fixture := newIssue60Fixture(t)
+			if got := fixture.confirm("confirm"); got != "transient_trusted" {
+				t.Fatalf("confirm = %q, want transient_trusted", got)
+			}
+			fixture.connectAccessMethods()
+			test.prime(fixture)
+
+			evidenceBarrier := newIssue60CallBarrier()
+			closedBarrier := newIssue60CallBarrier()
+			coordinator := &issue60CoordinatorBarrier{
+				firstTrustCoordinator: fixture.coordinator,
+				closed:                closedBarrier,
+			}
+			test.setBarrier(coordinator, evidenceBarrier)
+			fixture.facade.coordinator = coordinator
+
+			disconnectDone := make(chan struct{})
+			go func() {
+				fixture.facade.RemoteSKIDisconnected(nil, issue56SKIA)
+				close(disconnectDone)
+			}()
+			closedBarrier.waitEntered(t)
+			evidenceDone := make(chan struct{})
+			go func() {
+				test.send(fixture)
+				close(evidenceDone)
+			}()
+			waitIssue60Done(t, evidenceDone, "stale evidence")
+			select {
+			case <-evidenceBarrier.entered:
+				t.Fatal("stale evidence reached the coordinator after disconnect was ordered first")
+			default:
+			}
+			closedBarrier.releaseCall()
+			waitIssue60Done(t, disconnectDone, "disconnect")
+			assertMSP04BCommitCount(t, fixture.base.store, 0)
+			if got := fixture.confirm("confirm"); got != "connection_closed" {
+				t.Fatalf("disconnect-first terminal replay = %q, want connection_closed", got)
+			}
+		})
+	}
+}
+
+type issue60CoordinatorBarrier struct {
+	*firstTrustCoordinator
+	shipID    *issue60CallBarrier
+	completed *issue60CallBarrier
+	closed    *issue60CallBarrier
+}
+
+func (coordinator *issue60CoordinatorBarrier) serviceShipIDUpdate(remote []byte, connection uint64, shipID string) string {
+	coordinator.shipID.block()
+	return coordinator.firstTrustCoordinator.serviceShipIDUpdate(remote, connection, shipID)
+}
+
+func (coordinator *issue60CoordinatorBarrier) connectionCompleted(remote []byte, connection uint64) string {
+	coordinator.completed.block()
+	return coordinator.firstTrustCoordinator.connectionCompleted(remote, connection)
+}
+
+func (coordinator *issue60CoordinatorBarrier) connectionClosed(remote []byte, connection uint64) string {
+	coordinator.closed.block()
+	return coordinator.firstTrustCoordinator.connectionClosed(remote, connection)
+}
+
+type issue60CallBarrier struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newIssue60CallBarrier() *issue60CallBarrier {
+	return &issue60CallBarrier{entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (barrier *issue60CallBarrier) block() {
+	if barrier == nil {
+		return
+	}
+	barrier.once.Do(func() { close(barrier.entered) })
+	<-barrier.release
+}
+
+func (barrier *issue60CallBarrier) waitEntered(t *testing.T) {
+	t.Helper()
+	select {
+	case <-barrier.entered:
+	case <-time.After(time.Second):
+		t.Fatal("callback did not reach the forced interleaving barrier")
+	}
+}
+
+func (barrier *issue60CallBarrier) releaseCall() {
+	close(barrier.release)
+}
+
+func waitIssue60Done(t *testing.T, done <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("%s callback did not terminate", name)
+	}
+}
 
 func TestIssue60ExactTLSBoundConfirmationStagesTransientTrust(t *testing.T) {
 	fixture := newIssue60Fixture(t)
@@ -48,7 +425,7 @@ func TestIssue60ConfirmationRequiresExactTLSBindingButNotSHIPID(t *testing.T) {
 		t.Fatalf("RegisterRemoteSKI before TLS binding = %d, want 0", got)
 	}
 
-	fixture.facade.RemoteSKIConnected(nil, issue56SKIA)
+	fixture.bindTLS(t)
 	if got := fixture.confirm("confirm"); got != "transient_trusted" {
 		t.Fatalf("confirmation after TLS binding = %q, want transient_trusted", got)
 	}
@@ -356,7 +733,10 @@ func TestIssue60RecoveryStorePublishesAfterTransientEvidence(t *testing.T) {
 		t.Fatalf("open = %q", got)
 	}
 	service.queue = func(_ string, expectedSKI string) error {
-		facade.RemoteSKIConnected(nil, expectedSKI)
+		facade.ServicePairingDetailUpdate(
+			expectedSKI,
+			shipapi.NewConnectionStateDetail(shipapi.ConnectionStateQueued, nil),
+		)
 		return nil
 	}
 	facade.VisiblePairingCandidatesUpdated(nil, []shipapi.PairingCandidateRef{{
@@ -369,6 +749,10 @@ func TestIssue60RecoveryStorePublishesAfterTransientEvidence(t *testing.T) {
 	fingerprint, nonce, expiresAt, connection, generation, _, ok := coordinator.candidate()
 	if !ok {
 		t.Fatal("recovery candidate unavailable")
+	}
+	remote, _, ok := decodeFirstTrustSKI(issue56SKIA)
+	if !ok || !facade.outgoingAttemptTLSBound(remote, connection) {
+		t.Fatal("recovery candidate TLS binding failed")
 	}
 	if got := coordinator.confirm(
 		context.Background(),
@@ -387,6 +771,7 @@ func TestIssue60RecoveryStorePublishesAfterTransientEvidence(t *testing.T) {
 	product.store.mu.Lock()
 	commitsBeforeEvidence := product.store.commitCalls
 	product.store.mu.Unlock()
+	facade.RemoteSKIConnected(nil, issue56SKIA)
 	facade.ServiceShipIDUpdate(issue56SKIA, "ship-id-a")
 	facade.ServicePairingDetailUpdate(
 		issue56SKIA,
@@ -422,6 +807,7 @@ type issue60Fixture struct {
 	service     *issue60Service
 	remote      []byte
 	binding     msp04bBindings
+	accessOnce  sync.Once
 }
 
 func newIssue60Fixture(t *testing.T) *issue60Fixture {
@@ -444,14 +830,10 @@ func newIssue60FixtureWithOptions(t *testing.T, storeOutcome string, tlsBound bo
 		t.Fatalf("open pairing window = %q", got)
 	}
 	service.queue = func(_ string, expectedSKI string) error {
-		if tlsBound {
-			facade.RemoteSKIConnected(nil, expectedSKI)
-		} else {
-			facade.ServicePairingDetailUpdate(
-				expectedSKI,
-				shipapi.NewConnectionStateDetail(shipapi.ConnectionStateQueued, nil),
-			)
-		}
+		facade.ServicePairingDetailUpdate(
+			expectedSKI,
+			shipapi.NewConnectionStateDetail(shipapi.ConnectionStateQueued, nil),
+		)
 		return nil
 	}
 	facade.VisiblePairingCandidatesUpdated(nil, []shipapi.PairingCandidateRef{{
@@ -469,7 +851,7 @@ func newIssue60FixtureWithOptions(t *testing.T, storeOutcome string, tlsBound bo
 	if !ok || complete || fingerprint != issue56SKIA || connection == 0 || storeGeneration == 0 {
 		t.Fatalf("TLS-bound candidate = fingerprint=%q connection=%d store=%d complete=%t ok=%t", fingerprint, connection, storeGeneration, complete, ok)
 	}
-	return &issue60Fixture{
+	fixture := &issue60Fixture{
 		base:        base,
 		coordinator: coordinator,
 		facade:      facade,
@@ -483,6 +865,10 @@ func newIssue60FixtureWithOptions(t *testing.T, storeOutcome string, tlsBound bo
 			store:       storeGeneration,
 		},
 	}
+	if tlsBound {
+		fixture.bindTLS(t)
+	}
+	return fixture
 }
 
 func (fixture *issue60Fixture) confirm(key string) string {
@@ -490,14 +876,29 @@ func (fixture *issue60Fixture) confirm(key string) string {
 }
 
 func (fixture *issue60Fixture) shipID() {
+	fixture.connectAccessMethods()
 	fixture.facade.ServiceShipIDUpdate(issue56SKIA, "ship-id-a")
 }
 
 func (fixture *issue60Fixture) completed() {
+	fixture.connectAccessMethods()
 	fixture.facade.ServicePairingDetailUpdate(
 		issue56SKIA,
 		shipapi.NewConnectionStateDetail(shipapi.ConnectionStateCompleted, nil),
 	)
+}
+
+func (fixture *issue60Fixture) connectAccessMethods() {
+	fixture.accessOnce.Do(func() {
+		fixture.facade.RemoteSKIConnected(nil, issue56SKIA)
+	})
+}
+
+func (fixture *issue60Fixture) bindTLS(t *testing.T) {
+	t.Helper()
+	if !fixture.facade.outgoingAttemptTLSBound(fixture.remote, fixture.binding.connection) {
+		t.Fatal("candidate TLS binding failed")
+	}
 }
 
 type issue60Service struct {
