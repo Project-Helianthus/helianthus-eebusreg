@@ -39,3 +39,23 @@ func TestIssue62PreConfirmEvidenceCommitsAfterTransientRegistration(t *testing.T
 	fixture.coordinator.connectionCompleted(fixture.remote, fixture.binding.connection+1)
 	assertMSP04BCommitCount(t, fixture.base.store, 1)
 }
+
+func TestIssue62SynchronousEvidenceWaitsForTransientRegistrationReturn(t *testing.T) {
+	fixture := newIssue60Fixture(t)
+	fixture.service.onRegister = func(string) {
+		fixture.shipID()
+		fixture.completed()
+		assertMSP04BCommitCount(t, fixture.base.store, 0)
+		fixture.base.store.events.add("transient_register_returning")
+	}
+
+	if got := fixture.confirm("confirm"); got != "transient_trusted" {
+		t.Fatalf("exact confirmation = %q, want transient_trusted", got)
+	}
+
+	assertMSP04BCommitCount(t, fixture.base.store, 1)
+	fixture.base.effects.assertOrder(t, "transient_register_returning", "commit")
+	if got := fixture.confirm("confirm"); got != "trusted" {
+		t.Fatalf("terminal confirmation replay = %q, want trusted", got)
+	}
+}

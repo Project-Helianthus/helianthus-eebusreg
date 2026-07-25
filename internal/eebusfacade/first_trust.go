@@ -124,10 +124,11 @@ type firstTrustCandidate struct {
 	requests        map[string]firstTrustRequest
 	completed       bool
 
-	transientAuthorized       bool
-	transientRevocationQueued bool
-	confirmationKey           string
-	confirmationRequest       firstTrustRequest
+	transientAuthorized           bool
+	transientRegistrationComplete bool
+	transientRevocationQueued     bool
+	confirmationKey               string
+	confirmationRequest           firstTrustRequest
 }
 
 type firstTrustRequest struct {
@@ -714,6 +715,7 @@ func (coordinator *firstTrustCoordinator) confirm(ctx context.Context, key, fing
 	}
 	if candidate.tlsRequired {
 		candidate.transientAuthorized = true
+		candidate.transientRegistrationComplete = false
 		candidate.confirmationKey = key
 		candidate.confirmationRequest = request
 		coordinator.phase = firstTrustTransientTrusted
@@ -888,7 +890,8 @@ func (coordinator *firstTrustCoordinator) selectedFirstTrustGenerationLocked() u
 func (coordinator *firstTrustCoordinator) beginTransientCommitLocked() (*firstTrustCommit, string) {
 	candidate := coordinator.currentCandidate
 	if coordinator.phase != firstTrustTransientTrusted || candidate == nil ||
-		!candidate.transientAuthorized || candidate.shipID == "" || !candidate.completed {
+		!candidate.transientAuthorized || !candidate.transientRegistrationComplete ||
+		candidate.shipID == "" || !candidate.completed {
 		return nil, "association_incomplete"
 	}
 	if coordinator.selectedFirstTrustGenerationLocked() != candidate.storeGeneration {
@@ -1456,7 +1459,7 @@ func (coordinator *firstTrustCoordinator) registerTransientRemoteLocked(remote [
 	}
 }
 
-func (coordinator *firstTrustCoordinator) commitLatchedTransientEvidence(remote []byte, connection uint64) {
+func (coordinator *firstTrustCoordinator) completeTransientRegistration(remote []byte, connection uint64) {
 	coordinator.mu.Lock()
 	coordinator.expireLocked(coordinator.now())
 	candidate := coordinator.currentCandidate
@@ -1466,6 +1469,7 @@ func (coordinator *firstTrustCoordinator) commitLatchedTransientEvidence(remote 
 		coordinator.mu.Unlock()
 		return
 	}
+	candidate.transientRegistrationComplete = true
 	commit, _ := coordinator.beginTransientCommitLocked()
 	coordinator.mu.Unlock()
 	if commit != nil {
@@ -1530,7 +1534,7 @@ func (coordinator *firstTrustCoordinator) drainEffects() {
 				registerTransientRemoteSKI([]byte, uint64) bool
 			}); ok && effect.target.connectionAlive(effect.remote, effect.connection) {
 				if target.registerTransientRemoteSKI(effect.remote, effect.connection) {
-					coordinator.commitLatchedTransientEvidence(effect.remote, effect.connection)
+					coordinator.completeTransientRegistration(effect.remote, effect.connection)
 				}
 			}
 		case firstTrustEffectTransientUnregister:
