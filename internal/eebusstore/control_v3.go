@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"sort"
 )
 
 type controlRecordV3 struct {
@@ -14,6 +15,7 @@ type controlRecordV3 struct {
 	tombstones         []controlTombstone
 	quarantines        []controlQuarantine
 	receipts           []controlReceipt
+	attempts           []controlAttempt
 	operationHighWater uint64
 	repairSequence     uint64
 	publication        *controlPublication
@@ -21,7 +23,7 @@ type controlRecordV3 struct {
 
 type controlRecordWireV3 struct {
 	AssociationLineage string                  `json:"association_lineage"`
-	Attempts           []json.RawMessage       `json:"attempts"`
+	Attempts           []controlAttemptWire    `json:"attempts"`
 	ControlEpoch       uint64                  `json:"control_epoch"`
 	OperationHighWater uint64                  `json:"operation_high_water"`
 	Publication        *controlPublicationWire `json:"publication"`
@@ -53,7 +55,10 @@ func validControlRecordV3Envelope(payload []byte) bool {
 }
 
 func validateControlRecordV3(record controlRecordV3) error {
-	return validateControlRecordBase(record)
+	if err := validateControlRecordBase(record); err != nil {
+		return err
+	}
+	return validateControlAttempts(record)
 }
 
 func encodeControlRecordV3(record controlRecordV3) ([]byte, error) {
@@ -65,14 +70,37 @@ func encodeControlRecordV3(record controlRecordV3) ([]byte, error) {
 
 func encodeControlRecordV3Unchecked(record controlRecordV3) ([]byte, error) {
 	record = cloneControlRecordV3(record)
+	sort.Slice(record.attempts, func(left, right int) bool {
+		if record.attempts[left].reservationOrder != record.attempts[right].reservationOrder {
+			return record.attempts[left].reservationOrder < record.attempts[right].reservationOrder
+		}
+		return bytes.Compare(record.attempts[left].attemptID, record.attempts[right].attemptID) < 0
+	})
 	wire := controlRecordWireV3{
 		AssociationLineage: base64.StdEncoding.EncodeToString(record.associationLineage),
-		Attempts:           []json.RawMessage{},
+		Attempts:           make([]controlAttemptWire, len(record.attempts)),
 		ControlEpoch:       record.controlEpoch, OperationHighWater: record.operationHighWater,
 		Quarantines: make([]controlQuarantineWire, len(record.quarantines)),
 		Receipts:    make([]controlReceiptWire, len(record.receipts)), RepairSequence: record.repairSequence,
 		StoreInstance: base64.StdEncoding.EncodeToString(record.storeInstance),
 		Tombstones:    make([]controlTombstoneWire, len(record.tombstones)),
+	}
+	for index, attempt := range record.attempts {
+		wire.Attempts[index] = controlAttemptWire{
+			AssociationLineage:     base64.StdEncoding.EncodeToString(attempt.associationLineage),
+			AttemptCountBefore:     attempt.attemptCountBefore,
+			AttemptID:              base64.StdEncoding.EncodeToString(attempt.attemptID),
+			CancellationGeneration: attempt.cancellationGeneration,
+			ControlEpoch:           attempt.controlEpoch,
+			EndpointHost:           attempt.endpointHost,
+			EndpointPort:           attempt.endpointPort,
+			Path:                   attempt.path,
+			RemoteSKI:              base64.StdEncoding.EncodeToString(attempt.remoteSKI),
+			ReservationOrder:       attempt.reservationOrder,
+			ReservationTimestamp:   attempt.reservationTimestamp,
+			Scope:                  base64.StdEncoding.EncodeToString(attempt.scope),
+			StateCode:              attempt.stateCode,
+		}
 	}
 	for index, tombstone := range record.tombstones {
 		wire.Tombstones[index] = controlTombstoneWire{
@@ -120,12 +148,35 @@ func decodeControlRecordV3(payload []byte) (controlRecordV3, error) {
 	}
 	record := controlRecordV3{
 		storeInstance: storeInstance, controlEpoch: wire.ControlEpoch, associationLineage: lineage,
+		attempts:    make([]controlAttempt, len(wire.Attempts)),
 		tombstones:  make([]controlTombstone, len(wire.Tombstones)),
 		quarantines: make([]controlQuarantine, len(wire.Quarantines)), receipts: make([]controlReceipt, len(wire.Receipts)),
 		operationHighWater: wire.OperationHighWater, repairSequence: wire.RepairSequence,
 	}
-	if len(wire.Attempts) != 0 {
-		return controlRecordV3{}, malformed("decode_control", errors.New("attempts must be empty"))
+	for index, item := range wire.Attempts {
+		attemptID, decodeErr := decodeControlOpaque(item.AttemptID)
+		if decodeErr != nil {
+			return controlRecordV3{}, decodeErr
+		}
+		remoteSKI, decodeErr := decodeCanonicalBase64(item.RemoteSKI, 20, 20)
+		if decodeErr != nil {
+			return controlRecordV3{}, decodeErr
+		}
+		scope, decodeErr := decodeControlOpaque(item.Scope)
+		if decodeErr != nil {
+			return controlRecordV3{}, decodeErr
+		}
+		attemptLineage, decodeErr := decodeControlOpaque(item.AssociationLineage)
+		if decodeErr != nil {
+			return controlRecordV3{}, decodeErr
+		}
+		record.attempts[index] = controlAttempt{
+			stateCode: item.StateCode, attemptID: attemptID, remoteSKI: remoteSKI, scope: scope,
+			controlEpoch: item.ControlEpoch, associationLineage: attemptLineage,
+			endpointHost: item.EndpointHost, endpointPort: item.EndpointPort, path: item.Path,
+			cancellationGeneration: item.CancellationGeneration, reservationOrder: item.ReservationOrder,
+			reservationTimestamp: item.ReservationTimestamp, attemptCountBefore: item.AttemptCountBefore,
+		}
 	}
 	if err := decodeControlRecordFields(&record, wire); err != nil {
 		return controlRecordV3{}, err

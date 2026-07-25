@@ -61,6 +61,22 @@ type ControlReceipt struct {
 	Terminal       bool
 }
 
+type ControlAttempt struct {
+	StateCode              uint64
+	AttemptID              [32]byte
+	RemoteSKI              []byte
+	Scope                  [32]byte
+	ControlEpoch           uint64
+	AssociationLineage     [32]byte
+	EndpointHost           string
+	EndpointPort           uint16
+	Path                   string
+	CancellationGeneration uint64
+	ReservationOrder       uint64
+	ReservationTimestamp   int64
+	AttemptCountBefore     uint64
+}
+
 type ControlPublication struct {
 	OperationID          [32]byte
 	OperationClass       uint64
@@ -79,6 +95,7 @@ type ControlRecord struct {
 	Tombstones                 []ControlTombstone
 	Quarantines                []ControlQuarantine
 	Receipts                   []ControlReceipt
+	Attempts                   []ControlAttempt
 	OperationHighWater         uint64
 	RepairSequence             uint64
 	Publication                *ControlPublication
@@ -316,6 +333,18 @@ func controlRecordFromStore(state stateV1) ControlRecord {
 		copy(result.Receipts[index].BindingSHA256[:], value.bindingSHA256)
 		result.Receipts[index].OperationClass, result.Receipts[index].ResultCode, result.Receipts[index].Terminal = value.operationClass, value.resultCode, value.terminal
 	}
+	result.Attempts = make([]ControlAttempt, len(record.attempts))
+	for index, value := range record.attempts {
+		result.Attempts[index] = ControlAttempt{
+			StateCode: value.stateCode, RemoteSKI: bytes.Clone(value.remoteSKI), ControlEpoch: value.controlEpoch,
+			EndpointHost: value.endpointHost, EndpointPort: value.endpointPort, Path: value.path,
+			CancellationGeneration: value.cancellationGeneration, ReservationOrder: value.reservationOrder,
+			ReservationTimestamp: value.reservationTimestamp, AttemptCountBefore: value.attemptCountBefore,
+		}
+		copy(result.Attempts[index].AttemptID[:], value.attemptID)
+		copy(result.Attempts[index].Scope[:], value.scope)
+		copy(result.Attempts[index].AssociationLineage[:], value.associationLineage)
+	}
 	if record.publication != nil {
 		publication := ControlPublication{
 			OperationClass: record.publication.operationClass, PreviousControlEpoch: record.publication.previousControlEpoch,
@@ -350,6 +379,7 @@ func controlRecordToInternal(record ControlRecord) (controlRecordV3, bool) {
 		associationLineage: append([]byte(nil), record.AssociationLineage[:]...), operationHighWater: record.OperationHighWater,
 		repairSequence: record.RepairSequence, tombstones: make([]controlTombstone, len(record.Tombstones)),
 		quarantines: make([]controlQuarantine, len(record.Quarantines)), receipts: make([]controlReceipt, len(record.Receipts)),
+		attempts: make([]controlAttempt, len(record.Attempts)),
 	}
 	for index, value := range record.Tombstones {
 		result.tombstones[index] = controlTombstone{associationRef: append([]byte(nil), value.AssociationRef[:]...), revocationEpoch: value.RevocationEpoch, operationID: append([]byte(nil), value.OperationID[:]...), effectiveGeneration: controlGenerationToInternal(value.EffectiveGeneration)}
@@ -359,6 +389,16 @@ func controlRecordToInternal(record ControlRecord) (controlRecordV3, bool) {
 	}
 	for index, value := range record.Receipts {
 		result.receipts[index] = controlReceipt{operationID: append([]byte(nil), value.OperationID[:]...), operationClass: value.OperationClass, bindingSHA256: append([]byte(nil), value.BindingSHA256[:]...), resultCode: value.ResultCode, terminal: value.Terminal}
+	}
+	for index, value := range record.Attempts {
+		result.attempts[index] = controlAttempt{
+			stateCode: value.StateCode, attemptID: append([]byte(nil), value.AttemptID[:]...), remoteSKI: bytes.Clone(value.RemoteSKI),
+			scope: append([]byte(nil), value.Scope[:]...), controlEpoch: value.ControlEpoch,
+			associationLineage: append([]byte(nil), value.AssociationLineage[:]...),
+			endpointHost:       value.EndpointHost, endpointPort: value.EndpointPort, path: value.Path,
+			cancellationGeneration: value.CancellationGeneration, reservationOrder: value.ReservationOrder,
+			reservationTimestamp: value.ReservationTimestamp, attemptCountBefore: value.AttemptCountBefore,
+		}
 	}
 	if record.Publication != nil {
 		result.publication = &controlPublication{
@@ -453,6 +493,11 @@ func cloneControlView(source ControlView) ControlView {
 	result.Control.Tombstones = append([]ControlTombstone(nil), source.Control.Tombstones...)
 	result.Control.Quarantines = append([]ControlQuarantine(nil), source.Control.Quarantines...)
 	result.Control.Receipts = append([]ControlReceipt(nil), source.Control.Receipts...)
+	result.Control.Attempts = make([]ControlAttempt, len(source.Control.Attempts))
+	for index, attempt := range source.Control.Attempts {
+		result.Control.Attempts[index] = attempt
+		result.Control.Attempts[index].RemoteSKI = bytes.Clone(attempt.RemoteSKI)
+	}
 	result.Control.LocalCertificateChainDER = make([][]byte, len(source.Control.LocalCertificateChainDER))
 	for index, certificate := range source.Control.LocalCertificateChainDER {
 		result.Control.LocalCertificateChainDER[index] = bytes.Clone(certificate)

@@ -363,7 +363,7 @@ func mapFirstTrustCandidateQueueError(err error) string {
 		return "candidate_consumed"
 	case errors.Is(err, shipapi.ErrPairingCandidateActive):
 		return "candidate_active"
-	case err != nil && err.Error() == "outgoing attempt gate is required":
+	case errors.Is(err, shipapi.ErrOutgoingAttemptGateRequired):
 		return "transport_gate_unavailable"
 	case errors.Is(err, shipapi.ErrRemoteAlreadyTrusted):
 		return "already_trusted"

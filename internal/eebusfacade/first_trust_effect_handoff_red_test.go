@@ -269,7 +269,7 @@ func TestIssue48EffectHandoffPreservesFIFOAndFencesQueuedStaleGeneration(t *test
 	}
 }
 
-func TestIssue48CloseCancelsPendingPairingBeforeServiceShutdown(t *testing.T) {
+func TestIssue48CloseQuiescesServiceBeforeCancellingPendingPairing(t *testing.T) {
 	fixture := newMSP04BFixture(t, "commit_durable")
 	coordinator := fixture.coordinator.(*firstTrustCoordinator)
 	remote := msp04bRemote(t)
@@ -300,13 +300,13 @@ func TestIssue48CloseCancelsPendingPairingBeforeServiceShutdown(t *testing.T) {
 	if err := backend.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := service.eventsSnapshot(), []string{"cancel", "shutdown"}; !issue48StringsEqual(got, want) {
+	if got, want := service.eventsSnapshot(), []string{"shutdown", "cancel"}; !issue48StringsEqual(got, want) {
 		t.Fatalf("close effects = %v, want %v", got, want)
 	}
 	if err := backend.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := service.eventsSnapshot(), []string{"cancel", "shutdown"}; !issue48StringsEqual(got, want) {
+	if got, want := service.eventsSnapshot(), []string{"shutdown", "cancel"}; !issue48StringsEqual(got, want) {
 		t.Fatalf("idempotent close effects = %v, want %v", got, want)
 	}
 }

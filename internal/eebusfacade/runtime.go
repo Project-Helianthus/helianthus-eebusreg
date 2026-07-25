@@ -56,6 +56,7 @@ type serviceBackend struct {
 	service          runtimeService
 	handler          *runtimeServiceHandler
 	firstTrust       *runtimeFirstTrustResources
+	outgoingAttempts *firstTrustOutgoingAttemptBridge
 	listenerTerminal <-chan error
 	runClaimed       bool
 	serviceStarted   bool
@@ -64,11 +65,12 @@ type serviceBackend struct {
 }
 
 type runtimeMaterial struct {
-	certificate tls.Certificate
-	localSKI    string
-	nodeToken   string
-	pretrusted  map[string]bool
-	firstTrust  *runtimeFirstTrustAuthorization
+	certificate           tls.Certificate
+	localSKI              string
+	nodeToken             string
+	pretrusted            map[string]bool
+	firstTrust            *runtimeFirstTrustAuthorization
+	outgoingAttemptBridge *firstTrustOutgoingAttemptBridge
 }
 
 const redactedRuntimeMaterial = "eebusfacade.runtime_material{redacted}"
@@ -232,6 +234,11 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		}
 		return firstTrust.Close()
 	}
+	outgoingAttemptBridge := newFirstTrustOutgoingAttemptBridge(firstTrust)
+	if outgoingAttemptBridge == nil {
+		return nil, errors.Join(errors.New("runtime outgoing-attempt gate is unavailable"), closeFirstTrust())
+	}
+	material.outgoingAttemptBridge = outgoingAttemptBridge
 	if dependencies.newService == nil {
 		return nil, errors.Join(errors.New("runtime service dependency is incomplete"), closeFirstTrust())
 	}
@@ -248,10 +255,12 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if service == nil {
 		return nil, errors.Join(errors.New("runtime service factory returned nil"), closeFirstTrust())
 	}
+	outgoingAttemptBridge.bindLifecycle(service)
 	closeRuntime := func(cause error) error {
-		trustErr := closeFirstTrust()
 		service.Shutdown()
-		return errors.Join(cause, trustErr)
+		attemptErr := outgoingAttemptBridge.shutdown()
+		trustErr := closeFirstTrust()
+		return errors.Join(cause, attemptErr, trustErr)
 	}
 	if err := service.Setup(); err != nil {
 		return nil, closeRuntime(fmt.Errorf("setup eebus runtime service: %w", err))
@@ -261,7 +270,9 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 			return nil, closeRuntime(err)
 		}
 	}
-	backend := &serviceBackend{service: service, handler: handler, firstTrust: firstTrust}
+	backend := &serviceBackend{
+		service: service, handler: handler, firstTrust: firstTrust, outgoingAttempts: outgoingAttemptBridge,
+	}
 	if scoped, ok := service.(runtimeScopedService); ok {
 		if !backend.runtimeStartAuthorized() {
 			return nil, closeRuntime(errRuntimeTrustEffectsDenied)
@@ -347,12 +358,18 @@ func (backend *serviceBackend) Close() error {
 		return backend.closeErr
 	}
 	backend.closed = true
-	if backend.firstTrust != nil {
-		backend.closeErr = backend.firstTrust.Close()
-	}
 	if backend.service != nil {
 		backend.service.Shutdown()
 	}
+	var attemptErr error
+	if backend.outgoingAttempts != nil {
+		attemptErr = backend.outgoingAttempts.shutdown()
+	}
+	var trustErr error
+	if backend.firstTrust != nil {
+		trustErr = backend.firstTrust.Close()
+	}
+	backend.closeErr = errors.Join(attemptErr, trustErr)
 	return backend.closeErr
 }
 
@@ -369,6 +386,9 @@ func newProtectedTLSCertificate(certificateChain [][]byte, signer crypto.Signer)
 }
 
 func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebusapi.ServiceReaderInterface) (runtimeService, error) {
+	if material.outgoingAttemptBridge == nil {
+		material.outgoingAttemptBridge = newFirstTrustOutgoingAttemptBridge(nil)
+	}
 	configuration, err := eebusapi.NewConfiguration(
 		"Project-Helianthus", "Helianthus", "eebusreg", material.nodeToken,
 		spinemodel.DeviceTypeTypeEnergyManagementSystem,
@@ -385,6 +405,10 @@ func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebu
 		ListenerPolicy: &eebusservicebridge.ListenerPolicy{
 			ListenAddress:    config.ListenAddress,
 			DiscoveryEnabled: config.DiscoveryEnabled,
+		},
+		OutgoingAttemptBridge: &eebusservicebridge.OutgoingAttemptBridgeConfiguration{
+			Gate: material.outgoingAttemptBridge,
+			Sink: material.outgoingAttemptBridge,
 		},
 	}
 	candidate := eebusservicebridge.NewServiceWithOptions(configuration, reader, options)

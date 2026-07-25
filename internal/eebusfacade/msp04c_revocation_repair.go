@@ -19,7 +19,14 @@ func (coordinator *firstTrustCoordinator) revoke(ctx context.Context, request fi
 		}
 		return "operation_in_progress"
 	}
+	subject, found := coordinator.firstTrustRevocationSubjectLocked(request)
 	coordinator.mu.Unlock()
+	serializationKey := subject
+	if !found {
+		serializationKey = request.associationRef[:]
+	}
+	unlock := coordinator.lockOutgoingAttemptLane(serializationKey)
+	defer unlock()
 	return coordinator.revokeSerialized(ctx, request)
 }
 
@@ -98,6 +105,7 @@ func (coordinator *firstTrustCoordinator) revokeSerialized(ctx context.Context, 
 	working.associations[associationIndex].reconnectable = false
 	target := cloneFirstTrustControlRecord(working.control)
 	target.controlEpoch++
+	removedAttempts := coordinator.removeRevokedOutgoingAttemptsLocked(&target, working.associations[associationIndex].subject)
 	target.operationHighWater = firstTrustOperationOrdinal(request.operationID)
 	target.tombstones = append(target.tombstones, firstTrustRevocationTombstone{
 		associationRef: request.associationRef, revocationEpoch: target.controlEpoch, operationID: request.operationID,
@@ -125,6 +133,7 @@ func (coordinator *firstTrustCoordinator) revokeSerialized(ctx context.Context, 
 	switch publicationOutcome {
 	case "durable":
 		coordinator.controlView = cloneFirstTrustControlView(publication.target)
+		coordinator.cancelRevokedOutgoingAttemptsLocked(removedAttempts)
 		coordinator.phase = firstTrustPairingClosed
 		coordinator.recovery = "REVOKED"
 		coordinator.recoveryReasonCode = "REVOKED_ASSOCIATION"
