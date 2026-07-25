@@ -210,6 +210,7 @@ func (handler *runtimeServiceHandler) updateRemoteFromSPINEEvent(
 		return
 	}
 	handler.observations[ski] = observation
+	handler.runtimeRevision++
 	handler.mu.Unlock()
 	handler.publishOrReport()
 }

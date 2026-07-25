@@ -517,6 +517,8 @@ type runtimeServiceHandler struct {
 	projectionLivenessAllowed func(string) bool
 	projectionRemotes         []string
 	policyRemotes             []string
+	runtimeRevision           uint64
+	publishedRuntimeRevision  uint64
 	publishedTrustRevision    uint64
 	now                       func() time.Time
 	publish                   func([]byte)
@@ -622,6 +624,7 @@ func (handler *runtimeServiceHandler) VisibleRemoteServicesUpdated(_ eebusapi.Se
 			return
 		}
 		handler.observations[ski] = observation
+		handler.runtimeRevision++
 		changed = true
 	}
 	for ski, observation := range handler.observations {
@@ -640,6 +643,7 @@ func (handler *runtimeServiceHandler) VisibleRemoteServicesUpdated(_ eebusapi.Se
 			return
 		}
 		handler.observations[ski] = observation
+		handler.runtimeRevision++
 		changed = true
 	}
 	handler.mu.Unlock()
@@ -710,6 +714,7 @@ func (handler *runtimeServiceHandler) updateRemote(ski string, create bool, upda
 		return
 	}
 	handler.observations[ski] = observation
+	handler.runtimeRevision++
 	handler.mu.Unlock()
 	handler.publishOrReport()
 }
@@ -732,23 +737,30 @@ func (handler *runtimeServiceHandler) publishOrReport() {
 func (handler *runtimeServiceHandler) publishCurrent() error {
 	handler.mu.Lock()
 	capture := handler.projectionCapture
+	revision := handler.runtimeRevision
+	graph := handler.reducer.Snapshot()
 	handler.mu.Unlock()
 	if capture != nil {
 		return handler.publishTrustAdminProjection(capture())
 	}
-	return handler.publishRuntimeGraph(handler.reducer.Snapshot())
+	return handler.publishRuntimeGraphAtRevision(graph, revision)
 }
 
 func (handler *runtimeServiceHandler) publishTrustAdminProjection(projection trustAdminProjection) error {
+	graph, remotes, runtimeRevision := handler.runtimeGraphAndProjectionRemotes()
 	handler.publishMu.Lock()
 	defer handler.publishMu.Unlock()
-	if projection.revision < handler.publishedTrustRevision {
+	if projection.revision < handler.publishedTrustRevision ||
+		runtimeRevision < handler.publishedRuntimeRevision {
 		return nil
 	}
-	handler.publishedTrustRevision = projection.revision
-	graph, remotes := handler.runtimeGraphAndProjectionRemotes()
 	applyTrustAdminProjection(graph, remotes, projection)
-	return handler.publishRuntimeGraph(graph)
+	if err := handler.publishRuntimeGraph(graph); err != nil {
+		return err
+	}
+	handler.publishedRuntimeRevision = runtimeRevision
+	handler.publishedTrustRevision = projection.revision
+	return nil
 }
 
 func (handler *runtimeServiceHandler) remoteLivenessAllowed(ski string) bool {
@@ -776,11 +788,26 @@ func (handler *runtimeServiceHandler) publishRuntimeGraph(graph []runtimeGraphOb
 	return nil
 }
 
-func (handler *runtimeServiceHandler) runtimeGraphAndProjectionRemotes() ([]runtimeGraphObservation, []string) {
+func (handler *runtimeServiceHandler) publishRuntimeGraphAtRevision(graph []runtimeGraphObservation, revision uint64) error {
+	handler.publishMu.Lock()
+	defer handler.publishMu.Unlock()
+	if revision < handler.publishedRuntimeRevision {
+		return nil
+	}
+	if err := handler.publishRuntimeGraph(graph); err != nil {
+		return err
+	}
+	handler.publishedRuntimeRevision = revision
+	return nil
+}
+
+func (handler *runtimeServiceHandler) runtimeGraphAndProjectionRemotes() ([]runtimeGraphObservation, []string, uint64) {
 	handler.mu.Lock()
 	remotes := append([]string(nil), handler.projectionRemotes...)
+	revision := handler.runtimeRevision
+	graph := handler.reducer.Snapshot()
 	handler.mu.Unlock()
-	return handler.reducer.Snapshot(), remotes
+	return graph, remotes, revision
 }
 
 func (handler *runtimeServiceHandler) report(err error) {
