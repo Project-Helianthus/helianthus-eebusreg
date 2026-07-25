@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"math"
+	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -11,6 +13,10 @@ const (
 	maxControlTombstoneCount  = 128
 	maxControlQuarantineCount = 128
 	maxControlReceiptCount    = 128
+	maxControlAttemptCount    = 128
+	maxControlAttemptState    = 2
+	maxControlEndpointHost    = 255
+	maxControlAttemptPath     = 1024
 	maxControlOperationCode   = math.MaxUint16
 	maxControlQuarantineValue = math.MaxUint16
 )
@@ -39,6 +45,22 @@ type controlReceipt struct {
 	bindingSHA256  []byte
 	resultCode     uint64
 	terminal       bool
+}
+
+type controlAttempt struct {
+	stateCode              uint64
+	attemptID              []byte
+	remoteSKI              []byte
+	scope                  []byte
+	controlEpoch           uint64
+	associationLineage     []byte
+	endpointHost           string
+	endpointPort           uint16
+	path                   string
+	cancellationGeneration uint64
+	reservationOrder       uint64
+	reservationTimestamp   int64
+	attemptCountBefore     uint64
 }
 
 type controlPublication struct {
@@ -77,6 +99,22 @@ type controlReceiptWire struct {
 	Terminal       bool   `json:"terminal"`
 }
 
+type controlAttemptWire struct {
+	AssociationLineage     string `json:"association_lineage"`
+	AttemptCountBefore     uint64 `json:"attempt_count_before"`
+	AttemptID              string `json:"attempt_id"`
+	CancellationGeneration uint64 `json:"cancellation_generation"`
+	ControlEpoch           uint64 `json:"control_epoch"`
+	EndpointHost           string `json:"endpoint_host"`
+	EndpointPort           uint16 `json:"endpoint_port"`
+	Path                   string `json:"path"`
+	RemoteSKI              string `json:"remote_ski"`
+	ReservationOrder       uint64 `json:"reservation_order"`
+	ReservationTimestamp   int64  `json:"reservation_timestamp"`
+	Scope                  string `json:"scope"`
+	StateCode              uint64 `json:"state_code"`
+}
+
 type controlPublicationWire struct {
 	OperationClass       uint64                  `json:"operation_class"`
 	OperationID          string                  `json:"operation_id"`
@@ -108,12 +146,27 @@ func cloneControlRecordV3(source controlRecordV3) controlRecordV3 {
 		result.receipts[index].operationID = bytes.Clone(receipt.operationID)
 		result.receipts[index].bindingSHA256 = bytes.Clone(receipt.bindingSHA256)
 	}
+	if source.attempts != nil {
+		result.attempts = make([]controlAttempt, len(source.attempts))
+		for index, attempt := range source.attempts {
+			result.attempts[index] = cloneControlAttempt(attempt)
+		}
+	}
 	if source.publication != nil {
 		publication := *source.publication
 		publication.operationID = bytes.Clone(source.publication.operationID)
 		publication.storeInstance = bytes.Clone(source.publication.storeInstance)
 		result.publication = &publication
 	}
+	return result
+}
+
+func cloneControlAttempt(source controlAttempt) controlAttempt {
+	result := source
+	result.attemptID = bytes.Clone(source.attemptID)
+	result.remoteSKI = bytes.Clone(source.remoteSKI)
+	result.scope = bytes.Clone(source.scope)
+	result.associationLineage = bytes.Clone(source.associationLineage)
 	return result
 }
 
@@ -164,6 +217,49 @@ func validateControlRecordBase(record controlRecordV3) error {
 		}
 	}
 	return nil
+}
+
+func validateControlAttempts(record controlRecordV3) error {
+	if len(record.attempts) > maxControlAttemptCount {
+		return malformed("validate_control", errors.New("attempt bounds"))
+	}
+	identities := make(map[string]struct{}, len(record.attempts))
+	scopes := make(map[string]struct{}, len(record.attempts))
+	orders := make(map[uint64]struct{}, len(record.attempts))
+	for _, attempt := range record.attempts {
+		if attempt.stateCode == 0 || attempt.stateCode > maxControlAttemptState ||
+			len(attempt.attemptID) != controlOpaqueBytes || len(attempt.remoteSKI) != 20 ||
+			len(attempt.scope) != controlOpaqueBytes || attempt.controlEpoch == 0 || attempt.controlEpoch > record.controlEpoch ||
+			len(attempt.associationLineage) != controlOpaqueBytes ||
+			!validControlEndpointHost(attempt.endpointHost) || attempt.endpointPort == 0 || !validControlAttemptPath(attempt.path) ||
+			attempt.cancellationGeneration == 0 || attempt.reservationOrder == 0 || attempt.reservationTimestamp < 0 ||
+			attempt.attemptCountBefore > maxControlQuarantineValue {
+			return malformed("validate_control", errors.New("attempt"))
+		}
+		if _, exists := identities[string(attempt.attemptID)]; exists {
+			return malformed("validate_control", errors.New("duplicate attempt"))
+		}
+		identities[string(attempt.attemptID)] = struct{}{}
+		if _, exists := scopes[string(attempt.scope)]; exists {
+			return malformed("validate_control", errors.New("duplicate attempt scope"))
+		}
+		scopes[string(attempt.scope)] = struct{}{}
+		if _, exists := orders[attempt.reservationOrder]; exists {
+			return malformed("validate_control", errors.New("duplicate reservation order"))
+		}
+		orders[attempt.reservationOrder] = struct{}{}
+	}
+	return nil
+}
+
+func validControlEndpointHost(value string) bool {
+	return value != "" && len(value) <= maxControlEndpointHost && utf8.ValidString(value) &&
+		strings.TrimSpace(value) == value && !strings.ContainsRune(value, '\x00')
+}
+
+func validControlAttemptPath(value string) bool {
+	return len(value) <= maxControlAttemptPath && utf8.ValidString(value) &&
+		!strings.ContainsRune(value, '\x00') && (value == "" || strings.HasPrefix(value, "/"))
 }
 
 func decodeControlRecordFields(record *controlRecordV3, wire controlRecordWireV3) error {

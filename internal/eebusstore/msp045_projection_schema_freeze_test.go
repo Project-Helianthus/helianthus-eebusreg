@@ -29,6 +29,7 @@ func TestMSP045ControlSchemaAndWireRemainExactlyV3(t *testing.T) {
 		"Tombstones",
 		"Quarantines",
 		"Receipts",
+		"Attempts",
 		"OperationHighWater",
 		"RepairSequence",
 		"Publication",

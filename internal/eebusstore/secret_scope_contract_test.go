@@ -17,6 +17,7 @@ import (
 var allowedStoreBridgeTypes = map[string]struct{}{
 	"AssociationBridge":          {},
 	"ControlAssociation":         {},
+	"ControlAttempt":             {},
 	"ControlGenerationBinding":   {},
 	"ControlManifestBinding":     {},
 	"ControlPendingPublication":  {},

@@ -333,6 +333,7 @@ func TestIssue56QueueErrorsMapDeterministicallyAndNeverTrust(t *testing.T) {
 		{name: "consumed", err: shipapi.ErrPairingCandidateConsumed, want: "candidate_consumed"},
 		{name: "active", err: shipapi.ErrPairingCandidateActive, want: "candidate_active"},
 		{name: "gate", err: shipapi.ErrOutgoingAttemptGateRequired, want: "transport_gate_unavailable"},
+		{name: "wrapped gate", err: fmt.Errorf("queue rejected: %w", shipapi.ErrOutgoingAttemptGateRequired), want: "transport_gate_unavailable"},
 		{name: "trusted", err: shipapi.ErrRemoteAlreadyTrusted, want: "already_trusted"},
 		{name: "generic", err: errors.New("queue unavailable"), want: "candidate_queue_failed"},
 	}

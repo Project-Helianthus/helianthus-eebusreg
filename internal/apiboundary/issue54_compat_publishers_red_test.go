@@ -15,6 +15,8 @@ import (
 )
 
 func TestIssue54ProductionHasNoCompatibilityPublisherOrOutboundFabricator(t *testing.T) {
+	// Source inspection is intentional: behavior tests cannot prove that an
+	// alternate publisher or the removed static-endpoint fabricator is absent.
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -31,12 +33,11 @@ func TestIssue54ProductionHasNoCompatibilityPublisherOrOutboundFabricator(t *tes
 		[]byte("migration" + "Graph"),
 		[]byte("opened_" + "migrated"),
 		[]byte("migrate" + "MSP04"),
-	}
-	bannedFacade := [][]byte{
-		[]byte("Outgoing" + "Attempt"),
-		[]byte("outgoing" + "Attempt"),
-		[]byte("pre" + "dial"),
-		[]byte("pre" + "Dial"),
+		[]byte("runtime" + "OutboundController"),
+		[]byte("runtime" + "OutboundEndpoint"),
+		[]byte("enqueue" + "OpenLocked"),
+		[]byte("enqueue" + "TrustedLocked"),
+		[]byte("register" + "ConfiguredRemote"),
 	}
 	bannedNames := []string{
 		"compatmdns",
@@ -44,8 +45,7 @@ func TestIssue54ProductionHasNoCompatibilityPublisherOrOutboundFabricator(t *tes
 		"compat-mdns",
 		"lanshippublisher",
 		"raw" + "probe",
-		"runtime_" + "outgoing_attempt",
-		"msp04cr2_" + "predial",
+		"runtime_" + "outbound.go",
 		"migration.go",
 		"control_v2.go",
 	}
@@ -80,18 +80,6 @@ func TestIssue54ProductionHasNoCompatibilityPublisherOrOutboundFabricator(t *tes
 					return relErr
 				}
 				findings = append(findings, relative+":"+string(token))
-			}
-		}
-		relative, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return relErr
-		}
-		if strings.HasPrefix(relative, filepath.Join("internal", "eebusfacade")+string(filepath.Separator)) ||
-			strings.HasPrefix(relative, filepath.Join("internal", "eebusservicebridge")+string(filepath.Separator)) {
-			for _, token := range bannedFacade {
-				if bytes.Contains(payload, token) {
-					findings = append(findings, relative+":"+string(token))
-				}
 			}
 		}
 		lowerName := strings.ToLower(entry.Name())
