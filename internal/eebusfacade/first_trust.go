@@ -124,10 +124,11 @@ type firstTrustCandidate struct {
 	requests        map[string]firstTrustRequest
 	completed       bool
 
-	transientAuthorized       bool
-	transientRevocationQueued bool
-	confirmationKey           string
-	confirmationRequest       firstTrustRequest
+	transientAuthorized           bool
+	transientRegistrationComplete bool
+	transientRevocationQueued     bool
+	confirmationKey               string
+	confirmationRequest           firstTrustRequest
 }
 
 type firstTrustRequest struct {
@@ -571,7 +572,7 @@ func (coordinator *firstTrustCoordinator) connectionCompleted(remote []byte, con
 	coordinator.mu.Lock()
 	coordinator.expireLocked(coordinator.now())
 	candidate := coordinator.currentCandidate
-	if coordinator.phase != firstTrustTransientTrusted || candidate == nil ||
+	if (coordinator.phase != firstTrustCandidatePending && coordinator.phase != firstTrustTransientTrusted) || candidate == nil ||
 		connection == 0 || connection != candidate.connection || !bytes.Equal(remote, candidate.remote) {
 		coordinator.mu.Unlock()
 		return "ignored"
@@ -580,6 +581,10 @@ func (coordinator *firstTrustCoordinator) connectionCompleted(remote []byte, con
 	if candidate.shipID == "" {
 		coordinator.mu.Unlock()
 		return "association_incomplete"
+	}
+	if coordinator.phase == firstTrustCandidatePending {
+		coordinator.mu.Unlock()
+		return "association_complete"
 	}
 	commit, result := coordinator.beginTransientCommitLocked()
 	coordinator.mu.Unlock()
@@ -709,9 +714,8 @@ func (coordinator *firstTrustCoordinator) confirm(ctx context.Context, key, fing
 		}
 	}
 	if candidate.tlsRequired {
-		candidate.shipID = ""
-		candidate.completed = false
 		candidate.transientAuthorized = true
+		candidate.transientRegistrationComplete = false
 		candidate.confirmationKey = key
 		candidate.confirmationRequest = request
 		coordinator.phase = firstTrustTransientTrusted
@@ -886,7 +890,8 @@ func (coordinator *firstTrustCoordinator) selectedFirstTrustGenerationLocked() u
 func (coordinator *firstTrustCoordinator) beginTransientCommitLocked() (*firstTrustCommit, string) {
 	candidate := coordinator.currentCandidate
 	if coordinator.phase != firstTrustTransientTrusted || candidate == nil ||
-		!candidate.transientAuthorized || candidate.shipID == "" || !candidate.completed {
+		!candidate.transientAuthorized || !candidate.transientRegistrationComplete ||
+		candidate.shipID == "" || !candidate.completed {
 		return nil, "association_incomplete"
 	}
 	if coordinator.selectedFirstTrustGenerationLocked() != candidate.storeGeneration {
@@ -1454,6 +1459,24 @@ func (coordinator *firstTrustCoordinator) registerTransientRemoteLocked(remote [
 	}
 }
 
+func (coordinator *firstTrustCoordinator) completeTransientRegistration(remote []byte, connection uint64) {
+	coordinator.mu.Lock()
+	coordinator.expireLocked(coordinator.now())
+	candidate := coordinator.currentCandidate
+	if coordinator.phase != firstTrustTransientTrusted || candidate == nil ||
+		connection == 0 || connection != candidate.connection || !bytes.Equal(remote, candidate.remote) ||
+		!candidate.tlsBound || !coordinator.selectedCandidateMatchesLocked(candidate.remote) {
+		coordinator.mu.Unlock()
+		return
+	}
+	candidate.transientRegistrationComplete = true
+	commit, _ := coordinator.beginTransientCommitLocked()
+	coordinator.mu.Unlock()
+	if commit != nil {
+		coordinator.executeCommit(context.Background(), commit)
+	}
+}
+
 func (coordinator *firstTrustCoordinator) revokeTransientTrustLocked(candidate *firstTrustCandidate) {
 	if candidate == nil || !candidate.transientAuthorized || candidate.transientRevocationQueued {
 		return
@@ -1508,9 +1531,11 @@ func (coordinator *firstTrustCoordinator) drainEffects() {
 			}
 		case firstTrustEffectTransientRegister:
 			if target, ok := effect.target.(interface {
-				registerTransientRemoteSKI([]byte, uint64)
+				registerTransientRemoteSKI([]byte, uint64) bool
 			}); ok && effect.target.connectionAlive(effect.remote, effect.connection) {
-				target.registerTransientRemoteSKI(effect.remote, effect.connection)
+				if target.registerTransientRemoteSKI(effect.remote, effect.connection) {
+					coordinator.completeTransientRegistration(effect.remote, effect.connection)
+				}
 			}
 		case firstTrustEffectTransientUnregister:
 			if target, ok := effect.target.(interface {
