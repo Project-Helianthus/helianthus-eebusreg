@@ -400,7 +400,7 @@ func TestAttachRuntimeFirstTrustFailsClosedWhenInitialPairingRegistrationFails(t
 	resources := &runtimeFirstTrustResources{coordinator: coordinator}
 	reader := newRuntimeServiceReader(nil)
 
-	err := attachRuntimeFirstTrust(context.Background(), resources, service, reader, runtimeDependencies{})
+	err := attachRuntimeFirstTrust(context.Background(), resources, RuntimeConfig{}, service, reader, runtimeDependencies{})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("attach error = %v, want %v", err, wantErr)
 	}

@@ -2,6 +2,7 @@ package eebusfacade
 
 import (
 	"context"
+	"encoding/hex"
 	"slices"
 	"testing"
 	"time"
@@ -67,6 +68,38 @@ func TestIssue70DoesNotPromoteMaterialAdmissionWithoutDurableTrust(t *testing.T)
 
 	if events := service.eventsSnapshot(); slices.Contains(events, "register_remote") {
 		t.Fatalf("unpaired material admission registered SHIP trust: %v", events)
+	}
+}
+
+func TestIssue70RecoveredTrustReplayIsConfiguredDeterministicAndFailClosed(t *testing.T) {
+	first := msp04cSubject(70_020)
+	second := msp04cSubject(70_021)
+	unconfigured := msp04cSubject(70_022)
+	coordinator := &firstTrustCoordinator{
+		phase:    firstTrustPairingClosed,
+		recovery: "PAIRED_TRUSTED",
+		trustedRemotes: map[string]string{
+			string(second):       "ship-second",
+			string(unconfigured): "ship-unconfigured",
+			string(first):        "ship-first",
+		},
+	}
+	configured := map[string]struct{}{
+		hex.EncodeToString(second): {},
+		hex.EncodeToString(first):  {},
+	}
+	got, err := recoveredRuntimeTrustSKIs(configured, coordinator)
+	if err != nil {
+		t.Fatalf("recover configured durable trust: %v", err)
+	}
+	want := []string{hex.EncodeToString(first), hex.EncodeToString(second)}
+	if !slices.Equal(got, want) {
+		t.Fatalf("recovered SKIs = %v, want %v", got, want)
+	}
+
+	coordinator.trustedRemotes["short"] = "ship-invalid"
+	if _, err := recoveredRuntimeTrustSKIs(configured, coordinator); err == nil {
+		t.Fatal("malformed durable trust was not rejected")
 	}
 }
 

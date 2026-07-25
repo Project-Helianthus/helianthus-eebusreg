@@ -27,14 +27,14 @@ func TestIssue54OpeningPairingOnlyChangesLocalRegistration(t *testing.T) {
 	issue54AssertNoRemoteEvidence(t, snapshot)
 }
 
-func TestIssue54ConfiguredTrustedSKIIsPolicyWithoutSyntheticObservation(t *testing.T) {
+func TestIssue54DurableTrustIsReplayedWithoutSyntheticObservation(t *testing.T) {
 	harness := newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
 		setup.suppressVisible = true
 	})
 	time.Sleep(20 * time.Millisecond)
 	state := snapshotIssue54PolicyState(harness.service)
-	if len(state.registered) != 0 {
-		t.Fatalf("durable trust policy produced registration observations = %v", state.registered)
+	if len(state.registered) != 1 || state.registered[0] != harness.remoteSKI {
+		t.Fatalf("durable trust replay = %v, want exact configured remote", state.registered)
 	}
 	snapshot, _ := msp045Capture(t, harness.handler)
 	issue54AssertNoRemoteEvidence(t, snapshot)
