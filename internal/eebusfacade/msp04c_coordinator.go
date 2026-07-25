@@ -236,6 +236,7 @@ func (coordinator *firstTrustCoordinator) firstTrustInheritedRepairTerminalLocke
 
 func (coordinator *firstTrustCoordinator) resetVolatileFirstTrustLocked() {
 	if coordinator.currentCandidate != nil {
+		coordinator.revokeTransientTrustLocked(coordinator.currentCandidate)
 		coordinator.cancelRemoteLocked(coordinator.currentCandidate.remote, coordinator.currentCandidate.connection)
 	}
 	coordinator.phase = firstTrustDisabled
@@ -332,7 +333,8 @@ func (coordinator *firstTrustCoordinator) authorizeRuntimeAttempt(remote []byte)
 		return "pairing_authorized"
 	}
 	if coordinator.currentCandidate != nil && bytes.Equal(coordinator.currentCandidate.remote, remote) &&
-		(coordinator.phase == firstTrustCandidatePending || coordinator.phase == firstTrustCommitting) {
+		(coordinator.phase == firstTrustCandidatePending || coordinator.phase == firstTrustTransientTrusted ||
+			coordinator.phase == firstTrustCommitting) {
 		return "pairing_authorized"
 	}
 	return "attempt_denied"
@@ -358,6 +360,8 @@ func (coordinator *firstTrustCoordinator) phaseNameLocked() string {
 		return "OPEN_EMPTY"
 	case firstTrustCandidatePending:
 		return "CANDIDATE_PENDING"
+	case firstTrustTransientTrusted:
+		return "TRANSIENT_TRUSTED"
 	case firstTrustCommitting:
 		return "COMMITTING"
 	default:
@@ -373,6 +377,8 @@ func firstTrustPhaseFromName(value string) firstTrustPhase {
 		return firstTrustOpenEmpty
 	case "CANDIDATE_PENDING":
 		return firstTrustCandidatePending
+	case "TRANSIENT_TRUSTED":
+		return firstTrustTransientTrusted
 	case "COMMITTING":
 		return firstTrustCommitting
 	default:
@@ -388,6 +394,7 @@ func (coordinator *firstTrustCoordinator) closeVolatileFirstTrustLocked() {
 	now := coordinator.now()
 	if coordinator.currentCandidate != nil {
 		coordinator.finishCandidateRequestsLocked("stale_request", now)
+		coordinator.revokeTransientTrustLocked(coordinator.currentCandidate)
 		coordinator.cancelRemoteLocked(coordinator.currentCandidate.remote, coordinator.currentCandidate.connection)
 	}
 	coordinator.finishCandidateSelectionLocked("stale_request", true)
@@ -620,13 +627,19 @@ func (coordinator *firstTrustCoordinator) finishRecoveryConfirmationLocked(
 	now := coordinator.now()
 	coordinator.finishCandidateRequestsExceptLocked(inflight.key, "stale_request", now)
 	coordinator.recordReplayLocked(inflight.key, inflight.request, result, now)
+	transient := coordinator.currentCandidate != nil && coordinator.currentCandidate.transientAuthorized
+	if transient && result != "trusted" {
+		coordinator.revokeTransientTrustLocked(coordinator.currentCandidate)
+	}
 	coordinator.currentCandidate = nil
 	coordinator.finishCandidateSelectionLocked(result, result != "trusted")
 	coordinator.window = nil
 	coordinator.stopTimerLocked()
 	coordinator.setWaitingLocked(false)
-	if result == "trusted" {
+	if result == "trusted" && !transient {
 		coordinator.registerRemoteLocked(remote, connection)
+	} else if result == "trusted" {
+		coordinator.finalizeTransientRemoteLocked(remote, connection)
 	} else {
 		coordinator.cancelRemoteLocked(remote, connection)
 	}

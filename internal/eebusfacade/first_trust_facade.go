@@ -47,6 +47,10 @@ type firstTrustEventSink interface {
 	connectionClosed([]byte, uint64) string
 }
 
+type firstTrustCompletionSink interface {
+	connectionCompleted([]byte, uint64) string
+}
+
 type firstTrustPairingRegistrationSink interface {
 	pairingRegistrationInitialized(bool)
 	pairingRegistrationFailed()
@@ -66,6 +70,8 @@ type firstTrustConnection struct {
 	cancelled       bool
 	blocked         bool
 	registered      bool
+	transient       bool
+	unregistered    bool
 }
 
 type firstTrustFacade struct {
@@ -180,7 +186,7 @@ func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterfac
 			delete(facade.connections, normalized)
 		}
 		connection = nil
-	} else if connection != nil && (connection.registered || connection.attemptClass == "reconnect_authorized") {
+	} else if connection != nil && (connection.registered && !connection.transient || connection.attemptClass == "reconnect_authorized") {
 		retryScope = connection.retryScope
 		releaseRetry = connection.retryAdmitted
 		connection.retryAdmitted = false
@@ -226,6 +232,10 @@ func (facade *firstTrustFacade) ServiceShipIDUpdate(ski string, shipID string) {
 		facade.mu.Unlock()
 		return
 	}
+	if connection.transient && (!connection.active || !connection.connected) {
+		facade.mu.Unlock()
+		return
+	}
 	connection.shipID = shipID
 	generation := connection.generation
 	facade.mu.Unlock()
@@ -246,8 +256,10 @@ func (facade *firstTrustFacade) ServicePairingDetailUpdate(ski string, detail *s
 		facade.handlePairingRequest(remote, normalized)
 	case shipapi.ConnectionStateError, shipapi.ConnectionStateRemoteDeniedTrust:
 		facade.handlePairingFailure(remote, normalized)
-	case shipapi.ConnectionStateTrusted, shipapi.ConnectionStateCompleted:
-		facade.handlePairingSuccess(normalized)
+	case shipapi.ConnectionStateTrusted:
+		facade.handlePairingSuccess(remote, normalized, false)
+	case shipapi.ConnectionStateCompleted:
+		facade.handlePairingSuccess(remote, normalized, true)
 	}
 }
 
@@ -394,17 +406,25 @@ func (facade *firstTrustFacade) handlePairingFailure(remote []byte, normalized s
 	facade.cancelBySKI(normalized)
 }
 
-func (facade *firstTrustFacade) handlePairingSuccess(normalized string) {
+func (facade *firstTrustFacade) handlePairingSuccess(remote []byte, normalized string, completed bool) {
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
-	if connection == nil {
+	if connection == nil || connection.cancelled || connection.blocked {
 		facade.mu.Unlock()
 		return
 	}
 	scope := connection.retryScope
 	admitted := connection.retryAdmitted
+	generation := connection.generation
+	pairingAuthorized := connection.attemptClass == "pairing_authorized"
+	live := connection.active && connection.connected
 	connection.retryAdmitted = false
 	facade.mu.Unlock()
+	if completed && pairingAuthorized && live {
+		if sink, ok := facade.coordinator.(firstTrustCompletionSink); ok {
+			sink.connectionCompleted(remote, generation)
+		}
+	}
 	if admitted {
 		if retry, ok := facade.retrySink(); ok {
 			retry.completeRetry(scope)
@@ -484,6 +504,59 @@ func (facade *firstTrustFacade) registerRemoteSKI(remote []byte, generation uint
 	if service != nil {
 		service.RegisterRemoteSKI(normalized)
 	}
+}
+
+func (facade *firstTrustFacade) registerTransientRemoteSKI(remote []byte, generation uint64) {
+	normalized := hex.EncodeToString(remote)
+	facade.mu.Lock()
+	connection := facade.connections[normalized]
+	if facade.pairingRegistrationFault || connection == nil || connection.generation != generation ||
+		!connection.active || connection.cancelled || connection.blocked || connection.registered {
+		facade.mu.Unlock()
+		return
+	}
+	connection.registered = true
+	connection.transient = true
+	connection.unregistered = false
+	connection.shipID = ""
+	service := facade.service
+	facade.mu.Unlock()
+	if service != nil {
+		service.RegisterRemoteSKI(normalized)
+	}
+}
+
+func (facade *firstTrustFacade) unregisterTransientRemoteSKI(remote []byte, generation uint64) {
+	normalized := hex.EncodeToString(remote)
+	facade.mu.Lock()
+	connection := facade.connections[normalized]
+	if connection == nil || connection.generation != generation || connection.unregistered {
+		facade.mu.Unlock()
+		return
+	}
+	connection.unregistered = true
+	connection.registered = false
+	connection.transient = false
+	service, ok := facade.service.(firstTrustWithdrawalService)
+	facade.mu.Unlock()
+	if !ok {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+	service.UnregisterRemoteSKI(normalized)
+}
+
+func (facade *firstTrustFacade) finalizeTransientRemoteSKI(remote []byte, generation uint64) {
+	normalized := hex.EncodeToString(remote)
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	connection := facade.connections[normalized]
+	if connection == nil || connection.generation != generation || connection.unregistered || !connection.registered {
+		return
+	}
+	connection.transient = false
 }
 
 func (facade *firstTrustFacade) disconnectRemote(remote []byte) (acknowledged <-chan struct{}, started bool) {

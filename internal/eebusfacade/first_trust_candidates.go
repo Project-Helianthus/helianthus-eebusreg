@@ -329,6 +329,7 @@ func (coordinator *firstTrustCoordinator) failCandidateQueueLocked(selection *fi
 	if candidate != nil && bytes.Equal(candidate.remote, selection.remote) {
 		now := coordinator.now()
 		coordinator.finishCandidateRequestsLocked(result, now)
+		coordinator.revokeTransientTrustLocked(candidate)
 		coordinator.cancelRemoteLocked(candidate.remote, candidate.connection)
 		coordinator.currentCandidate = nil
 		selection.cancelled = true
@@ -378,6 +379,7 @@ func (coordinator *firstTrustCoordinator) selectedCandidateMatchesLocked(remote 
 		bytes.Equal(selection.remote, remote) &&
 		(coordinator.phase == firstTrustOpenEmpty ||
 			coordinator.phase == firstTrustCandidatePending ||
+			coordinator.phase == firstTrustTransientTrusted ||
 			coordinator.phase == firstTrustCommitting)
 }
 
