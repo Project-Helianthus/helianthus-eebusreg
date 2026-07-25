@@ -402,13 +402,19 @@ func TestIssue56ReentrantCallbacksRequireTLSAndSHIPIDBeforeDurableConfirm(t *tes
 	}
 
 	binding := issue56CurrentBinding(t, fixture)
-	if got := confirmMSP04B(fixture.coordinator, "confirm", binding); got != "trusted" {
-		t.Fatalf("durable confirm outcome = %q", got)
+	if got := confirmMSP04B(fixture.coordinator, "confirm", binding); got != "transient_trusted" {
+		t.Fatalf("transient confirm outcome = %q", got)
 	}
-	assertMSP04BCommitCount(t, fixture.base.store, 1)
+	assertMSP04BCommitCount(t, fixture.base.store, 0)
 	if got := fixture.service.registerCount(); got != 1 {
-		t.Fatalf("registration after durable confirm = %d, want 1", got)
+		t.Fatalf("registration after transient confirm = %d, want 1", got)
 	}
+	fixture.facade.ServiceShipIDUpdate(issue56SKIA, "ship-id-a")
+	fixture.facade.ServicePairingDetailUpdate(
+		issue56SKIA,
+		shipapi.NewConnectionStateDetail(shipapi.ConnectionStateCompleted, nil),
+	)
+	assertMSP04BCommitCount(t, fixture.base.store, 1)
 	if got := confirmMSP04B(fixture.coordinator, "confirm", binding); got != "trusted" {
 		t.Fatalf("confirm replay outcome = %q", got)
 	}
@@ -434,8 +440,16 @@ func TestIssue56SameProcessDurableReconnectBypassesCandidateTLSBinder(t *testing
 		t.Fatalf("select outcome = %s", issue56JSON(t, reply))
 	}
 	binding := issue56CurrentBinding(t, fixture)
+	if got := confirmMSP04B(fixture.coordinator, "confirm", binding); got != "transient_trusted" {
+		t.Fatalf("transient confirm outcome = %q", got)
+	}
+	fixture.facade.ServiceShipIDUpdate(issue56SKIA, "ship-id-a")
+	fixture.facade.ServicePairingDetailUpdate(
+		issue56SKIA,
+		shipapi.NewConnectionStateDetail(shipapi.ConnectionStateCompleted, nil),
+	)
 	if got := confirmMSP04B(fixture.coordinator, "confirm", binding); got != "trusted" {
-		t.Fatalf("durable confirm outcome = %q", got)
+		t.Fatalf("durable replay outcome = %q", got)
 	}
 
 	fixture.facade.mu.Lock()
@@ -555,12 +569,18 @@ func TestIssue56TLSBoundAndSHIPIDFencesAreIndependent(t *testing.T) {
 				t.Fatalf("select outcome = %s", issue56JSON(t, reply))
 			}
 			binding := issue56Binding(t, fixture, false)
-			if got := confirmMSP04B(fixture.coordinator, "confirm", binding); got != "association_incomplete" {
-				t.Fatalf("partial evidence confirm = %q", got)
+			want := "association_incomplete"
+			wantRegisters := 0
+			if test.name == "TLS only" {
+				want = "transient_trusted"
+				wantRegisters = 1
+			}
+			if got := confirmMSP04B(fixture.coordinator, "confirm", binding); got != want {
+				t.Fatalf("partial evidence confirm = %q, want %q", got, want)
 			}
 			assertMSP04BCommitCount(t, fixture.base.store, 0)
-			if got := fixture.service.registerCount(); got != 0 {
-				t.Fatalf("registration with partial evidence = %d", got)
+			if got := fixture.service.registerCount(); got != wantRegisters {
+				t.Fatalf("registration with partial evidence = %d, want %d", got, wantRegisters)
 			}
 		})
 	}
@@ -580,9 +600,14 @@ func TestIssue56MdnsChurnAfterQueueDoesNotCancelFrozenAttempt(t *testing.T) {
 	}
 	fixture.facade.VisiblePairingCandidatesUpdated(nil, nil)
 	binding := issue56CurrentBinding(t, fixture)
-	if got := confirmMSP04B(fixture.coordinator, "confirm", binding); got != "trusted" {
+	if got := confirmMSP04B(fixture.coordinator, "confirm", binding); got != "transient_trusted" {
 		t.Fatalf("confirm after mDNS withdrawal = %q", got)
 	}
+	fixture.facade.ServiceShipIDUpdate(issue56SKIA, "ship-id-a")
+	fixture.facade.ServicePairingDetailUpdate(
+		issue56SKIA,
+		shipapi.NewConnectionStateDetail(shipapi.ConnectionStateCompleted, nil),
+	)
 	assertMSP04BCommitCount(t, fixture.base.store, 1)
 }
 

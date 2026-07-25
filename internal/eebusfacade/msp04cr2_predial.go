@@ -16,6 +16,12 @@ const (
 	firstTrustAttemptLaunchAuthorized = "ATTEMPT_LAUNCH_AUTHORIZED"
 )
 
+type firstTrustCandidateGenerationRebind struct {
+	remote          []byte
+	connection      uint64
+	storeGeneration uint64
+}
+
 func (coordinator *firstTrustCoordinator) prepareOutgoingAttempt(
 	ctx context.Context,
 	request firstTrustOutgoingAttemptRequest,
@@ -47,6 +53,12 @@ func (coordinator *firstTrustCoordinator) prepareOutgoingAttemptLocked(
 		coordinator.controlView.control.controlEpoch == math.MaxUint64 {
 		coordinator.mu.Unlock()
 		return nil, "attempt_denied"
+	}
+	var candidateConnection uint64
+	var candidateRebind *firstTrustCandidateGenerationRebind
+	if candidate := coordinator.currentCandidate; candidate != nil && bytes.Equal(candidate.remote, request.remoteSKI) {
+		candidateConnection = candidate.connection
+		candidateRebind = coordinator.outgoingAttemptCandidateGenerationRebindLocked(request.remoteSKI, candidateConnection)
 	}
 	scope := firstTrustRuntimeRetryScope(firstTrustNormalizedSKI(request.remoteSKI))
 	failedIndex := -1
@@ -134,7 +146,9 @@ func (coordinator *firstTrustCoordinator) prepareOutgoingAttemptLocked(
 	if failed != nil {
 		operationClass = "attempt_fallback_prepare"
 	}
-	publication, outcome := coordinator.publishOutgoingAttemptControl(ctx, expectedEpoch, target, publicationID, operationClass)
+	publication, outcome := coordinator.publishSelectedOutgoingAttemptControl(
+		ctx, expectedEpoch, target, publicationID, operationClass, candidateRebind,
+	)
 	if outcome != "durable" {
 		cancel()
 		return nil, "attempt_denied"
@@ -156,7 +170,7 @@ func (coordinator *firstTrustCoordinator) prepareOutgoingAttemptLocked(
 	}
 	coordinator.outgoingAttemptContexts[attemptID] = firstTrustOutgoingAttemptRuntime{
 		metadata: metadata, context: attemptContext, cancel: cancel, cancellationGeneration: record.cancellationGeneration,
-		leaseDeadline: leaseDeadline,
+		candidateConnection: candidateConnection, leaseDeadline: leaseDeadline,
 	}
 	coordinator.retryInflight[scope] = true
 	coordinator.storeGeneration = publication.target.manifest.current.sequence
@@ -215,9 +229,12 @@ func (coordinator *firstTrustCoordinator) authorizeOutgoingAttempt(
 	target.controlEpoch++
 	target.attempts[index].state = firstTrustAttemptLaunchAuthorized
 	expectedEpoch := coordinator.controlView.control.controlEpoch
+	candidateRebind := coordinator.outgoingAttemptCandidateGenerationRebindLocked(record.remoteSKI, runtime.candidateConnection)
 	coordinator.mu.Unlock()
 
-	_, outcome := coordinator.publishOutgoingAttemptControl(ctx, expectedEpoch, target, publicationID, "attempt_authorize")
+	_, outcome := coordinator.publishSelectedOutgoingAttemptControl(
+		ctx, expectedEpoch, target, publicationID, "attempt_authorize", candidateRebind,
+	)
 	if outcome != "durable" {
 		_ = coordinator.abortPreparedOutgoingAttemptLocked(ctx, handle, "attempt_abort_synthetic_failure")
 		denied.reason = "POLICY_DENIED"
@@ -379,17 +396,29 @@ func (coordinator *firstTrustCoordinator) outgoingAttemptCallbackExactLocked(
 	metadata firstTrustOutgoingAttemptMetadata,
 	remote []byte,
 ) bool {
+	_, exact := coordinator.outgoingAttemptCallbackExactConnectionLocked(metadata, remote)
+	return exact
+}
+
+func (coordinator *firstTrustCoordinator) outgoingAttemptCallbackExactConnectionLocked(
+	metadata firstTrustOutgoingAttemptMetadata,
+	remote []byte,
+) (uint64, bool) {
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 	index := coordinator.firstTrustOutgoingAttemptMetadataLocked(metadata)
 	if index < 0 {
-		return false
+		return 0, false
 	}
 	record := coordinator.controlView.control.attempts[index]
 	runtime, ok := coordinator.outgoingAttemptContexts[metadata.attemptID]
-	return record.state == firstTrustAttemptLaunchAuthorized && bytes.Equal(record.remoteSKI, remote) && ok &&
+	exact := record.state == firstTrustAttemptLaunchAuthorized && bytes.Equal(record.remoteSKI, remote) && ok &&
 		runtime.metadata == metadata && runtime.cancellationGeneration == record.cancellationGeneration && runtime.context != nil &&
 		runtime.context.Err() == nil
+	if !exact {
+		return 0, false
+	}
+	return runtime.candidateConnection, true
 }
 
 func (coordinator *firstTrustCoordinator) outgoingAttemptConnectionClosed(
@@ -446,6 +475,17 @@ func (coordinator *firstTrustCoordinator) publishOutgoingAttemptControl(
 	operationID [32]byte,
 	operationClass string,
 ) (firstTrustPreparedPublication, string) {
+	return coordinator.publishSelectedOutgoingAttemptControl(ctx, expectedEpoch, target, operationID, operationClass, nil)
+}
+
+func (coordinator *firstTrustCoordinator) publishSelectedOutgoingAttemptControl(
+	ctx context.Context,
+	expectedEpoch uint64,
+	target firstTrustControlRecord,
+	operationID [32]byte,
+	operationClass string,
+	candidateRebind *firstTrustCandidateGenerationRebind,
+) (firstTrustPreparedPublication, string) {
 	coordinator.mu.Lock()
 	if coordinator.recoveryStore == nil || coordinator.anchor == nil || coordinator.controlView.control.controlEpoch != expectedEpoch {
 		coordinator.mu.Unlock()
@@ -466,6 +506,7 @@ func (coordinator *firstTrustCoordinator) publishOutgoingAttemptControl(
 	case "durable":
 		coordinator.controlView = cloneFirstTrustControlView(publication.target)
 		coordinator.storeGeneration = publication.target.manifest.current.sequence
+		coordinator.rebindOutgoingAttemptCandidateGenerationLocked(candidateRebind, publication)
 	case "unknown":
 		coordinator.phase = firstTrustDisabled
 		coordinator.recovery = "QUARANTINED"
@@ -473,6 +514,45 @@ func (coordinator *firstTrustCoordinator) publishOutgoingAttemptControl(
 		coordinator.trustedRemotes = make(map[string]string)
 	}
 	return publication, outcome
+}
+
+func (coordinator *firstTrustCoordinator) outgoingAttemptCandidateGenerationRebindLocked(
+	remote []byte,
+	connection uint64,
+) *firstTrustCandidateGenerationRebind {
+	candidate := coordinator.currentCandidate
+	if coordinator.phase != firstTrustCandidatePending || candidate == nil || candidate.transientAuthorized ||
+		connection == 0 || connection != candidate.connection || !bytes.Equal(remote, candidate.remote) ||
+		candidate.storeGeneration == 0 ||
+		candidate.storeGeneration != coordinator.controlView.manifest.current.sequence ||
+		candidate.storeGeneration != coordinator.selectedFirstTrustGenerationLocked() {
+		return nil
+	}
+	return &firstTrustCandidateGenerationRebind{
+		remote:          bytes.Clone(remote),
+		connection:      connection,
+		storeGeneration: candidate.storeGeneration,
+	}
+}
+
+func (coordinator *firstTrustCoordinator) rebindOutgoingAttemptCandidateGenerationLocked(
+	rebind *firstTrustCandidateGenerationRebind,
+	publication firstTrustPreparedPublication,
+) bool {
+	candidate := coordinator.currentCandidate
+	previous := publication.previous.manifest.current.sequence
+	target := publication.target.manifest.current.sequence
+	if rebind == nil || coordinator.phase != firstTrustCandidatePending || candidate == nil || candidate.transientAuthorized ||
+		rebind.connection == 0 || rebind.connection != candidate.connection ||
+		!bytes.Equal(rebind.remote, candidate.remote) ||
+		rebind.storeGeneration == 0 || rebind.storeGeneration != previous ||
+		candidate.storeGeneration != previous || target == 0 || target == previous ||
+		coordinator.controlView.manifest.current.sequence != target ||
+		coordinator.selectedFirstTrustGenerationLocked() != target {
+		return false
+	}
+	candidate.storeGeneration = target
+	return true
 }
 
 func (coordinator *firstTrustCoordinator) firstTrustOutgoingAttemptEligibleLocked(remote []byte) bool {

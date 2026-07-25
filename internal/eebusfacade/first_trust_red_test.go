@@ -466,6 +466,7 @@ type msp04bStoreSpy struct {
 	commitExpected uint64
 	commitRemote   []byte
 	commitSHIPID   string
+	selected       uint64
 	events         *msp04bEventLog
 	commitEntered  chan struct{}
 	enteredOnce    sync.Once
@@ -485,6 +486,9 @@ func (store *msp04bStoreSpy) Reload(context.Context) (uint64, map[string]string,
 func (store *msp04bStoreSpy) SelectedGeneration() uint64 {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if store.selected != 0 {
+		return store.selected
+	}
 	return store.generation
 }
 

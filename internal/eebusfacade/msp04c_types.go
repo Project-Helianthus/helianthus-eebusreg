@@ -150,6 +150,7 @@ type firstTrustOutgoingAttemptRuntime struct {
 	context                context.Context
 	cancel                 context.CancelFunc
 	cancellationGeneration uint64
+	candidateConnection    uint64
 	leaseDeadline          time.Duration
 	leaseTimer             firstTrustOutgoingAttemptTimer
 }
@@ -286,7 +287,7 @@ func firstTrustProductAllowed(phase, recovery string) bool {
 		return recovery == "NO_LOCAL_IDENTITY" || recovery == "QUARANTINED" || recovery == "CORRUPT_STORE"
 	case "PAIRING_CLOSED":
 		return recovery == "UNPAIRED_LOCKED" || recovery == "PAIRED_TRUSTED" || recovery == "REVOKED"
-	case "OPEN_EMPTY", "CANDIDATE_PENDING", "COMMITTING":
+	case "OPEN_EMPTY", "CANDIDATE_PENDING", "TRANSIENT_TRUSTED", "COMMITTING":
 		return recovery == "UNPAIRED_LOCKED" || recovery == "REVOKED"
 	default:
 		return false

@@ -255,7 +255,8 @@ func (coordinator *firstTrustCoordinator) trustAdminLivenessAllowed(ski string) 
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 	return coordinator.currentCandidate == nil || !bytes.Equal(coordinator.currentCandidate.remote, remote) ||
-		coordinator.phase != firstTrustCandidatePending && coordinator.phase != firstTrustCommitting
+		coordinator.phase != firstTrustCandidatePending && coordinator.phase != firstTrustTransientTrusted &&
+			coordinator.phase != firstTrustCommitting
 }
 
 func (coordinator *firstTrustCoordinator) trustAdminStructuralIndeterminateLocked(phase string, phaseKnown bool) bool {
@@ -346,6 +347,8 @@ func firstTrustProjectionPhase(phase firstTrustPhase) (string, bool) {
 		return "OPEN_EMPTY", true
 	case firstTrustCandidatePending:
 		return "CANDIDATE_PENDING", true
+	case firstTrustTransientTrusted:
+		return "TRANSIENT_TRUSTED", true
 	case firstTrustCommitting:
 		return "COMMITTING", true
 	default:

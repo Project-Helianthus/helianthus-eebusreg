@@ -41,10 +41,18 @@ type firstTrustAttemptAuthorizer interface {
 	authorizeRuntimeAttempt([]byte) string
 }
 
+type firstTrustOutgoingAttemptRetryOwner interface {
+	outgoingAttemptOwnsRetry([]byte) bool
+}
+
 type firstTrustEventSink interface {
 	admit([]byte, uint64) string
 	serviceShipIDUpdate([]byte, uint64, string) string
 	connectionClosed([]byte, uint64) string
+}
+
+type firstTrustCompletionSink interface {
+	connectionCompleted([]byte, uint64) string
 }
 
 type firstTrustPairingRegistrationSink interface {
@@ -58,19 +66,24 @@ type firstTrustConnection struct {
 	retryScope      [32]byte
 	shipID          string
 	attemptClass    string
+	tlsBound        bool
 	active          bool
 	connected       bool
 	attemptStarted  bool
 	retryAdmitted   bool
+	outgoingRetry   bool
 	failureRecorded bool
 	cancelled       bool
 	blocked         bool
 	registered      bool
+	transient       bool
+	unregistered    bool
 }
 
 type firstTrustFacade struct {
-	mu        sync.Mutex
-	attemptMu sync.Mutex
+	mu         sync.Mutex
+	attemptMu  sync.Mutex
+	callbackMu sync.Mutex
 
 	service             firstTrustService
 	candidateService    firstTrustCandidateService
@@ -115,6 +128,8 @@ func newFirstTrustFacade(service firstTrustService, coordinator firstTrustEventS
 }
 
 func (facade *firstTrustFacade) RemoteSKIConnected(_ eebusapi.ServiceInterface, ski string) {
+	facade.callbackMu.Lock()
+	defer facade.callbackMu.Unlock()
 	remote, normalized, ok := decodeFirstTrustSKI(ski)
 	if !ok {
 		return
@@ -126,6 +141,7 @@ func (facade *firstTrustFacade) RemoteSKIConnected(_ eebusapi.ServiceInterface, 
 	var stale *firstTrustConnection
 	cancel := false
 	bindCandidateTLS := false
+	var generation uint64
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
 	switch {
@@ -143,7 +159,8 @@ func (facade *firstTrustFacade) RemoteSKIConnected(_ eebusapi.ServiceInterface, 
 	default:
 		connection.connected = true
 		connection.active = true
-		bindCandidateTLS = connection.attemptClass == "pairing_authorized"
+		generation = connection.generation
+		bindCandidateTLS = connection.attemptClass == "pairing_authorized" && !connection.tlsBound
 	}
 	facade.mu.Unlock()
 	if stale != nil && facade.coordinator != nil {
@@ -151,8 +168,17 @@ func (facade *firstTrustFacade) RemoteSKIConnected(_ eebusapi.ServiceInterface, 
 	}
 	if !cancel && bindCandidateTLS {
 		if sink, ok := facade.coordinator.(firstTrustTLSBindingSink); ok {
-			if sink.remoteSKIConnected(remote, connection.generation) != "tls_bound" {
+			if sink.remoteSKIConnected(remote, generation) != "tls_bound" {
 				cancel = true
+			} else {
+				facade.mu.Lock()
+				current := facade.connections[normalized]
+				if current == nil || current.generation != generation || current.cancelled || current.blocked {
+					cancel = true
+				} else {
+					current.tlsBound = true
+				}
+				facade.mu.Unlock()
 			}
 		}
 	}
@@ -161,9 +187,118 @@ func (facade *firstTrustFacade) RemoteSKIConnected(_ eebusapi.ServiceInterface, 
 	}
 }
 
+func (facade *firstTrustFacade) outgoingAttemptTLSBound(remote []byte, generation uint64) bool {
+	if facade == nil || len(remote) != 20 || generation == 0 {
+		return false
+	}
+	facade.callbackMu.Lock()
+	defer facade.callbackMu.Unlock()
+	normalized := hex.EncodeToString(remote)
+	facade.mu.Lock()
+	connection := facade.connections[normalized]
+	if connection == nil || connection.generation != generation || connection.attemptClass != "pairing_authorized" ||
+		!connection.active || connection.cancelled || connection.blocked {
+		facade.mu.Unlock()
+		return false
+	}
+	if connection.tlsBound {
+		facade.mu.Unlock()
+		return true
+	}
+	facade.mu.Unlock()
+
+	sink, ok := facade.coordinator.(firstTrustTLSBindingSink)
+	if !ok || sink.remoteSKIConnected(remote, generation) != "tls_bound" {
+		return false
+	}
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	connection = facade.connections[normalized]
+	if connection == nil || connection.generation != generation || !connection.active || connection.cancelled || connection.blocked {
+		return false
+	}
+	connection.tlsBound = true
+	return true
+}
+
+func (facade *firstTrustFacade) outgoingAttemptTerminated(remote []byte, generation uint64) {
+	if facade == nil || len(remote) != 20 || generation == 0 {
+		return
+	}
+	facade.callbackMu.Lock()
+	normalized := hex.EncodeToString(remote)
+	facade.mu.Lock()
+	connection := facade.connections[normalized]
+	if connection == nil || connection.generation != generation || connection.attemptClass != "pairing_authorized" ||
+		connection.failureRecorded || connection.cancelled || connection.blocked {
+		facade.mu.Unlock()
+		facade.callbackMu.Unlock()
+		return
+	}
+	effectConnection := connection
+	wasActive := connection.active
+	wasConnected := connection.connected
+	shipID := connection.shipID
+	connection.failureRecorded = true
+	connection.retryAdmitted = false
+	connection.outgoingRetry = false
+	connection.active = false
+	connection.cancelled = true
+	connection.blocked = true
+	connection.shipID = ""
+	facade.mu.Unlock()
+	facade.callbackMu.Unlock()
+
+	if facade.coordinator != nil && facade.coordinator.connectionClosed(remote, generation) == "commit_in_progress" {
+		facade.callbackMu.Lock()
+		facade.mu.Lock()
+		connection = facade.connections[normalized]
+		if connection == effectConnection && connection.generation == generation && connection.connected == wasConnected {
+			connection.active = wasActive
+			connection.cancelled = false
+			connection.blocked = false
+			connection.shipID = shipID
+		}
+		facade.mu.Unlock()
+		facade.callbackMu.Unlock()
+		return
+	}
+
+	facade.callbackMu.Lock()
+	facade.mu.Lock()
+	connection = facade.connections[normalized]
+	if connection != effectConnection || connection.generation != generation {
+		facade.mu.Unlock()
+		facade.callbackMu.Unlock()
+		return
+	}
+	connected := connection.connected
+	facade.mu.Unlock()
+	facade.cancelBySKI(normalized)
+	if connected {
+		facade.disconnectCancelledBySKI(normalized)
+	}
+
+	facade.mu.Lock()
+	connection = facade.connections[normalized]
+	if connection == effectConnection && connection.generation == generation && !connection.connected {
+		delete(facade.connections, normalized)
+	}
+	facade.mu.Unlock()
+	facade.callbackMu.Unlock()
+}
+
 func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterface, ski string) {
 	remote, normalized, ok := decodeFirstTrustSKI(ski)
 	if !ok {
+		return
+	}
+	if facade.acknowledgeBlockedDisconnect(normalized) {
+		return
+	}
+	facade.callbackMu.Lock()
+	defer facade.callbackMu.Unlock()
+	if facade.acknowledgeBlockedDisconnect(normalized) {
 		return
 	}
 	var retryScope [32]byte
@@ -174,13 +309,7 @@ func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterfac
 		close(acknowledgment)
 	}
 	connection := facade.connections[normalized]
-	if connection != nil && connection.cancelled && connection.blocked {
-		connection.connected = false
-		if !facade.pairingRegistration || connection.pairingEpoch != facade.pairingEpoch {
-			delete(facade.connections, normalized)
-		}
-		connection = nil
-	} else if connection != nil && (connection.registered || connection.attemptClass == "reconnect_authorized") {
+	if connection != nil && (connection.registered && !connection.transient || connection.attemptClass == "reconnect_authorized") {
 		retryScope = connection.retryScope
 		releaseRetry = connection.retryAdmitted
 		connection.retryAdmitted = false
@@ -205,6 +334,24 @@ func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterfac
 	}
 }
 
+func (facade *firstTrustFacade) acknowledgeBlockedDisconnect(normalized string) bool {
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	connection := facade.connections[normalized]
+	if connection == nil || !connection.cancelled || !connection.blocked {
+		return false
+	}
+	if acknowledgment := facade.withdrawals[normalized]; acknowledgment != nil {
+		delete(facade.withdrawals, normalized)
+		close(acknowledgment)
+	}
+	connection.connected = false
+	if !facade.pairingRegistration || connection.pairingEpoch != facade.pairingEpoch {
+		delete(facade.connections, normalized)
+	}
+	return true
+}
+
 func (*firstTrustFacade) VisibleRemoteServicesUpdated(eebusapi.ServiceInterface, []shipapi.RemoteService) {
 }
 
@@ -219,10 +366,22 @@ func (facade *firstTrustFacade) ServiceShipIDUpdate(ski string, shipID string) {
 	if !ok || shipID == "" {
 		return
 	}
+	if facade.connectionCallbackBlocked(normalized) {
+		return
+	}
+	facade.callbackMu.Lock()
+	defer facade.callbackMu.Unlock()
+	if facade.connectionCallbackBlocked(normalized) {
+		return
+	}
 	connection := facade.beginAttempt(remote, normalized, false)
 	facade.mu.Lock()
 	connection = facade.connections[normalized]
 	if connection == nil || connection.cancelled || connection.blocked {
+		facade.mu.Unlock()
+		return
+	}
+	if connection.transient && (!connection.active || !connection.connected) {
 		facade.mu.Unlock()
 		return
 	}
@@ -239,16 +398,57 @@ func (facade *firstTrustFacade) ServicePairingDetailUpdate(ski string, detail *s
 	if !ok || detail == nil {
 		return
 	}
-	switch detail.State() {
+	state := detail.State()
+	if facade.connectionCallbackBlocked(normalized) {
+		facade.rejectBlockedPairingCallback(normalized, state)
+		return
+	}
+	facade.callbackMu.Lock()
+	if facade.connectionCallbackBlocked(normalized) {
+		facade.callbackMu.Unlock()
+		if firstTrustPairingCallbackRequiresCancellation(state) {
+			facade.cancelBySKI(normalized)
+		}
+		return
+	}
+	defer facade.callbackMu.Unlock()
+	switch state {
 	case shipapi.ConnectionStateQueued, shipapi.ConnectionStateInitiated, shipapi.ConnectionStateInProgress:
 		facade.beginAttempt(remote, normalized, false)
 	case shipapi.ConnectionStateReceivedPairingRequest:
 		facade.handlePairingRequest(remote, normalized)
 	case shipapi.ConnectionStateError, shipapi.ConnectionStateRemoteDeniedTrust:
 		facade.handlePairingFailure(remote, normalized)
-	case shipapi.ConnectionStateTrusted, shipapi.ConnectionStateCompleted:
-		facade.handlePairingSuccess(normalized)
+	case shipapi.ConnectionStateTrusted:
+		facade.handlePairingSuccess(remote, normalized, false)
+	case shipapi.ConnectionStateCompleted:
+		facade.handlePairingSuccess(remote, normalized, true)
 	}
+}
+
+func (facade *firstTrustFacade) rejectBlockedPairingCallback(normalized string, state shipapi.ConnectionState) {
+	if !firstTrustPairingCallbackRequiresCancellation(state) || !facade.callbackMu.TryLock() {
+		return
+	}
+	facade.callbackMu.Unlock()
+	facade.cancelBySKI(normalized)
+}
+
+func firstTrustPairingCallbackRequiresCancellation(state shipapi.ConnectionState) bool {
+	switch state {
+	case shipapi.ConnectionStateQueued, shipapi.ConnectionStateInitiated, shipapi.ConnectionStateInProgress,
+		shipapi.ConnectionStateReceivedPairingRequest:
+		return true
+	default:
+		return false
+	}
+}
+
+func (facade *firstTrustFacade) connectionCallbackBlocked(normalized string) bool {
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	connection := facade.connections[normalized]
+	return connection != nil && (connection.cancelled || connection.blocked)
 }
 
 func (facade *firstTrustFacade) handlePairingRequest(remote []byte, normalized string) {
@@ -315,7 +515,11 @@ func (facade *firstTrustFacade) beginAttempt(remote []byte, normalized string, c
 	scope := connection.retryScope
 	facade.mu.Unlock()
 
-	if retry, ok := facade.retrySink(); ok {
+	outgoingOwnsRetry := false
+	if owner, ok := facade.coordinator.(firstTrustOutgoingAttemptRetryOwner); ok {
+		outgoingOwnsRetry = attemptClass == "pairing_authorized" && owner.outgoingAttemptOwnsRetry(remote)
+	}
+	if retry, ok := facade.retrySink(); ok && !outgoingOwnsRetry {
 		if result := retry.admitRetry(context.Background(), scope); result != "retry_admitted" {
 			facade.discardRetryGeneration(remote, normalized, generation)
 			return nil
@@ -334,7 +538,8 @@ func (facade *firstTrustFacade) beginAttempt(remote []byte, normalized string, c
 	facade.mu.Lock()
 	connection = facade.connections[normalized]
 	if connection != nil && connection.generation == generation {
-		connection.retryAdmitted = true
+		connection.retryAdmitted = !outgoingOwnsRetry
+		connection.outgoingRetry = outgoingOwnsRetry
 	}
 	facade.mu.Unlock()
 	return connection
@@ -358,15 +563,25 @@ func (facade *firstTrustFacade) discardRetryGeneration(remote []byte, normalized
 func (facade *firstTrustFacade) handlePairingFailure(remote []byte, normalized string) {
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
-	if connection == nil || !connection.retryAdmitted || connection.failureRecorded {
+	if connection == nil || (!connection.retryAdmitted && !connection.outgoingRetry) || connection.failureRecorded {
 		facade.mu.Unlock()
 		return
 	}
 	connection.failureRecorded = true
 	generation := connection.generation
 	scope := connection.retryScope
+	outgoingRetry := connection.outgoingRetry
+	connection.retryAdmitted = false
+	connection.outgoingRetry = false
 	facade.mu.Unlock()
 
+	if outgoingRetry {
+		if facade.coordinator != nil {
+			facade.coordinator.connectionClosed(remote, generation)
+		}
+		facade.cancelGeneration(remote, generation)
+		return
+	}
 	retry, ok := facade.retrySink()
 	if !ok {
 		if facade.coordinator != nil {
@@ -394,17 +609,25 @@ func (facade *firstTrustFacade) handlePairingFailure(remote []byte, normalized s
 	facade.cancelBySKI(normalized)
 }
 
-func (facade *firstTrustFacade) handlePairingSuccess(normalized string) {
+func (facade *firstTrustFacade) handlePairingSuccess(remote []byte, normalized string, completed bool) {
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
-	if connection == nil {
+	if connection == nil || connection.cancelled || connection.blocked {
 		facade.mu.Unlock()
 		return
 	}
 	scope := connection.retryScope
 	admitted := connection.retryAdmitted
+	generation := connection.generation
+	pairingAuthorized := connection.attemptClass == "pairing_authorized"
+	live := connection.active && connection.connected
 	connection.retryAdmitted = false
 	facade.mu.Unlock()
+	if completed && pairingAuthorized && live {
+		if sink, ok := facade.coordinator.(firstTrustCompletionSink); ok {
+			sink.connectionCompleted(remote, generation)
+		}
+	}
 	if admitted {
 		if retry, ok := facade.retrySink(); ok {
 			retry.completeRetry(scope)
@@ -484,6 +707,59 @@ func (facade *firstTrustFacade) registerRemoteSKI(remote []byte, generation uint
 	if service != nil {
 		service.RegisterRemoteSKI(normalized)
 	}
+}
+
+func (facade *firstTrustFacade) registerTransientRemoteSKI(remote []byte, generation uint64) {
+	normalized := hex.EncodeToString(remote)
+	facade.mu.Lock()
+	connection := facade.connections[normalized]
+	if facade.pairingRegistrationFault || connection == nil || connection.generation != generation ||
+		!connection.active || connection.cancelled || connection.blocked || connection.registered {
+		facade.mu.Unlock()
+		return
+	}
+	connection.registered = true
+	connection.transient = true
+	connection.unregistered = false
+	connection.shipID = ""
+	service := facade.service
+	facade.mu.Unlock()
+	if service != nil {
+		service.RegisterRemoteSKI(normalized)
+	}
+}
+
+func (facade *firstTrustFacade) unregisterTransientRemoteSKI(remote []byte, generation uint64) {
+	normalized := hex.EncodeToString(remote)
+	facade.mu.Lock()
+	connection := facade.connections[normalized]
+	if connection == nil || connection.generation != generation || connection.unregistered {
+		facade.mu.Unlock()
+		return
+	}
+	connection.unregistered = true
+	connection.registered = false
+	connection.transient = false
+	service, ok := facade.service.(firstTrustWithdrawalService)
+	facade.mu.Unlock()
+	if !ok {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+	service.UnregisterRemoteSKI(normalized)
+}
+
+func (facade *firstTrustFacade) finalizeTransientRemoteSKI(remote []byte, generation uint64) {
+	normalized := hex.EncodeToString(remote)
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	connection := facade.connections[normalized]
+	if connection == nil || connection.generation != generation || connection.unregistered || !connection.registered {
+		return
+	}
+	connection.transient = false
 }
 
 func (facade *firstTrustFacade) disconnectRemote(remote []byte) (acknowledged <-chan struct{}, started bool) {
