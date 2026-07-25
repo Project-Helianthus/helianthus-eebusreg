@@ -12,7 +12,31 @@ import (
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	spinemocks "github.com/Project-Helianthus/helianthus-spine-go/mocks"
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
+	spine "github.com/Project-Helianthus/helianthus-spine-go/spine"
 )
+
+func TestIssue72ProductionSPINESubscriptionDeliversAndUnsubscribes(t *testing.T) {
+	recorder := &issue72EventRecorder{called: make(chan struct{}, 2)}
+	unsubscribe, err := subscribeRuntimeSPINEEvents(recorder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spine.Events.Publish(spineapi.EventPayload{})
+	select {
+	case <-recorder.called:
+	case <-time.After(time.Second):
+		t.Fatal("production SPINE subscription did not deliver")
+	}
+	if err := unsubscribe(); err != nil {
+		t.Fatal(err)
+	}
+	spine.Events.Publish(spineapi.EventPayload{})
+	select {
+	case <-recorder.called:
+		t.Fatal("production SPINE subscription delivered after unsubscribe")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
 
 func TestIssue72RefreshesTopologyFromDetailedDiscoveryAndStopsBeforeShutdown(t *testing.T) {
 	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "issue72")
@@ -78,6 +102,7 @@ func TestIssue72RefreshesTopologyFromDetailedDiscoveryAndStopsBeforeShutdown(t *
 	remoteService := eebusmocks.NewServiceInterface(t)
 	localDevice := spinemocks.NewDeviceLocalInterface(t)
 	remoteDevice := issue72RemoteDevice(t, remoteSKI)
+	service.localDevice = localDevice
 	remoteService.EXPECT().LocalDevice().Return(localDevice)
 	localDevice.EXPECT().RemoteDeviceForSki(remoteSKI).Return(nil).Once()
 
@@ -89,6 +114,21 @@ func TestIssue72RefreshesTopologyFromDetailedDiscoveryAndStopsBeforeShutdown(t *
 	}
 	if len(connected.Topology.Devices) != 0 {
 		t.Fatalf("pre-discovery topology = %+v, want empty", connected.Topology)
+	}
+
+	remoteService.EXPECT().LocalDevice().Return(localDevice)
+	localDevice.EXPECT().RemoteDeviceForSki(remoteSKI).Return(remoteDevice)
+	foreignRemote := spinemocks.NewDeviceRemoteInterface(t)
+	eventHandler.HandleEvent(spineapi.EventPayload{
+		Ski:        remoteSKI,
+		EventType:  spineapi.EventTypeDeviceChange,
+		ChangeType: spineapi.ElementChangeAdd,
+		Device:     foreignRemote,
+	})
+	select {
+	case payload := <-updates:
+		t.Fatalf("foreign runtime event published %s", payload)
+	case <-time.After(20 * time.Millisecond):
 	}
 
 	remoteService.EXPECT().LocalDevice().Return(localDevice)
@@ -134,6 +174,187 @@ func TestIssue72RefreshesTopologyFromDetailedDiscoveryAndStopsBeforeShutdown(t *
 	}
 }
 
+func TestIssue72CloseWaitsForInFlightSPINECallbackAfterUnsubscribe(t *testing.T) {
+	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "issue72-close")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localSKI := certificateSKI(t, certificate)
+	remoteSKI := "0000000000000000000000000000000000000072"
+	service := &fakeRuntimeService{started: make(chan struct{})}
+	localDevice := spinemocks.NewDeviceLocalInterface(t)
+	remoteDevice := spinemocks.NewDeviceRemoteInterface(t)
+	service.localDevice = localDevice
+	var reader eebusapi.ServiceReaderInterface
+	var eventHandler spineapi.EventHandlerInterface
+	unsubscribed := make(chan struct{})
+
+	backend, err := acquireRuntime(context.Background(), RuntimeConfig{
+		StateRoot:  "/tmp/helianthus-eebus-issue72-close",
+		Interface:  "fixture-interface",
+		ListenPort: 4711,
+		Remotes:    []RuntimeRemote{{SKI: remoteSKI}},
+	}, runtimeDependencies{
+		loadMaterial: func(context.Context, string) (runtimeMaterial, error) {
+			return runtimeMaterial{
+				certificate: certificate,
+				localSKI:    localSKI,
+				nodeToken:   runtimeTestNodeToken,
+				pretrusted:  map[string]bool{remoteSKI: true},
+			}, nil
+		},
+		newService: func(_ RuntimeConfig, _ runtimeMaterial, candidate eebusapi.ServiceReaderInterface) (runtimeService, error) {
+			reader = candidate
+			return service, nil
+		},
+		subscribeSPINEEvents: func(candidate spineapi.EventHandlerInterface) (func() error, error) {
+			eventHandler = candidate
+			return func() error {
+				close(unsubscribed)
+				return nil
+			}, nil
+		},
+		now: time.Now,
+	})
+	if err != nil {
+		t.Fatalf("acquire runtime: %v", err)
+	}
+
+	connectedService := eebusmocks.NewServiceInterface(t)
+	connectedService.EXPECT().LocalDevice().Return(localDevice)
+	localDevice.EXPECT().RemoteDeviceForSki(remoteSKI).Return(nil).Once()
+	reader.RemoteSKIConnected(connectedService, remoteSKI)
+
+	callbackEntered := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	localDevice.EXPECT().RemoteDeviceForSki(remoteSKI).Run(func(string) {
+		close(callbackEntered)
+		<-releaseCallback
+	}).Return(remoteDevice).Once()
+	callbackDone := make(chan struct{})
+	go func() {
+		defer close(callbackDone)
+		eventHandler.HandleEvent(spineapi.EventPayload{
+			Ski:        remoteSKI,
+			EventType:  spineapi.EventTypeDeviceChange,
+			ChangeType: spineapi.ElementChangeAdd,
+			Device:     remoteDevice,
+		})
+	}()
+	<-callbackEntered
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- backend.Close()
+	}()
+	<-unsubscribed
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before in-flight callback completed: %v", err)
+	default:
+	}
+	close(releaseCallback)
+	<-callbackDone
+	if err := <-closeDone; err != nil {
+		t.Fatalf("close runtime: %v", err)
+	}
+}
+
+func TestIssue72TopologyEventsIncludeUseCaseDataAndExcludeDeviceRemoval(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload spineapi.EventPayload
+		want    bool
+	}{
+		{
+			name: "detailed discovery",
+			payload: spineapi.EventPayload{
+				EventType: spineapi.EventTypeDeviceChange, ChangeType: spineapi.ElementChangeAdd,
+			},
+			want: true,
+		},
+		{
+			name: "entity removal",
+			payload: spineapi.EventPayload{
+				EventType: spineapi.EventTypeEntityChange, ChangeType: spineapi.ElementChangeRemove,
+			},
+			want: true,
+		},
+		{
+			name: "use case data",
+			payload: spineapi.EventPayload{
+				EventType: spineapi.EventTypeDataChange,
+				Data:      &spinemodel.NodeManagementUseCaseDataType{},
+			},
+			want: true,
+		},
+		{
+			name: "unrelated data",
+			payload: spineapi.EventPayload{
+				EventType: spineapi.EventTypeDataChange,
+				Data:      struct{}{},
+			},
+		},
+		{
+			name: "device disconnect",
+			payload: spineapi.EventPayload{
+				EventType: spineapi.EventTypeDeviceChange, ChangeType: spineapi.ElementChangeRemove,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := runtimeTopologyEvent(test.payload); got != test.want {
+				t.Fatalf("runtimeTopologyEvent() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestIssue72StaleDiscoveryCannotPopulateReconnectedSession(t *testing.T) {
+	remoteSKI := "0000000000000000000000000000000000000072"
+	handler, err := newRuntimeServiceHandler(RuntimeConfig{
+		Remotes: []RuntimeRemote{{SKI: remoteSKI}},
+	}, "0000000000000000000000000000000000000001", time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.activateSPINEEvents(&fakeRuntimeService{started: make(chan struct{})})
+	defer func() {
+		handler.deactivateSPINEEvents()
+		handler.waitForSPINEEvents()
+	}()
+
+	firstService := eebusmocks.NewServiceInterface(t)
+	firstLocal := spinemocks.NewDeviceLocalInterface(t)
+	firstService.EXPECT().LocalDevice().Return(firstLocal)
+	firstLocal.EXPECT().RemoteDeviceForSki(remoteSKI).Return(nil)
+	handler.RemoteSKIConnected(firstService, remoteSKI)
+
+	handler.mu.Lock()
+	stale := runtimeSPINERefresh{
+		generation:   handler.spineGeneration,
+		sessionIndex: handler.observations[remoteSKI].SessionIndex,
+	}
+	handler.mu.Unlock()
+
+	handler.RemoteSKIDisconnected(nil, remoteSKI)
+	secondService := eebusmocks.NewServiceInterface(t)
+	secondLocal := spinemocks.NewDeviceLocalInterface(t)
+	secondService.EXPECT().LocalDevice().Return(secondLocal)
+	secondLocal.EXPECT().RemoteDeviceForSki(remoteSKI).Return(nil)
+	handler.RemoteSKIConnected(secondService, remoteSKI)
+	handler.updateRemoteFromSPINEEvent(remoteSKI, stale, []runtimeDeviceObservation{{ID: "stale"}})
+
+	graph := handler.reducer.Snapshot()
+	if len(graph) != 1 {
+		t.Fatalf("runtime graph = %+v", graph)
+	}
+	if len(graph[0].Devices) != 0 {
+		t.Fatalf("stale discovery populated reconnected session: %+v", graph[0].Devices)
+	}
+}
+
 func issue72RemoteDevice(t *testing.T, ski string) spineapi.DeviceRemoteInterface {
 	t.Helper()
 	remote := spinemocks.NewDeviceRemoteInterface(t)
@@ -158,4 +379,12 @@ func issue72RemoteDevice(t *testing.T, ski string) spineapi.DeviceRemoteInterfac
 	})
 	feature.EXPECT().Role().Return(spinemodel.RoleTypeClient)
 	return remote
+}
+
+type issue72EventRecorder struct {
+	called chan struct{}
+}
+
+func (recorder *issue72EventRecorder) HandleEvent(spineapi.EventPayload) {
+	recorder.called <- struct{}{}
 }

@@ -50,7 +50,8 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 			handler = reader
 			return service, nil
 		},
-		now: clock.Now,
+		subscribeSPINEEvents: runtimeTestSPINEEventSubscriber,
+		now:                  clock.Now,
 	}
 	config := RuntimeConfig{
 		StateRoot:  "/tmp/helianthus-eebus-runtime-test",
@@ -180,7 +181,8 @@ func TestAcquireRuntimeKeepsFirstTrustDisabledWithoutInternalAuthorization(t *te
 		newService: func(RuntimeConfig, runtimeMaterial, eebusapi.ServiceReaderInterface) (runtimeService, error) {
 			return service, nil
 		},
-		now: time.Now,
+		subscribeSPINEEvents: runtimeTestSPINEEventSubscriber,
+		now:                  time.Now,
 	})
 	if err != nil {
 		t.Fatalf("acquireRuntime() error = %v", err)
@@ -509,6 +511,7 @@ type fakeRuntimeService struct {
 	pairingRegistrationErr error
 	cancels                int
 	disconnected           func(string)
+	localDevice            spineapi.DeviceLocalInterface
 }
 
 func (service *fakeRuntimeService) Setup() error {
@@ -558,7 +561,9 @@ func (service *fakeRuntimeService) SetPairingRegistration(value bool) error {
 
 func (*fakeRuntimeService) LocalService() *shipapi.ServiceDetails { return nil }
 
-func (*fakeRuntimeService) LocalDevice() spineapi.DeviceLocalInterface { return nil }
+func (service *fakeRuntimeService) LocalDevice() spineapi.DeviceLocalInterface {
+	return service.localDevice
+}
 
 type runtimeTestClock struct {
 	mu    sync.Mutex
@@ -634,6 +639,10 @@ func waitRuntimePayload(t *testing.T, updates <-chan []byte) []byte {
 		t.Fatal("timed out waiting for runtime snapshot")
 		return nil
 	}
+}
+
+func runtimeTestSPINEEventSubscriber(spineapi.EventHandlerInterface) (func() error, error) {
+	return func() error { return nil }, nil
 }
 
 func containsRuntimeError(err error, text string) bool {

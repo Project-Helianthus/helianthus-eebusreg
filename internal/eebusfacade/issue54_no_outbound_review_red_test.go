@@ -40,7 +40,8 @@ func TestIssue54AllowlistAndVisibilityCannotRequestOutboundConnection(t *testing
 			reader = callback
 			return service, nil
 		},
-		now: time.Now,
+		subscribeSPINEEvents: runtimeTestSPINEEventSubscriber,
+		now:                  time.Now,
 	})
 	if err != nil {
 		t.Fatal(err)

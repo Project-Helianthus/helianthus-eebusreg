@@ -29,7 +29,7 @@ func TestMSP05PDependencyClosureUsesReviewedHelianthusReleases(t *testing.T) {
 	}{
 		{path: "github.com/Project-Helianthus/helianthus-eebus-go", version: "v0.7.1-helianthus.8"},
 		{path: "github.com/Project-Helianthus/helianthus-ship-go", version: "v0.6.1-helianthus.8"},
-		{path: "github.com/Project-Helianthus/helianthus-spine-go", version: "v0.7.1-helianthus.1"},
+		{path: "github.com/Project-Helianthus/helianthus-spine-go", version: "v0.7.1-helianthus.2"},
 	}
 	got := make(map[string]string, len(file.Require))
 	for _, required := range file.Require {
@@ -43,7 +43,7 @@ func TestMSP05PDependencyClosureUsesReviewedHelianthusReleases(t *testing.T) {
 			t.Fatalf("test contract contains non-release version %q for %s", requirement.version, requirement.path)
 		}
 	}
-	for _, requirement := range want[:2] {
+	for _, requirement := range want {
 		command := exec.Command("go", "list", "-m", "-json", requirement.path)
 		command.Dir = filepath.Join("..", "..")
 		command.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local")
@@ -88,7 +88,7 @@ func TestMSP05PDependencyClosureUsesReviewedHelianthusReleases(t *testing.T) {
 		t.Fatalf("read repository go.sum: %v", err)
 	}
 	sums := string(sumPayload)
-	for _, requirement := range want[:2] {
+	for _, requirement := range want {
 		for _, suffix := range []string{" ", "/go.mod "} {
 			entry := requirement.path + " " + requirement.version + suffix
 			if !strings.Contains(sums, entry) {
@@ -101,6 +101,7 @@ func TestMSP05PDependencyClosureUsesReviewedHelianthusReleases(t *testing.T) {
 		"github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.3 ",
 		"github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.2 ",
 		"github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.4 ",
+		"github.com/Project-Helianthus/helianthus-spine-go v0.7.1-helianthus.1 ",
 	} {
 		if strings.Contains(sums, stale) {
 			t.Errorf("go.sum retains stale current dependency entry %q", stale)
