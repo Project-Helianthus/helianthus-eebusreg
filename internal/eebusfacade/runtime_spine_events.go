@@ -12,7 +12,7 @@ import (
 )
 
 type runtimeSPINERefresh struct {
-	service      runtimeService
+	devices      []runtimeDeviceObservation
 	generation   uint64
 	sessionIndex uint64
 }
@@ -89,8 +89,16 @@ func (handler *runtimeServiceHandler) HandleEvent(payload spineapi.EventPayload)
 	if !sameRuntimeRemoteDevice(remote, payload.Device) {
 		return
 	}
+	devices, err := runtimeDevicesForRemoteDevice(remote, ski)
+	if err != nil {
+		handler.report(err)
+		return
+	}
+	if len(devices) == 0 {
+		return
+	}
 	handler.enqueueSPINERefresh(ski, runtimeSPINERefresh{
-		service: service, generation: generation, sessionIndex: sessionIndex,
+		devices: devices, generation: generation, sessionIndex: sessionIndex,
 	})
 }
 
@@ -152,15 +160,7 @@ func (handler *runtimeServiceHandler) runSPINERefreshWorker(ctx context.Context)
 				if !ok {
 					continue
 				}
-				devices, err := runtimeDevicesForRemote(refresh.service, ski)
-				if err != nil {
-					handler.report(err)
-					continue
-				}
-				if len(devices) == 0 {
-					continue
-				}
-				handler.updateRemoteFromSPINEEvent(ski, refresh, devices)
+				handler.updateRemoteFromSPINEEvent(ski, refresh, refresh.devices)
 			}
 		}
 	}

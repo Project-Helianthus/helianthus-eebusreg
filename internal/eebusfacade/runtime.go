@@ -806,6 +806,10 @@ func runtimeDevicesForRemote(service runtimeDeviceProvider, ski string) ([]runti
 		return nil, nil
 	}
 	remote := service.LocalDevice().RemoteDeviceForSki(ski)
+	return runtimeDevicesForRemoteDevice(remote, ski)
+}
+
+func runtimeDevicesForRemoteDevice(remote spineapi.DeviceRemoteInterface, ski string) ([]runtimeDeviceObservation, error) {
 	if remote == nil {
 		return nil, nil
 	}
@@ -832,7 +836,7 @@ func runtimeDevicesForRemote(service runtimeDeviceProvider, ski string) ([]runti
 				return nil, err
 			}
 			role := strings.ToLower(string(feature.Role()))
-			if role != "client" && role != "server" {
+			if role != "client" && role != "server" && role != "special" {
 				role = ""
 			}
 			entityObservation.Features = append(entityObservation.Features, runtimeFeatureObservation{ID: featureID, Role: role})
@@ -1227,7 +1231,7 @@ func normalizeRuntimeEntityObservation(source runtimeEntityObservation) (runtime
 			return runtimeEntityObservation{}, errors.New("runtime feature identity is required")
 		}
 		switch feature.Role {
-		case "", "client", "server":
+		case "", "client", "server", "special":
 		default:
 			return runtimeEntityObservation{}, errors.New("runtime feature role is unsupported")
 		}

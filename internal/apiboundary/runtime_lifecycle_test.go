@@ -94,6 +94,7 @@ const ObservedSessionStateV1Degraded
 const FeatureRoleV1Unspecified
 const FeatureRoleV1Client
 const FeatureRoleV1Server
+const FeatureRoleV1Special
 const PairingPolicyClosed
 func New
 func NewSnapshotV1

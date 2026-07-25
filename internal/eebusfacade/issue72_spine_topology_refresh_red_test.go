@@ -186,6 +186,10 @@ func TestIssue72CloseWaitsForInFlightSPINECallbackAfterUnsubscribe(t *testing.T)
 	service := &fakeRuntimeService{started: make(chan struct{})}
 	localDevice := spinemocks.NewDeviceLocalInterface(t)
 	remoteDevice := spinemocks.NewDeviceRemoteInterface(t)
+	remoteAddress := spinemodel.AddressDeviceType("d:_n:close")
+	remoteDevice.EXPECT().Address().Return(&remoteAddress)
+	remoteDevice.EXPECT().Entities().Return(nil)
+	remoteDevice.EXPECT().UseCases().Return(nil)
 	service.localDevice = localDevice
 	var reader eebusapi.ServiceReaderInterface
 	var eventHandler spineapi.EventHandlerInterface
