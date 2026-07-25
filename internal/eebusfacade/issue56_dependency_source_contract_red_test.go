@@ -96,8 +96,8 @@ func TestIssue56SHIPSourceContractHoldsApprovalAndDisablesSessionResumption(t *t
 	)
 	issue56RequireInOrder(t, access,
 		"Save the SHIP ID.",
-		"ServiceShipIDUpdate",
-		"pairingApprovalReleased",
+		"reportServiceShipID",
+		"publishPairingApproved",
 	)
 	issue56RequireAll(t, listener, "SessionTicketsDisabled: true")
 	if strings.Contains(connections, "ClientSessionCache:") {

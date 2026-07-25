@@ -31,6 +31,8 @@ type firstTrustAdminCommand struct {
 	key             string
 	duration        time.Duration
 	fingerprint     string
+	candidateRef    string
+	expectedSKI     string
 	nonce           string
 	expiresAt       time.Time
 	connection      uint64
@@ -61,6 +63,22 @@ type firstTrustCandidateReply struct {
 	Complete        bool   `json:"association_complete"`
 }
 
+type firstTrustDiscoveredCandidateReply struct {
+	CandidateRef  string `json:"candidate_ref"`
+	Lifecycle     string `json:"lifecycle"`
+	FirstReceived string `json:"first_received_at"`
+	LastReceived  string `json:"last_received_at"`
+	LocalRevision uint64 `json:"revision"`
+}
+
+type firstTrustCandidatesReply struct {
+	Outcome       string                               `json:"outcome"`
+	SnapshotState string                               `json:"snapshot_state"`
+	InvalidReason string                               `json:"invalid_reason,omitempty"`
+	LocalRevision uint64                               `json:"revision"`
+	Candidates    []firstTrustDiscoveredCandidateReply `json:"candidates"`
+}
+
 func startFirstTrustAdmin(ctx context.Context, runtimeDir string, coordinator *firstTrustCoordinator) (firstTrustAdminEndpoint, error) {
 	if coordinator == nil {
 		return nil, errors.New("first_trust_coordinator_unavailable")
@@ -82,6 +100,8 @@ func (handler *firstTrustAdminHandler) handle(ctx context.Context, payload []byt
 		return handler.reply(handler.coordinator.openPairingWindow(ctx, command.key, command.duration))
 	case "close":
 		return handler.reply(handler.coordinator.closePairingWindow(ctx, command.key))
+	case "select_candidate":
+		return handler.reply(handler.coordinator.selectCandidate(ctx, command.key, command.candidateRef, command.expectedSKI))
 	case "confirm":
 		return handler.reply(handler.coordinator.confirm(ctx, command.key, command.fingerprint, command.nonce, command.expiresAt, command.connection, command.storeGeneration))
 	case "cancel":
@@ -112,6 +132,25 @@ func (handler *firstTrustAdminHandler) handle(ctx context.Context, payload []byt
 			Connection:      connection,
 			StoreGeneration: storeGeneration,
 			Complete:        complete,
+		})
+	case "candidates":
+		snapshot := handler.coordinator.discoveredCandidateSnapshot()
+		candidates := make([]firstTrustDiscoveredCandidateReply, 0, len(snapshot.candidates))
+		for _, candidate := range snapshot.candidates {
+			candidates = append(candidates, firstTrustDiscoveredCandidateReply{
+				CandidateRef:  candidate.ref,
+				Lifecycle:     candidate.lifecycle,
+				FirstReceived: candidate.firstReceived.Format(time.RFC3339Nano),
+				LastReceived:  candidate.lastReceived.Format(time.RFC3339Nano),
+				LocalRevision: candidate.revision,
+			})
+		}
+		return marshalFirstTrustAdmin(firstTrustCandidatesReply{
+			Outcome:       "candidates",
+			SnapshotState: snapshot.state,
+			InvalidReason: snapshot.invalidReason,
+			LocalRevision: snapshot.revision,
+			Candidates:    candidates,
 		})
 	default:
 		return handler.failure("invalid_command")
@@ -186,6 +225,20 @@ func decodeFirstTrustAdminCommand(payload []byte) (firstTrustAdminCommand, error
 	case "close":
 		command.key, err = decodeFirstTrustAdminString(fields, "idempotency_key", firstTrustMaximumKeyBytes)
 		required["idempotency_key"] = struct{}{}
+	case "select_candidate":
+		command.key, err = decodeFirstTrustAdminString(fields, "idempotency_key", firstTrustMaximumKeyBytes)
+		if err == nil {
+			command.candidateRef, err = decodeFirstTrustAdminString(fields, "candidate_ref", firstTrustMaximumCandidateRefBytes)
+		}
+		if err == nil {
+			command.expectedSKI, err = decodeFirstTrustAdminString(fields, "expected_ski", 40)
+		}
+		if _, normalized, ok := decodeFirstTrustSKI(command.expectedSKI); err == nil && (!ok || normalized != command.expectedSKI) {
+			err = errAdminCommand
+		}
+		required["idempotency_key"] = struct{}{}
+		required["candidate_ref"] = struct{}{}
+		required["expected_ski"] = struct{}{}
 	case "confirm":
 		err = decodeFirstTrustAdminBinding(fields, &command, true)
 		for _, field := range []string{"idempotency_key", "fingerprint_v1", "candidate_nonce", "expires_at", "connection_generation", "starting_store_generation"} {
@@ -213,7 +266,7 @@ func decodeFirstTrustAdminCommand(payload []byte) (firstTrustAdminCommand, error
 		for _, field := range repairFields {
 			required[field] = struct{}{}
 		}
-	case "status", "candidate":
+	case "status", "candidate", "candidates":
 	default:
 		return firstTrustAdminCommand{}, errAdminCommand
 	}

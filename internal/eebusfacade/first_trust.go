@@ -46,6 +46,7 @@ type firstTrustEffectKind uint8
 const (
 	firstTrustEffectCancel firstTrustEffectKind = iota
 	firstTrustEffectRegister
+	firstTrustEffectCancelUnbound
 )
 
 type firstTrustEffect struct {
@@ -110,6 +111,8 @@ type firstTrustWindow struct {
 type firstTrustCandidate struct {
 	remote          []byte
 	shipID          string
+	tlsBound        bool
+	tlsRequired     bool
 	nonce           string
 	expiresAt       time.Time
 	connection      uint64
@@ -121,6 +124,8 @@ type firstTrustRequest struct {
 	operation       string
 	duration        time.Duration
 	fingerprint     string
+	candidateRef    string
+	expectedSKI     string
 	nonce           string
 	expiresAt       time.Time
 	connection      uint64
@@ -131,6 +136,8 @@ func (request firstTrustRequest) equal(other firstTrustRequest) bool {
 	return request.operation == other.operation &&
 		request.duration == other.duration &&
 		request.fingerprint == other.fingerprint &&
+		request.candidateRef == other.candidateRef &&
+		request.expectedSKI == other.expectedSKI &&
 		request.nonce == other.nonce &&
 		request.expiresAt.Equal(other.expiresAt) &&
 		request.connection == other.connection &&
@@ -158,10 +165,11 @@ type firstTrustInflight struct {
 type firstTrustCoordinator struct {
 	mu firstTrustCoordinatorMutex
 
-	pendingEffects []firstTrustEffect
-	effectMu       sync.Mutex
-	effectQueue    []firstTrustEffect
-	effectDraining bool
+	pendingEffects  []firstTrustEffect
+	effectMu        sync.Mutex
+	effectQueue     []firstTrustEffect
+	effectDraining  bool
+	pairingEffectMu sync.Mutex
 
 	now            func() time.Time
 	random         io.Reader
@@ -191,6 +199,14 @@ type firstTrustCoordinator struct {
 	pairingRegistrationEnabled bool
 	pairingRegistrationFault   bool
 
+	candidateQueuer                firstTrustCandidateQueuer
+	candidateSelectionRequired     bool
+	discoveredCandidates           map[string]firstTrustDiscoveredCandidate
+	candidateSnapshotState         string
+	candidateSnapshotInvalidReason string
+	candidateSnapshotRevision      uint64
+	candidateSelection             *firstTrustCandidateSelection
+
 	monotonicNow         func() time.Duration
 	recoveryStore        firstTrustControlPersistence
 	anchor               firstTrustAnchorProvider
@@ -215,16 +231,17 @@ func newFirstTrustCoordinator(now func() time.Time, random io.Reader, store firs
 		random = rand.Reader
 	}
 	coordinator := &firstTrustCoordinator{
-		now:            now,
-		random:         random,
-		store:          store,
-		effects:        effects,
-		commitWait:     firstTrustCommitWait,
-		withdrawalWait: firstTrustWithdrawalWait,
-		phase:          firstTrustDisabled,
-		trustedRemotes: make(map[string]string),
-		replays:        make(map[string]firstTrustReplay),
-		retired:        make(map[string]firstTrustRetired),
+		now:                    now,
+		random:                 random,
+		store:                  store,
+		effects:                effects,
+		commitWait:             firstTrustCommitWait,
+		withdrawalWait:         firstTrustWithdrawalWait,
+		phase:                  firstTrustDisabled,
+		trustedRemotes:         make(map[string]string),
+		replays:                make(map[string]firstTrustReplay),
+		retired:                make(map[string]firstTrustRetired),
+		candidateSnapshotState: "empty",
 	}
 	coordinator.mu.coordinator = coordinator
 	return coordinator
@@ -279,6 +296,7 @@ func (coordinator *firstTrustCoordinator) reopen(ctx context.Context) string {
 	coordinator.inflight = nil
 	coordinator.replays = make(map[string]firstTrustReplay)
 	coordinator.retired = make(map[string]firstTrustRetired)
+	coordinator.resetCandidateDiscoveryLocked("empty")
 	coordinator.stopTimerLocked()
 	coordinator.stopRetentionTimerLocked()
 	if err := coordinator.setWaitingLocked(false); err != nil {
@@ -438,6 +456,10 @@ func (coordinator *firstTrustCoordinator) admit(remote []byte, connection uint64
 		coordinator.cancelRemoteLocked(remote, connection)
 		return "candidate_ineligible"
 	}
+	if coordinator.candidateSelectionRequired && !coordinator.selectedCandidateMatchesLocked(remote) {
+		coordinator.cancelRemoteLocked(remote, connection)
+		return "candidate_not_selected"
+	}
 	if coordinator.currentCandidate != nil && connection == coordinator.currentCandidate.connection && bytes.Equal(remote, coordinator.currentCandidate.remote) {
 		if coordinator.phase == firstTrustCandidatePending {
 			return "candidate_pending"
@@ -482,6 +504,7 @@ func (coordinator *firstTrustCoordinator) admit(remote []byte, connection uint64
 		connection:      connection,
 		storeGeneration: selectedGeneration,
 		requests:        make(map[string]firstTrustRequest),
+		tlsRequired:     coordinator.candidateSelectionRequired,
 	}
 	coordinator.phase = firstTrustCandidatePending
 	coordinator.scheduleExpiryLocked(expiresAt)
@@ -515,6 +538,7 @@ func (coordinator *firstTrustCoordinator) connectionClosed(remote []byte, connec
 	}
 	coordinator.finishCandidateRequestsLocked("connection_closed", now)
 	coordinator.currentCandidate = nil
+	coordinator.finishCandidateSelectionLocked("connection_closed", true)
 	if coordinator.window != nil && now.Before(coordinator.window.deadline) {
 		coordinator.phase = firstTrustOpenEmpty
 		coordinator.scheduleExpiryLocked(coordinator.window.deadline)
@@ -600,7 +624,8 @@ func (coordinator *firstTrustCoordinator) confirm(ctx context.Context, key, fing
 		coordinator.mu.Unlock()
 		return "confirmation_mismatch"
 	}
-	if candidate.shipID == "" {
+	if candidate.shipID == "" || candidate.tlsRequired &&
+		(!candidate.tlsBound || !coordinator.selectedCandidateMatchesLocked(candidate.remote)) {
 		coordinator.mu.Unlock()
 		return "association_incomplete"
 	}
@@ -660,6 +685,7 @@ func (coordinator *firstTrustCoordinator) confirm(ctx context.Context, key, fing
 			if err := coordinator.setWaitingLocked(false); err != nil {
 				terminalResult = "pairing_registration_failed"
 			}
+			coordinator.finishCandidateSelectionLocked(terminalResult, true)
 			coordinator.cancelRemoteLocked(remote, connection)
 			coordinator.recordReplayLocked(key, request, terminalResult, coordinator.now())
 			coordinator.commitFence = fence
@@ -718,6 +744,7 @@ func (coordinator *firstTrustCoordinator) cancel(ctx context.Context, key, nonce
 	coordinator.finishCandidateRequestsLocked(result, now)
 	coordinator.cancelRemoteLocked(candidate.remote, candidate.connection)
 	coordinator.currentCandidate = nil
+	coordinator.finishCandidateSelectionLocked(result, true)
 	if coordinator.window != nil && now.Before(coordinator.window.deadline) {
 		coordinator.phase = firstTrustOpenEmpty
 		coordinator.scheduleExpiryLocked(coordinator.window.deadline)
@@ -738,7 +765,8 @@ func (coordinator *firstTrustCoordinator) candidate() (string, string, time.Time
 		return "", "", time.Time{}, 0, 0, false, false
 	}
 	candidate := coordinator.currentCandidate
-	return hex.EncodeToString(candidate.remote), candidate.nonce, candidate.expiresAt, candidate.connection, candidate.storeGeneration, candidate.shipID != "", true
+	complete := candidate.shipID != "" && (!candidate.tlsRequired || candidate.tlsBound)
+	return hex.EncodeToString(candidate.remote), candidate.nonce, candidate.expiresAt, candidate.connection, candidate.storeGeneration, complete, true
 }
 
 func (coordinator *firstTrustCoordinator) state() string {
@@ -780,6 +808,7 @@ func (coordinator *firstTrustCoordinator) shutdown() error {
 	if coordinator.currentCandidate != nil {
 		coordinator.cancelRemoteLocked(coordinator.currentCandidate.remote, coordinator.currentCandidate.connection)
 	}
+	coordinator.resetCandidateDiscoveryLocked("terminal")
 	registrationErr := coordinator.setWaitingLocked(false)
 	coordinator.phase = firstTrustDisabled
 	coordinator.window = nil
@@ -846,6 +875,7 @@ func (coordinator *firstTrustCoordinator) finishCommit(token uint64, inflight *f
 	if err := coordinator.setWaitingLocked(false); err != nil {
 		result = "pairing_registration_failed"
 	}
+	coordinator.finishCandidateSelectionLocked(result, result != "trusted")
 	coordinator.recordReplayLocked(inflight.key, inflight.request, result, now)
 	if result == "trusted" {
 		coordinator.registerRemoteLocked(remote, connection)
@@ -883,6 +913,10 @@ func (coordinator *firstTrustCoordinator) activeKeyConflictLocked(key string, re
 			return !existing.equal(request)
 		}
 	}
+	if coordinator.candidateSelection != nil && !coordinator.candidateSelection.completed &&
+		coordinator.candidateSelection.key == key {
+		return !coordinator.candidateSelection.request.equal(request)
+	}
 	return false
 }
 
@@ -902,6 +936,12 @@ func (coordinator *firstTrustCoordinator) idempotencyCapacityLocked(key string, 
 			return false
 		}
 		count += len(coordinator.currentCandidate.requests)
+	}
+	if coordinator.candidateSelection != nil && !coordinator.candidateSelection.completed {
+		if coordinator.candidateSelection.key == key {
+			return false
+		}
+		count++
 	}
 	return count+1+reserve > firstTrustMaximumIdempotency
 }
@@ -1025,6 +1065,7 @@ func (coordinator *firstTrustCoordinator) expireLocked(now time.Time) {
 		coordinator.finishCandidateRequestsLocked("candidate_expired", now)
 		coordinator.cancelRemoteLocked(candidate.remote, candidate.connection)
 		coordinator.currentCandidate = nil
+		coordinator.finishCandidateSelectionLocked("candidate_expired", true)
 		if coordinator.window != nil && now.Before(coordinator.window.deadline) {
 			coordinator.phase = firstTrustOpenEmpty
 			coordinator.scheduleExpiryLocked(coordinator.window.deadline)
@@ -1046,6 +1087,9 @@ func (coordinator *firstTrustCoordinator) closeWindowLocked(result string, now t
 		candidate := coordinator.currentCandidate
 		coordinator.finishCandidateRequestsLocked(result, now)
 		coordinator.cancelRemoteLocked(candidate.remote, candidate.connection)
+	}
+	if cancelCandidate || coordinator.currentCandidate == nil {
+		coordinator.finishCandidateSelectionLocked(result, true)
 	}
 	coordinator.window = nil
 	coordinator.currentCandidate = nil
@@ -1120,7 +1164,13 @@ func (coordinator *firstTrustCoordinator) setWaitingLocked(value bool) error {
 	if coordinator.pairingRegistrationKnown && coordinator.pairingRegistrationEnabled == value {
 		return nil
 	}
-	if err := coordinator.effects.setWaiting(value); err != nil {
+	effects := coordinator.effects
+	coordinator.mu.Mutex.Unlock()
+	coordinator.pairingEffectMu.Lock()
+	err := effects.setWaiting(value)
+	coordinator.mu.Mutex.Lock()
+	coordinator.pairingEffectMu.Unlock()
+	if err != nil {
 		coordinator.failPairingRegistrationLocked()
 		return err
 	}
@@ -1167,6 +1217,7 @@ func (coordinator *firstTrustCoordinator) failPairingRegistrationLocked() {
 	coordinator.phase = firstTrustDisabled
 	coordinator.window = nil
 	coordinator.currentCandidate = nil
+	coordinator.finishCandidateSelectionLocked("pairing_registration_failed", true)
 	coordinator.reopening = false
 	coordinator.recovery = "QUARANTINED"
 	coordinator.recoveryReasonCode = "PAIRING_REGISTRATION_FAILED"
@@ -1181,6 +1232,16 @@ func (coordinator *firstTrustCoordinator) cancelRemoteLocked(remote []byte, conn
 			target:     coordinator.effects,
 			remote:     bytes.Clone(remote),
 			connection: connection,
+		})
+	}
+}
+
+func (coordinator *firstTrustCoordinator) cancelUnboundRemoteLocked(remote []byte) {
+	if coordinator.effects != nil {
+		coordinator.pendingEffects = append(coordinator.pendingEffects, firstTrustEffect{
+			kind:   firstTrustEffectCancelUnbound,
+			target: coordinator.effects,
+			remote: bytes.Clone(remote),
 		})
 	}
 }
@@ -1215,6 +1276,12 @@ func (coordinator *firstTrustCoordinator) drainEffects() {
 		case firstTrustEffectRegister:
 			if effect.target.connectionAlive(effect.remote, effect.connection) {
 				effect.target.registerRemoteSKI(effect.remote, effect.connection)
+			}
+		case firstTrustEffectCancelUnbound:
+			if target, ok := effect.target.(interface{ cancelCandidate([]byte) }); ok {
+				target.cancelCandidate(effect.remote)
+			} else {
+				effect.target.cancelRemote(effect.remote, 0)
 			}
 		}
 	}

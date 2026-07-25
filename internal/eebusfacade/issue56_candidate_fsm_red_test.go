@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	issue56SKIA = "1111111111111111111111111111111111111111"
-	issue56SKIB = "2222222222222222222222222222222222222222"
+	issue56SKIA = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+	issue56SKIB = "fedcbafedcbafedcbafedcbafedcbafedcbafedc"
 )
 
 type issue56Fixture struct {
@@ -142,6 +142,7 @@ func TestIssue56MalformedCandidateSnapshotsAtomicallyClearSelection(t *testing.T
 		{name: "overflow", candidates: overflow, reason: "candidate_snapshot_overflow"},
 		{name: "empty ref", candidates: []shipapi.PairingCandidateRef{{SKI: issue56SKIA}}, reason: "invalid_candidate_ref"},
 		{name: "long ref", candidates: []shipapi.PairingCandidateRef{{CandidateRef: strings.Repeat("x", 129), SKI: issue56SKIA}}, reason: "invalid_candidate_ref"},
+		{name: "escaping ref", candidates: []shipapi.PairingCandidateRef{{CandidateRef: strings.Repeat("<", 128), SKI: issue56SKIA}}, reason: "invalid_candidate_ref"},
 		{name: "uppercase ski", candidates: []shipapi.PairingCandidateRef{{CandidateRef: "candidate-a", SKI: strings.ToUpper(issue56SKIA)}}, reason: "invalid_claimed_ski"},
 		{name: "short ski", candidates: []shipapi.PairingCandidateRef{{CandidateRef: "candidate-a", SKI: "11"}}, reason: "invalid_claimed_ski"},
 		{name: "duplicate ref", candidates: []shipapi.PairingCandidateRef{
@@ -230,6 +231,22 @@ func TestIssue56SelectCandidateCommandIsStrictIdempotentAndEndpointFree(t *testi
 	}
 	if calls := fixture.service.queueSnapshot(); !reflect.DeepEqual(calls, [][2]string{{"candidate-a", issue56SKIA}}) {
 		t.Fatalf("queue calls = %#v", calls)
+	}
+	fixture.coordinator.mu.Lock()
+	delete(fixture.coordinator.replays, "select-a")
+	delete(fixture.coordinator.retired, "select-a")
+	fixture.coordinator.mu.Unlock()
+	replayWithoutCache := make(chan map[string]json.RawMessage, 1)
+	go func() {
+		replayWithoutCache <- issue56Admin(t, fixture.handler, command)
+	}()
+	select {
+	case reply = <-replayWithoutCache:
+		if issue56String(t, reply, "outcome") != "candidate_queued" {
+			t.Fatalf("active selection replay without cache = %s", issue56JSON(t, reply))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("active selection replay without cache did not terminate")
 	}
 	assertMSP04BCommitCount(t, fixture.base.store, 0)
 	if got := fixture.service.registerCount(); got != 0 {
@@ -326,6 +343,27 @@ func TestIssue56QueueErrorsMapDeterministicallyAndNeverTrust(t *testing.T) {
 	}
 }
 
+func TestIssue56QueueErrorAfterReentrantCallbacksRetiresPartialCandidate(t *testing.T) {
+	fixture := newIssue56Fixture(t)
+	fixture.service.queue = func(_ string, expectedSKI string) error {
+		fixture.facade.RemoteSKIConnected(nil, expectedSKI)
+		fixture.facade.ServiceShipIDUpdate(expectedSKI, "ship-id-a")
+		return shipapi.ErrPairingCandidateUnavailable
+	}
+	fixture.facade.VisiblePairingCandidatesUpdated(nil, []shipapi.PairingCandidateRef{{CandidateRef: "candidate-a", SKI: issue56SKIA}})
+	reply := issue56Admin(t, fixture.handler, issue56SelectCommand("select", "candidate-a", issue56SKIA))
+	if issue56String(t, reply, "outcome") != "candidate_unavailable" {
+		t.Fatalf("queue outcome = %s", issue56JSON(t, reply))
+	}
+	if _, _, _, _, _, _, ok := fixture.coordinator.candidate(); ok {
+		t.Fatal("queue error retained a reentrant partial candidate")
+	}
+	assertMSP04BCommitCount(t, fixture.base.store, 0)
+	if got := fixture.service.registerCount(); got != 0 {
+		t.Fatalf("registration after queue error = %d", got)
+	}
+}
+
 func TestIssue56ReentrantCallbacksRequireTLSAndSHIPIDBeforeDurableConfirm(t *testing.T) {
 	fixture := newIssue56Fixture(t)
 	fixture.service.queue = func(_ string, expectedSKI string) error {
@@ -393,7 +431,7 @@ func TestIssue56TLSBoundAndSHIPIDFencesAreIndependent(t *testing.T) {
 			if issue56String(t, reply, "outcome") != "candidate_queued" {
 				t.Fatalf("select outcome = %s", issue56JSON(t, reply))
 			}
-			binding := issue56CurrentBinding(t, fixture)
+			binding := issue56Binding(t, fixture, false)
 			if got := confirmMSP04B(fixture.coordinator, "confirm", binding); got != "association_incomplete" {
 				t.Fatalf("partial evidence confirm = %q", got)
 			}
@@ -510,6 +548,52 @@ func TestIssue56CancelledContextAndRestartReconstructNoCandidates(t *testing.T) 
 	}
 }
 
+func TestIssue56ContextCancellationDuringQueueFailsClosed(t *testing.T) {
+	fixture := newIssue56Fixture(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	fixture.service.queue = func(string, string) error {
+		close(entered)
+		<-release
+		return nil
+	}
+	fixture.facade.VisiblePairingCandidatesUpdated(nil, []shipapi.PairingCandidateRef{{CandidateRef: "candidate-a", SKI: issue56SKIA}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	payload, err := json.Marshal(issue56SelectCommand("select", "candidate-a", issue56SKIA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan map[string]json.RawMessage, 1)
+	go func() {
+		var reply map[string]json.RawMessage
+		if err := json.Unmarshal(fixture.handler.handle(ctx, payload), &reply); err != nil {
+			t.Errorf("decode selection reply: %v", err)
+			return
+		}
+		done <- reply
+	}()
+	waitMSP04BSignal(t, entered, "candidate queue entry")
+	cancel()
+	close(release)
+
+	select {
+	case reply := <-done:
+		if issue56String(t, reply, "outcome") != "request_cancelled" {
+			t.Fatalf("cancelled inflight selection = %s", issue56JSON(t, reply))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled inflight selection did not terminate")
+	}
+	if fixture.service.cancelCount() == 0 {
+		t.Fatal("cancelled inflight selection did not cancel the frozen attempt")
+	}
+	assertMSP04BCommitCount(t, fixture.base.store, 0)
+	if got := fixture.service.registerCount(); got != 0 {
+		t.Fatalf("registration after context cancellation = %d", got)
+	}
+}
+
 func TestIssue56CandidateCallbackNeverFeedsRuntimeObservation(t *testing.T) {
 	handler, err := newRuntimeServiceHandler(RuntimeConfig{}, issue56SKIB, time.Now)
 	if err != nil {
@@ -577,9 +661,13 @@ func newIssue56Fixture(t *testing.T) *issue56Fixture {
 }
 
 func issue56CurrentBinding(t *testing.T, fixture *issue56Fixture) msp04bBindings {
+	return issue56Binding(t, fixture, true)
+}
+
+func issue56Binding(t *testing.T, fixture *issue56Fixture, requireComplete bool) msp04bBindings {
 	t.Helper()
 	fingerprint, nonce, expiresAt, connection, storeGeneration, complete, ok := fixture.coordinator.candidate()
-	if !ok || fingerprint != issue56SKIA || !complete {
+	if !ok || fingerprint != issue56SKIA || requireComplete && !complete {
 		t.Fatalf("current candidate incomplete: fingerprint=%q complete=%t ok=%t", fingerprint, complete, ok)
 	}
 	return msp04bBindings{

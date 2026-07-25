@@ -207,8 +207,10 @@ func runFakePeerSmoke(opts fakePeerOptions) caseResult {
 	if closedClient.hasState(shipmodel.SmeStateComplete) {
 		return fakePeerFail("closed-client-session", fmt.Errorf("closed window completed SHIP"))
 	}
-	if !handler.waitForState(closedClient.localSKI, shipapi.ConnectionStateReceivedPairingRequest, opts.Timeout) {
-		return fakePeerFail("closed-server-pairing-observation", fmt.Errorf("states=%v", handler.statesFor(closedClient.localSKI)))
+	for _, state := range handler.statesFor(closedClient.localSKI) {
+		if state == shipapi.ConnectionStateReceivedPairingRequest {
+			return fakePeerFail("closed-server-pairing-observation", fmt.Errorf("closed registration exposed pairing request: states=%v", handler.statesFor(closedClient.localSKI)))
+		}
 	}
 	if approvals := handler.approvalCount(closedClient.localSKI); approvals != 0 {
 		return fakePeerFail("closed-server-trust", fmt.Errorf("approvals=%d", approvals))

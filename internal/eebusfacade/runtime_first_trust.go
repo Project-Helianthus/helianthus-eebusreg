@@ -52,6 +52,7 @@ type runtimeServiceReader struct {
 }
 
 var _ eebusapi.ServiceReaderInterface = (*runtimeServiceReader)(nil)
+var _ eebusapi.PairingCandidateReader = (*runtimeServiceReader)(nil)
 
 func newRuntimeServiceReader(observation *runtimeServiceHandler) *runtimeServiceReader {
 	return &runtimeServiceReader{observation: observation}
@@ -114,6 +115,12 @@ func (reader *runtimeServiceReader) VisibleRemoteServicesUpdated(service eebusap
 	}
 	if facade := reader.trustFacade(); facade != nil {
 		facade.VisibleRemoteServicesUpdated(service, remotes)
+	}
+}
+
+func (reader *runtimeServiceReader) VisiblePairingCandidatesUpdated(service eebusapi.ServiceInterface, candidates []shipapi.PairingCandidateRef) {
+	if facade := reader.trustFacade(); facade != nil {
+		facade.VisiblePairingCandidatesUpdated(service, candidates)
 	}
 }
 

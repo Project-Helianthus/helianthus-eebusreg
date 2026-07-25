@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"sync"
 
 	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
@@ -17,6 +18,10 @@ type firstTrustService interface {
 	RegisterRemoteSKI(string)
 	CancelPairingWithSKI(string)
 	SetPairingRegistration(bool) error
+}
+
+type firstTrustCandidateService interface {
+	QueuePairingCandidate(string, string) error
 }
 
 type firstTrustWithdrawalService interface {
@@ -68,6 +73,7 @@ type firstTrustFacade struct {
 	attemptMu sync.Mutex
 
 	service             firstTrustService
+	candidateService    firstTrustCandidateService
 	coordinator         firstTrustEventSink
 	next                uint64
 	pairingEpoch        uint64
@@ -97,6 +103,12 @@ func newFirstTrustFacade(service firstTrustService, coordinator firstTrustEventS
 		}
 		if sink, ok := coordinator.(firstTrustPairingRegistrationSink); ok {
 			sink.pairingRegistrationInitialized(false)
+		}
+	}
+	if candidateService, ok := service.(firstTrustCandidateService); ok {
+		facade.candidateService = candidateService
+		if sink, ok := coordinator.(firstTrustCandidateSelectionSink); ok {
+			sink.configureCandidateSelection(facade)
 		}
 	}
 	return facade, nil
@@ -135,6 +147,13 @@ func (facade *firstTrustFacade) RemoteSKIConnected(_ eebusapi.ServiceInterface, 
 	if stale != nil && facade.coordinator != nil {
 		facade.coordinator.connectionClosed(remote, stale.generation)
 	}
+	if !cancel && connection != nil {
+		if sink, ok := facade.coordinator.(firstTrustTLSBindingSink); ok {
+			if sink.remoteSKIConnected(remote, connection.generation) != "tls_bound" {
+				cancel = true
+			}
+		}
+	}
 	if cancel {
 		facade.cancelBySKI(normalized)
 	}
@@ -172,6 +191,12 @@ func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterfac
 }
 
 func (*firstTrustFacade) VisibleRemoteServicesUpdated(eebusapi.ServiceInterface, []shipapi.RemoteService) {
+}
+
+func (facade *firstTrustFacade) VisiblePairingCandidatesUpdated(_ eebusapi.ServiceInterface, candidates []shipapi.PairingCandidateRef) {
+	if sink, ok := facade.coordinator.(firstTrustCandidateSelectionSink); ok {
+		sink.visiblePairingCandidatesUpdated(candidates)
+	}
 }
 
 func (facade *firstTrustFacade) ServiceShipIDUpdate(ski string, shipID string) {
@@ -329,6 +354,9 @@ func (facade *firstTrustFacade) handlePairingFailure(remote []byte, normalized s
 
 	retry, ok := facade.retrySink()
 	if !ok {
+		if facade.coordinator != nil {
+			facade.coordinator.connectionClosed(remote, generation)
+		}
 		facade.cancelGeneration(remote, generation)
 		return
 	}
@@ -403,6 +431,20 @@ func (facade *firstTrustFacade) setWaiting(value bool) error {
 
 func (facade *firstTrustFacade) cancelRemote(remote []byte, generation uint64) {
 	facade.cancelGeneration(remote, generation)
+}
+
+func (facade *firstTrustFacade) cancelCandidate(remote []byte) {
+	if len(remote) != 20 {
+		return
+	}
+	facade.cancelBySKI(hex.EncodeToString(remote))
+}
+
+func (facade *firstTrustFacade) queuePairingCandidate(candidateRef, expectedSKI string) error {
+	if facade == nil || facade.candidateService == nil {
+		return errors.New("pairing candidate queue is unavailable")
+	}
+	return facade.candidateService.QueuePairingCandidate(candidateRef, expectedSKI)
 }
 
 func (facade *firstTrustFacade) connectionAlive(remote []byte, generation uint64) bool {

@@ -8,9 +8,9 @@ export GOWORK=off
 export GOTOOLCHAIN=local
 
 eebus_module_path="github.com/Project-Helianthus/helianthus-eebus-go"
-eebus_module_version="v0.7.1-helianthus.4"
+eebus_module_version="v0.7.1-helianthus.6"
 ship_module_path="github.com/Project-Helianthus/helianthus-ship-go"
-ship_module_version="v0.6.1-helianthus.5"
+ship_module_version="v0.6.1-helianthus.6"
 
 echo "==> toolchain boundary proof"
 go version

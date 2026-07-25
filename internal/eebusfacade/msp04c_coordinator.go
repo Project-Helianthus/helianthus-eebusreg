@@ -222,6 +222,7 @@ func (coordinator *firstTrustCoordinator) resetVolatileFirstTrustLocked() {
 	coordinator.recoveryOperation = nil
 	coordinator.replays = make(map[string]firstTrustReplay)
 	coordinator.retired = make(map[string]firstTrustRetired)
+	coordinator.resetCandidateDiscoveryLocked("empty")
 	coordinator.stopTimerLocked()
 	coordinator.stopRetentionTimerLocked()
 	coordinator.setWaitingLocked(false)
@@ -298,6 +299,12 @@ func (coordinator *firstTrustCoordinator) authorizeRuntimeAttempt(remote []byte)
 		}
 		return "attempt_denied"
 	}
+	if coordinator.candidateSelectionRequired {
+		if coordinator.selectedCandidateMatchesLocked(remote) {
+			return "pairing_authorized"
+		}
+		return "attempt_denied"
+	}
 	if coordinator.phase == firstTrustOpenEmpty && coordinator.window != nil {
 		return "pairing_authorized"
 	}
@@ -360,6 +367,7 @@ func (coordinator *firstTrustCoordinator) closeVolatileFirstTrustLocked() {
 		coordinator.finishCandidateRequestsLocked("stale_request", now)
 		coordinator.cancelRemoteLocked(coordinator.currentCandidate.remote, coordinator.currentCandidate.connection)
 	}
+	coordinator.finishCandidateSelectionLocked("stale_request", true)
 	coordinator.window = nil
 	coordinator.currentCandidate = nil
 	coordinator.stopTimerLocked()
@@ -590,6 +598,7 @@ func (coordinator *firstTrustCoordinator) finishRecoveryConfirmationLocked(
 	coordinator.finishCandidateRequestsExceptLocked(inflight.key, "stale_request", now)
 	coordinator.recordReplayLocked(inflight.key, inflight.request, result, now)
 	coordinator.currentCandidate = nil
+	coordinator.finishCandidateSelectionLocked(result, result != "trusted")
 	coordinator.window = nil
 	coordinator.stopTimerLocked()
 	coordinator.setWaitingLocked(false)
