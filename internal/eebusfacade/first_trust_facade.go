@@ -226,40 +226,66 @@ func (facade *firstTrustFacade) outgoingAttemptTerminated(remote []byte, generat
 		return
 	}
 	facade.callbackMu.Lock()
-	defer facade.callbackMu.Unlock()
 	normalized := hex.EncodeToString(remote)
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
 	if connection == nil || connection.generation != generation || connection.attemptClass != "pairing_authorized" ||
 		connection.failureRecorded || connection.cancelled || connection.blocked {
 		facade.mu.Unlock()
+		facade.callbackMu.Unlock()
 		return
 	}
+	effectConnection := connection
+	wasActive := connection.active
+	wasConnected := connection.connected
+	shipID := connection.shipID
 	connection.failureRecorded = true
 	connection.retryAdmitted = false
 	connection.outgoingRetry = false
-	connected := connection.connected
+	connection.active = false
+	connection.cancelled = true
+	connection.blocked = true
+	connection.shipID = ""
 	facade.mu.Unlock()
+	facade.callbackMu.Unlock()
 
 	if facade.coordinator != nil && facade.coordinator.connectionClosed(remote, generation) == "commit_in_progress" {
+		facade.callbackMu.Lock()
+		facade.mu.Lock()
+		connection = facade.connections[normalized]
+		if connection == effectConnection && connection.generation == generation && connection.connected == wasConnected {
+			connection.active = wasActive
+			connection.cancelled = false
+			connection.blocked = false
+			connection.shipID = shipID
+		}
+		facade.mu.Unlock()
+		facade.callbackMu.Unlock()
 		return
 	}
+
+	facade.callbackMu.Lock()
 	facade.mu.Lock()
 	connection = facade.connections[normalized]
-	if connection != nil && connection.generation == generation {
-		connection.active = false
-		connection.cancelled = true
-		connection.blocked = true
-		connection.shipID = ""
-		if !connected {
-			delete(facade.connections, normalized)
-		}
+	if connection != effectConnection || connection.generation != generation {
+		facade.mu.Unlock()
+		facade.callbackMu.Unlock()
+		return
 	}
+	connected := connection.connected
 	facade.mu.Unlock()
 	facade.cancelBySKI(normalized)
 	if connected {
 		facade.disconnectCancelledBySKI(normalized)
 	}
+
+	facade.mu.Lock()
+	connection = facade.connections[normalized]
+	if connection == effectConnection && connection.generation == generation && !connection.connected {
+		delete(facade.connections, normalized)
+	}
+	facade.mu.Unlock()
+	facade.callbackMu.Unlock()
 }
 
 func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterface, ski string) {
