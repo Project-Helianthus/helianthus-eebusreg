@@ -768,15 +768,15 @@ func (coordinator *firstTrustCoordinator) cancel(ctx context.Context, key, nonce
 		coordinator.currentCandidate == nil {
 		return "stale_request"
 	}
+	candidate := coordinator.currentCandidate
+	if nonce != candidate.nonce || connection != candidate.connection || storeGeneration != candidate.storeGeneration {
+		return "confirmation_mismatch"
+	}
 	if coordinator.idempotencyCapacityLocked(key, 0) {
 		return "idempotency_capacity"
 	}
 	if result := coordinator.bindCandidateRequestLocked(key, request); result != "" {
 		return result
-	}
-	candidate := coordinator.currentCandidate
-	if nonce != candidate.nonce || connection != candidate.connection || storeGeneration != candidate.storeGeneration {
-		return "confirmation_mismatch"
 	}
 	result := "cancelled"
 	coordinator.revokeTransientTrustLocked(candidate)

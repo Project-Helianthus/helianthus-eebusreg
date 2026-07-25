@@ -26,13 +26,18 @@ type firstTrustOutgoingAttemptTLSLifecycle interface {
 	outgoingAttemptTLSBound([]byte, uint64) bool
 }
 
+type firstTrustOutgoingAttemptTerminalLifecycle interface {
+	outgoingAttemptTerminated([]byte, uint64)
+}
+
 type firstTrustOutgoingAttemptBridge struct {
 	coordinator *firstTrustCoordinator
 
-	mu           sync.RWMutex
-	lifecycle    firstTrustOutgoingAttemptLifecycle
-	tlsLifecycle firstTrustOutgoingAttemptTLSLifecycle
-	observer     firstTrustOutgoingAttemptObserver
+	mu                sync.RWMutex
+	lifecycle         firstTrustOutgoingAttemptLifecycle
+	tlsLifecycle      firstTrustOutgoingAttemptTLSLifecycle
+	terminalLifecycle firstTrustOutgoingAttemptTerminalLifecycle
+	observer          firstTrustOutgoingAttemptObserver
 
 	attemptMu         sync.Mutex
 	pendingFailures   map[string]firstTrustPendingOutgoingFailure
@@ -89,8 +94,10 @@ func (bridge *firstTrustOutgoingAttemptBridge) bindTLSLifecycle(lifecycle firstT
 	if bridge == nil {
 		return
 	}
+	terminal, _ := lifecycle.(firstTrustOutgoingAttemptTerminalLifecycle)
 	bridge.mu.Lock()
 	bridge.tlsLifecycle = lifecycle
+	bridge.terminalLifecycle = terminal
 	bridge.mu.Unlock()
 }
 
@@ -277,6 +284,11 @@ func (bridge *firstTrustOutgoingAttemptBridge) OutgoingAttemptHandshakeStateUpda
 		}
 		bridge.clearPendingFailure(normalized, converted)
 		bridge.clearHandshakeObservation(converted)
+		if candidateConnection != 0 {
+			bridge.mutateTerminalLifecycle(func(lifecycle firstTrustOutgoingAttemptTerminalLifecycle) {
+				lifecycle.outgoingAttemptTerminated(remote, candidateConnection)
+			})
+		}
 	}
 	bridge.mutateLifecycle(func(lifecycle firstTrustOutgoingAttemptLifecycle) {
 		lifecycle.ServicePairingDetailUpdate(normalized, runtimeOutgoingAttemptPairingDetail(state))
@@ -295,6 +307,15 @@ func (bridge *firstTrustOutgoingAttemptBridge) mutateLifecycle(mutate func(first
 func (bridge *firstTrustOutgoingAttemptBridge) mutateTLSLifecycle(mutate func(firstTrustOutgoingAttemptTLSLifecycle)) {
 	bridge.mu.RLock()
 	lifecycle := bridge.tlsLifecycle
+	bridge.mu.RUnlock()
+	if lifecycle != nil {
+		mutate(lifecycle)
+	}
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) mutateTerminalLifecycle(mutate func(firstTrustOutgoingAttemptTerminalLifecycle)) {
+	bridge.mu.RLock()
+	lifecycle := bridge.terminalLifecycle
 	bridge.mu.RUnlock()
 	if lifecycle != nil {
 		mutate(lifecycle)

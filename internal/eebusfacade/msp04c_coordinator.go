@@ -340,6 +340,12 @@ func (coordinator *firstTrustCoordinator) authorizeRuntimeAttempt(remote []byte)
 	return "attempt_denied"
 }
 
+func (coordinator *firstTrustCoordinator) outgoingAttemptOwnsRetry(remote []byte) bool {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	return coordinator.candidateSelectionRequired && coordinator.selectedCandidateMatchesLocked(remote)
+}
+
 func (coordinator *firstTrustCoordinator) runtimeStartAuthorized() bool {
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()

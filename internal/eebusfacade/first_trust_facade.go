@@ -41,6 +41,10 @@ type firstTrustAttemptAuthorizer interface {
 	authorizeRuntimeAttempt([]byte) string
 }
 
+type firstTrustOutgoingAttemptRetryOwner interface {
+	outgoingAttemptOwnsRetry([]byte) bool
+}
+
 type firstTrustEventSink interface {
 	admit([]byte, uint64) string
 	serviceShipIDUpdate([]byte, uint64, string) string
@@ -67,6 +71,7 @@ type firstTrustConnection struct {
 	connected       bool
 	attemptStarted  bool
 	retryAdmitted   bool
+	outgoingRetry   bool
 	failureRecorded bool
 	cancelled       bool
 	blocked         bool
@@ -214,6 +219,47 @@ func (facade *firstTrustFacade) outgoingAttemptTLSBound(remote []byte, generatio
 	}
 	connection.tlsBound = true
 	return true
+}
+
+func (facade *firstTrustFacade) outgoingAttemptTerminated(remote []byte, generation uint64) {
+	if facade == nil || len(remote) != 20 || generation == 0 {
+		return
+	}
+	facade.callbackMu.Lock()
+	defer facade.callbackMu.Unlock()
+	normalized := hex.EncodeToString(remote)
+	facade.mu.Lock()
+	connection := facade.connections[normalized]
+	if connection == nil || connection.generation != generation || connection.attemptClass != "pairing_authorized" ||
+		connection.failureRecorded || connection.cancelled || connection.blocked {
+		facade.mu.Unlock()
+		return
+	}
+	connection.failureRecorded = true
+	connection.retryAdmitted = false
+	connection.outgoingRetry = false
+	connected := connection.connected
+	facade.mu.Unlock()
+
+	if facade.coordinator != nil && facade.coordinator.connectionClosed(remote, generation) == "commit_in_progress" {
+		return
+	}
+	facade.mu.Lock()
+	connection = facade.connections[normalized]
+	if connection != nil && connection.generation == generation {
+		connection.active = false
+		connection.cancelled = true
+		connection.blocked = true
+		connection.shipID = ""
+		if !connected {
+			delete(facade.connections, normalized)
+		}
+	}
+	facade.mu.Unlock()
+	facade.cancelBySKI(normalized)
+	if connected {
+		facade.disconnectCancelledBySKI(normalized)
+	}
 }
 
 func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterface, ski string) {
@@ -443,7 +489,11 @@ func (facade *firstTrustFacade) beginAttempt(remote []byte, normalized string, c
 	scope := connection.retryScope
 	facade.mu.Unlock()
 
-	if retry, ok := facade.retrySink(); ok {
+	outgoingOwnsRetry := false
+	if owner, ok := facade.coordinator.(firstTrustOutgoingAttemptRetryOwner); ok {
+		outgoingOwnsRetry = attemptClass == "pairing_authorized" && owner.outgoingAttemptOwnsRetry(remote)
+	}
+	if retry, ok := facade.retrySink(); ok && !outgoingOwnsRetry {
 		if result := retry.admitRetry(context.Background(), scope); result != "retry_admitted" {
 			facade.discardRetryGeneration(remote, normalized, generation)
 			return nil
@@ -462,7 +512,8 @@ func (facade *firstTrustFacade) beginAttempt(remote []byte, normalized string, c
 	facade.mu.Lock()
 	connection = facade.connections[normalized]
 	if connection != nil && connection.generation == generation {
-		connection.retryAdmitted = true
+		connection.retryAdmitted = !outgoingOwnsRetry
+		connection.outgoingRetry = outgoingOwnsRetry
 	}
 	facade.mu.Unlock()
 	return connection
@@ -486,15 +537,25 @@ func (facade *firstTrustFacade) discardRetryGeneration(remote []byte, normalized
 func (facade *firstTrustFacade) handlePairingFailure(remote []byte, normalized string) {
 	facade.mu.Lock()
 	connection := facade.connections[normalized]
-	if connection == nil || !connection.retryAdmitted || connection.failureRecorded {
+	if connection == nil || (!connection.retryAdmitted && !connection.outgoingRetry) || connection.failureRecorded {
 		facade.mu.Unlock()
 		return
 	}
 	connection.failureRecorded = true
 	generation := connection.generation
 	scope := connection.retryScope
+	outgoingRetry := connection.outgoingRetry
+	connection.retryAdmitted = false
+	connection.outgoingRetry = false
 	facade.mu.Unlock()
 
+	if outgoingRetry {
+		if facade.coordinator != nil {
+			facade.coordinator.connectionClosed(remote, generation)
+		}
+		facade.cancelGeneration(remote, generation)
+		return
+	}
 	retry, ok := facade.retrySink()
 	if !ok {
 		if facade.coordinator != nil {
