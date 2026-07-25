@@ -311,6 +311,49 @@ func TestIssue72TopologyEventsIncludeUseCaseDataAndExcludeDeviceRemoval(t *testi
 	}
 }
 
+func TestIssue72PreservesSpecialSPINEFeatureRole(t *testing.T) {
+	remoteSKI := "0000000000000000000000000000000000000072"
+	localDevice := spinemocks.NewDeviceLocalInterface(t)
+	service := &fakeRuntimeService{
+		started:     make(chan struct{}),
+		localDevice: localDevice,
+	}
+	remote := spinemocks.NewDeviceRemoteInterface(t)
+	entity := spinemocks.NewEntityRemoteInterface(t)
+	feature := spinemocks.NewFeatureRemoteInterface(t)
+	deviceAddress := spinemodel.AddressDeviceType("d:_n:Vaillant_VR940")
+	featureAddress := spinemodel.AddressFeatureType(0)
+
+	localDevice.EXPECT().RemoteDeviceForSki(remoteSKI).Return(remote)
+	remote.EXPECT().Address().Return(&deviceAddress)
+	remote.EXPECT().Entities().Return([]spineapi.EntityRemoteInterface{entity})
+	remote.EXPECT().UseCases().Return(nil)
+	entity.EXPECT().Address().Return(&spinemodel.EntityAddressType{
+		Device: &deviceAddress,
+		Entity: []spinemodel.AddressEntityType{0},
+	})
+	entity.EXPECT().Features().Return([]spineapi.FeatureRemoteInterface{feature})
+	feature.EXPECT().Address().Return(&spinemodel.FeatureAddressType{
+		Device:  &deviceAddress,
+		Entity:  []spinemodel.AddressEntityType{0},
+		Feature: &featureAddress,
+	})
+	feature.EXPECT().Role().Return(spinemodel.RoleTypeSpecial)
+
+	devices, err := runtimeDevicesForRemote(service, remoteSKI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 ||
+		len(devices[0].Entities) != 1 ||
+		len(devices[0].Entities[0].Features) != 1 {
+		t.Fatalf("runtime devices = %+v", devices)
+	}
+	if got := devices[0].Entities[0].Features[0].Role; got != "special" {
+		t.Fatalf("special SPINE feature role = %q, want special", got)
+	}
+}
+
 func TestIssue72StaleDiscoveryCannotPopulateReconnectedSession(t *testing.T) {
 	remoteSKI := "0000000000000000000000000000000000000072"
 	handler, err := newRuntimeServiceHandler(RuntimeConfig{

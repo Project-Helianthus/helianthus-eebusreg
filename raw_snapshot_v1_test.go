@@ -152,6 +152,14 @@ func TestRawSnapshotV1IdentityKinds(t *testing.T) {
 	}
 }
 
+func TestRawSnapshotV1AcceptsSpecialFeatureRole(t *testing.T) {
+	snapshot := rawSnapshotV1(t, false)
+	snapshot.Topology.Devices[1].Entities[0].Features[0].Role = FeatureRoleV1("special")
+	if _, err := NewSnapshotV1(snapshot); err != nil {
+		t.Fatalf("special SPINE feature role rejected: %v", err)
+	}
+}
+
 func TestRawSnapshotV1FeatureRoleUnspecified(t *testing.T) {
 	snapshot := rawSnapshotV1(t, false)
 	snapshot.Topology.Devices[1].Entities[0].Features[0].Role = FeatureRoleV1Unspecified
