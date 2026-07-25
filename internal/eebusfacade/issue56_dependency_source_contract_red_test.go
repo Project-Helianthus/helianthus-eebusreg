@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	issue56EEBusGoVersion = "v0.7.1-helianthus.7"
-	issue56SHIPGoVersion  = "v0.6.1-helianthus.7"
+	issue56EEBusGoVersion = "v0.7.1-helianthus.8"
+	issue56SHIPGoVersion  = "v0.6.1-helianthus.8"
 )
 
 func TestIssue56DependencyPinsAreReleasedDirectAndWorkspaceFree(t *testing.T) {
