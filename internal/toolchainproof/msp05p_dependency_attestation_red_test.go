@@ -37,12 +37,14 @@ func TestMSP05PToolchainScriptDeclaresReviewedRuntimeClosure(t *testing.T) {
 		"v0.7.1-helianthus.8",
 		"github.com/Project-Helianthus/helianthus-ship-go",
 		"v0.6.1-helianthus.8",
+		"github.com/Project-Helianthus/helianthus-spine-go",
+		"v0.7.1-helianthus.3",
 	} {
 		if !strings.Contains(source, required) {
 			t.Errorf("toolchain boundary proof omits current dependency token %q", required)
 		}
 	}
-	for _, stale := range []string{"v0.7.1-helianthus.1", "v0.7.1-helianthus.3", "v0.7.1-helianthus.4", "v0.7.1-helianthus.7", "v0.6.1-helianthus.2", "v0.6.1-helianthus.4", "v0.6.1-helianthus.5", "v0.6.1-helianthus.7"} {
+	for _, stale := range []string{"v0.7.1-helianthus.1", "v0.7.1-helianthus.2", "v0.7.1-helianthus.4", "v0.7.1-helianthus.7", "v0.6.1-helianthus.2", "v0.6.1-helianthus.4", "v0.6.1-helianthus.5", "v0.6.1-helianthus.7"} {
 		if strings.Contains(source, stale) {
 			t.Errorf("toolchain boundary proof retains stale current pin %q", stale)
 		}
