@@ -12,7 +12,7 @@ import (
 
 const (
 	EEBusGoModulePath = "github.com/Project-Helianthus/helianthus-eebus-go"
-	EEBusGoVersion    = "v0.7.1-helianthus.4"
+	EEBusGoVersion    = "v0.7.1-helianthus.6"
 	apiImportPath     = EEBusGoModulePath + "/api"
 )
 
