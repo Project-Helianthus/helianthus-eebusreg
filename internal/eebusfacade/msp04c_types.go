@@ -20,7 +20,7 @@ const (
 	firstTrustMaximumTombstones               = 128
 	firstTrustMaximumDurableReceipts          = 128
 	firstTrustMaximumOutgoingAttempts         = 128
-	firstTrustOutgoingAttemptLease            = 30 * time.Second
+	firstTrustOutgoingAttemptLease            = 90 * time.Second
 	firstTrustAnchorVersion            uint64 = 1
 )
 
