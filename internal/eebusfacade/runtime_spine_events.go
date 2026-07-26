@@ -202,7 +202,13 @@ func (handler *runtimeServiceHandler) updateRemoteFromSPINEEvent(
 		handler.mu.Unlock()
 		return
 	}
-	observation.Devices = devices
+	merged, err := mergeRuntimeDeviceCollections(observation.Devices, devices)
+	if err != nil {
+		handler.mu.Unlock()
+		handler.report(err)
+		return
+	}
+	observation.Devices = merged
 	observation.Since = handler.timestamp()
 	if err := handler.reducer.Replace(observation); err != nil {
 		handler.mu.Unlock()

@@ -97,6 +97,48 @@ func TestIssue77ConcurrentPartialEventsPreserveCompleteRawService(t *testing.T) 
 	}
 }
 
+func TestIssue77PartialSPINEEventMergePreservesDetailedRawFacts(t *testing.T) {
+	description := "VR940f gateway"
+	left := []runtimeDeviceObservation{{
+		ID: "device-1", SKI: issue77ReducerRemoteSKI, SHIPID: "ship-1",
+		Address: "d:_n:Vaillant_VR940", Type: "EnergyManagementSystem",
+		Description: &description,
+		Metadata:    map[string]string{"network_feature_set": "gateway"},
+		Opaque: []runtimeOpaquePayload{{
+			Path: "/devices/d:_n:Vaillant_VR940/destination_data", Source: "spine.detailed-discovery",
+			Value: map[string]any{"deviceDescription": map[string]any{"label": "VR940f"}},
+		}},
+		Entities: []runtimeEntityObservation{{
+			ID: "entity-1", DeviceAddress: "d:_n:Vaillant_VR940",
+			EntityAddress: "[0]", Type: "DeviceInformation",
+			Features: []runtimeFeatureObservation{{
+				ID: "feature-1", DeviceAddress: "d:_n:Vaillant_VR940",
+				EntityAddress: "[0]", FeatureAddress: "[0]:0",
+				Type: "DeviceClassification", Role: "server",
+			}},
+		}},
+	}}
+	right := []runtimeDeviceObservation{{
+		ID: "device-1",
+		Entities: []runtimeEntityObservation{{
+			ID: "entity-2", DeviceAddress: "d:_n:Vaillant_VR940",
+			EntityAddress: "[1]", Type: "HvacController",
+		}},
+	}}
+
+	merged, err := mergeRuntimeDeviceCollections(left, right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged) != 1 || merged[0].SKI != issue77ReducerRemoteSKI ||
+		merged[0].Address != "d:_n:Vaillant_VR940" ||
+		merged[0].Description == nil || *merged[0].Description != description ||
+		merged[0].Metadata["network_feature_set"] != "gateway" ||
+		len(merged[0].Opaque) != 1 || len(merged[0].Entities) != 2 {
+		t.Fatalf("partial SPINE merge lost detailed raw facts: %+v", merged)
+	}
+}
+
 func issue77RawHandler(t *testing.T) (*runtimeServiceHandler, chan []byte) {
 	t.Helper()
 	handler, err := newRuntimeServiceHandler(
@@ -133,6 +175,23 @@ func issue77DetailedVR940(t *testing.T) spineapi.DeviceRemoteInterface {
 	remote.EXPECT().Ski().Return(issue77ReducerRemoteSKI).Maybe()
 	remote.EXPECT().Address().Return(&deviceAddress)
 	remote.EXPECT().DeviceType().Return(&deviceType).Maybe()
+	deviceDescription := spinemodel.DescriptionType("VR940f gateway")
+	featureSet := spinemodel.NetworkManagementFeatureSetTypeGateway
+	nativeSetup := spinemodel.NetworkManagementNativeSetupType("factory")
+	technologyAddress := spinemodel.NetworkManagementTechnologyAddressType("vr940f")
+	communications := spinemodel.NetworkManagementCommunicationsTechnologyInformationType("ethernet")
+	label := spinemodel.LabelType("VR940f lab gateway")
+	remote.EXPECT().FeatureSet().Return(&featureSet)
+	remote.EXPECT().DestinationData().Return(spinemodel.NodeManagementDestinationDataType{
+		DeviceDescription: &spinemodel.NetworkManagementDeviceDescriptionDataType{
+			Description:                         &deviceDescription,
+			NetworkFeatureSet:                   &featureSet,
+			NativeSetup:                         &nativeSetup,
+			TechnologyAddress:                   &technologyAddress,
+			CommunicationsTechnologyInformation: &communications,
+			Label:                               &label,
+		},
+	})
 
 	entityTypes := []spinemodel.EntityTypeType{
 		spinemodel.EntityTypeTypeDeviceInformation,
@@ -301,8 +360,20 @@ func issue77AssertRawGraph(t *testing.T, raw map[string]any) {
 	}
 	if devices[0]["ski"] != issue77ReducerRemoteSKI ||
 		devices[0]["address"] != "d:_n:Vaillant_VR940" ||
-		devices[0]["type"] != "EnergyManagementSystem" {
+		devices[0]["type"] != "EnergyManagementSystem" ||
+		devices[0]["description"] != "VR940f gateway" {
 		t.Errorf("raw device facts = %+v", devices[0])
+	}
+	metadata, ok := devices[0]["metadata"].(map[string]any)
+	if !ok || metadata["network_feature_set"] != "gateway" ||
+		metadata["native_setup"] != "factory" ||
+		metadata["technology_address"] != "vr940f" ||
+		metadata["communications_technology_information"] != "ethernet" ||
+		metadata["label"] != "VR940f lab gateway" {
+		t.Errorf("raw detailed-discovery metadata = %+v", devices[0]["metadata"])
+	}
+	if opaque, ok := devices[0]["opaque"].([]any); !ok || len(opaque) != 1 {
+		t.Errorf("raw detailed-discovery opaque value = %+v", devices[0]["opaque"])
 	}
 	for index, entity := range entities {
 		if entity["device_address"] == "" || entity["entity_address"] == "" ||
