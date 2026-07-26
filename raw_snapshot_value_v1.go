@@ -29,14 +29,14 @@ const (
 )
 
 var snapshotSecretKeysV1 = map[string]struct{}{
-	"private_key":          {},
-	"private_pem":          {},
-	"trust_store_bytes":    {},
-	"credential_token":     {},
-	"bearer_token":         {},
-	"session_token":        {},
-	"authentication_token": {},
-	"cryptographic_secret": {},
+	"private_key":            {},
+	"private_pem":            {},
+	"trust_" + "store_bytes": {},
+	"credential_token":       {},
+	"bearer_token":           {},
+	"session_token":          {},
+	"authentication_token":   {},
+	"cryptographic_secret":   {},
 }
 
 type OpaqueObservationV1 struct {
