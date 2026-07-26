@@ -112,8 +112,8 @@ func TestIssue72RefreshesTopologyFromDetailedDiscoveryAndStopsBeforeShutdown(t *
 	if len(connected.Sessions) != 1 || connected.Sessions[0].State != "connected" {
 		t.Fatalf("connected sessions = %+v", connected.Sessions)
 	}
-	if len(connected.Topology.Devices) != 0 {
-		t.Fatalf("pre-discovery topology = %+v, want empty", connected.Topology)
+	if len(connected.Devices) != 0 {
+		t.Fatalf("pre-discovery devices = %+v, want empty", connected.Devices)
 	}
 
 	remoteService.EXPECT().LocalDevice().Return(localDevice)
@@ -143,10 +143,8 @@ func TestIssue72RefreshesTopologyFromDetailedDiscoveryAndStopsBeforeShutdown(t *
 		Device:     remoteDevice,
 	})
 	discovered := decodeRuntimePayload(t, waitRuntimePayload(t, updates))
-	if len(discovered.Topology.Devices) != 1 ||
-		len(discovered.Topology.Devices[0].Entities) != 1 ||
-		len(discovered.Topology.Devices[0].Entities[0].Features) != 1 {
-		t.Fatalf("post-discovery topology = %+v", discovered.Topology)
+	if len(discovered.Devices) != 1 || len(discovered.Entities) != 1 || len(discovered.Features) != 1 {
+		t.Fatalf("post-discovery graph = devices:%+v entities:%+v features:%+v", discovered.Devices, discovered.Entities, discovered.Features)
 	}
 
 	cancel()
@@ -187,7 +185,11 @@ func TestIssue72CloseWaitsForInFlightSPINECallbackAfterUnsubscribe(t *testing.T)
 	localDevice := spinemocks.NewDeviceLocalInterface(t)
 	remoteDevice := spinemocks.NewDeviceRemoteInterface(t)
 	remoteAddress := spinemodel.AddressDeviceType("d:_n:close")
+	remoteDeviceType := spinemodel.DeviceTypeTypeEnergyManagementSystem
 	remoteDevice.EXPECT().Address().Return(&remoteAddress)
+	remoteDevice.EXPECT().DeviceType().Return(&remoteDeviceType)
+	remoteDevice.EXPECT().DestinationData().Return(spinemodel.NodeManagementDestinationDataType{})
+	remoteDevice.EXPECT().FeatureSet().Return(nil)
 	remoteDevice.EXPECT().Entities().Return(nil)
 	remoteDevice.EXPECT().UseCases().Return(nil)
 	service.localDevice = localDevice
@@ -328,23 +330,35 @@ func TestIssue72PreservesSpecialSPINEFeatureRole(t *testing.T) {
 	entity := spinemocks.NewEntityRemoteInterface(t)
 	feature := spinemocks.NewFeatureRemoteInterface(t)
 	deviceAddress := spinemodel.AddressDeviceType("d:_n:Vaillant_VR940")
+	deviceType := spinemodel.DeviceTypeTypeEnergyManagementSystem
+	entityType := spinemodel.EntityTypeTypeCEM
+	entityDescription := spinemodel.DescriptionType("special-role entity")
 	featureAddress := spinemodel.AddressFeatureType(0)
+	featureType := spinemodel.FeatureTypeTypeGeneric
+	featureDescription := spinemodel.DescriptionType("special-role feature")
 
 	localDevice.EXPECT().RemoteDeviceForSki(remoteSKI).Return(remote)
 	remote.EXPECT().Address().Return(&deviceAddress)
+	remote.EXPECT().DeviceType().Return(&deviceType)
+	remote.EXPECT().DestinationData().Return(spinemodel.NodeManagementDestinationDataType{})
+	remote.EXPECT().FeatureSet().Return(nil)
 	remote.EXPECT().Entities().Return([]spineapi.EntityRemoteInterface{entity})
 	remote.EXPECT().UseCases().Return(nil)
 	entity.EXPECT().Address().Return(&spinemodel.EntityAddressType{
 		Device: &deviceAddress,
 		Entity: []spinemodel.AddressEntityType{0},
 	})
+	entity.EXPECT().EntityType().Return(entityType)
+	entity.EXPECT().Description().Return(&entityDescription)
 	entity.EXPECT().Features().Return([]spineapi.FeatureRemoteInterface{feature})
 	feature.EXPECT().Address().Return(&spinemodel.FeatureAddressType{
 		Device:  &deviceAddress,
 		Entity:  []spinemodel.AddressEntityType{0},
 		Feature: &featureAddress,
 	})
+	feature.EXPECT().Type().Return(featureType)
 	feature.EXPECT().Role().Return(spinemodel.RoleTypeSpecial)
+	feature.EXPECT().Description().Return(&featureDescription)
 
 	devices, err := runtimeDevicesForRemote(service, remoteSKI)
 	if err != nil {
@@ -410,23 +424,35 @@ func issue72RemoteDevice(t *testing.T, ski string) spineapi.DeviceRemoteInterfac
 	entity := spinemocks.NewEntityRemoteInterface(t)
 	feature := spinemocks.NewFeatureRemoteInterface(t)
 	deviceAddress := spinemodel.AddressDeviceType("d:_n:Vaillant_VR940")
+	deviceType := spinemodel.DeviceTypeTypeEnergyManagementSystem
+	entityType := spinemodel.EntityTypeTypeCEM
+	entityDescription := spinemodel.DescriptionType("stable entity")
 	featureAddress := spinemodel.AddressFeatureType(1)
+	featureType := spinemodel.FeatureTypeTypeGeneric
+	featureDescription := spinemodel.DescriptionType("stable feature")
 
 	remote.EXPECT().Ski().Return(ski).Maybe()
 	remote.EXPECT().Address().Return(&deviceAddress)
+	remote.EXPECT().DeviceType().Return(&deviceType)
+	remote.EXPECT().DestinationData().Return(spinemodel.NodeManagementDestinationDataType{})
+	remote.EXPECT().FeatureSet().Return(nil)
 	remote.EXPECT().Entities().Return([]spineapi.EntityRemoteInterface{entity})
 	remote.EXPECT().UseCases().Return([]spinemodel.UseCaseInformationDataType{{}})
 	entity.EXPECT().Address().Return(&spinemodel.EntityAddressType{
 		Device: &deviceAddress,
 		Entity: []spinemodel.AddressEntityType{1},
 	})
+	entity.EXPECT().EntityType().Return(entityType)
+	entity.EXPECT().Description().Return(&entityDescription)
 	entity.EXPECT().Features().Return([]spineapi.FeatureRemoteInterface{feature})
 	feature.EXPECT().Address().Return(&spinemodel.FeatureAddressType{
 		Device:  &deviceAddress,
 		Entity:  []spinemodel.AddressEntityType{1},
 		Feature: &featureAddress,
 	})
+	feature.EXPECT().Type().Return(featureType)
 	feature.EXPECT().Role().Return(spinemodel.RoleTypeClient)
+	feature.EXPECT().Description().Return(&featureDescription)
 	return remote
 }
 

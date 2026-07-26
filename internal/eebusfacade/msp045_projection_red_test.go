@@ -496,7 +496,7 @@ func TestMSP045ProjectionOrderAndHashAreDeterministic(t *testing.T) {
 	}
 	visible := make([]shipapi.RemoteService, 0, len(remotes))
 	for _, remote := range remotes {
-		visible = append(visible, shipapi.RemoteService{Ski: remote.SKI})
+		visible = append(visible, runtimeRemoteServiceFixture(remote.SKI))
 	}
 	handler.VisibleRemoteServicesUpdated(nil, visible)
 	graph := handler.reducer.Snapshot()
@@ -570,7 +570,7 @@ func TestMSP045ProjectionIsCloneSafeOrderedAndRaceFree(t *testing.T) {
 				} else {
 					harness.reader.ServicePairingDetailUpdate(harness.remoteSKI, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateCompleted, nil))
 				}
-				harness.reader.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{Ski: harness.remoteSKI}})
+				harness.reader.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{runtimeRemoteServiceFixture(harness.remoteSKI)})
 				_ = harness.handler.publishCurrent()
 			}
 		}(worker)
@@ -632,7 +632,7 @@ func TestMSP045ConfiguredRemoteCandidateCannotMutatePublicLiveness(t *testing.T)
 	harness.reader.ServicePairingDetailUpdate(harness.remoteSKI, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateReceivedPairingRequest, nil))
 	harness.reader.ServiceShipIDUpdate(harness.remoteSKI, msp045RunToken(t, "candidate-service"))
 	harness.reader.RemoteSKIConnected(nil, harness.remoteSKI)
-	harness.reader.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{Ski: harness.remoteSKI}})
+	harness.reader.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{runtimeRemoteServiceFixture(harness.remoteSKI)})
 	candidate, candidatePayload := msp045Capture(t, harness.handler)
 	msp045AssertSamePublicSnapshot(t, baseline, baselinePayload, candidate, candidatePayload)
 }
@@ -1007,7 +1007,7 @@ func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045Run
 		harness.bridge = bridge
 	}
 	if !options.suppressVisible {
-		reader.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{Ski: remoteSKI}})
+		reader.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{runtimeRemoteServiceFixture(remoteSKI)})
 	}
 	t.Cleanup(func() {
 		if err := backend.Close(); err != nil {
@@ -1398,8 +1398,11 @@ func msp045AssertTrust(t *testing.T, snapshot runtimeSnapshotPayload, state stri
 	if len(snapshot.Pairing) != 1 || snapshot.Pairing[0].State != state {
 		t.Fatalf("pairing = %+v, want one %q row", snapshot.Pairing, state)
 	}
-	if len(snapshot.Services) != 1 || snapshot.Services[0].Paired != paired {
-		t.Fatalf("services = %+v, want paired=%t", snapshot.Services, paired)
+	if len(snapshot.Services) != 1 {
+		t.Fatalf("services = %+v, want one durable remote service", snapshot.Services)
+	}
+	if got := snapshot.Services[0].Paired; got != paired {
+		t.Fatalf("service paired observation = %t, want %t", got, paired)
 	}
 	if reason == "" {
 		return

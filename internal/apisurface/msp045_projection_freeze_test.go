@@ -22,7 +22,7 @@ func TestMSP045PublicAPIRemainsByteIdenticalAndProjectionFree(t *testing.T) {
 	}
 	payload = append(payload, '\n')
 	if len(payload) != 95_480 {
-		t.Fatalf("public API bytes = %d, want 95480", len(payload))
+		t.Fatalf("public API bytes = %d, want historical MSP-045 baseline 95480", len(payload))
 	}
 	digest := sha256.Sum256(payload)
 	if got := hex.EncodeToString(digest[:]); got != msp045FrozenPublicAPIHash {

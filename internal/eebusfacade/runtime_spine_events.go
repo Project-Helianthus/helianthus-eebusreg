@@ -139,6 +139,17 @@ func (handler *runtimeServiceHandler) enqueueSPINERefresh(ski string, refresh ru
 		handler.mu.Unlock()
 		return
 	}
+	if pending, exists := handler.spinePending[ski]; exists &&
+		pending.generation == refresh.generation &&
+		pending.sessionIndex == refresh.sessionIndex {
+		merged, err := mergeRuntimeDeviceCollections(pending.devices, refresh.devices)
+		if err != nil {
+			handler.mu.Unlock()
+			handler.report(err)
+			return
+		}
+		refresh.devices = merged
+	}
 	handler.spinePending[ski] = refresh
 	wake := handler.spineWake
 	handler.mu.Unlock()
@@ -202,7 +213,13 @@ func (handler *runtimeServiceHandler) updateRemoteFromSPINEEvent(
 		handler.mu.Unlock()
 		return
 	}
-	observation.Devices = devices
+	merged, err := mergeRuntimeDeviceCollections(observation.Devices, devices)
+	if err != nil {
+		handler.mu.Unlock()
+		handler.report(err)
+		return
+	}
+	observation.Devices = merged
 	observation.Since = handler.timestamp()
 	if err := handler.reducer.Replace(observation); err != nil {
 		handler.mu.Unlock()

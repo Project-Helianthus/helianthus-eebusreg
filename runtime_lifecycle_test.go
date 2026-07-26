@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/Project-Helianthus/helianthus-eebusreg/eebusevidence"
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 )
@@ -85,8 +85,8 @@ func TestRuntimeConcurrentLifecycleAcquiresOnceCancelsJoinsAndClosesOnce(t *test
 
 	first := lifecycleRuntimeSnapshot(t, "session-before-reconnect")
 	backend.publish(t, first)
-	first.Pairing[0].Unknown[0].Value = eebusraw.OpaqueBytes([]byte("source mutation"))
-	first.Services[0].Unknown[0].Value = eebusraw.OpaqueBytes([]byte("source mutation"))
+	(*first.Pairing[0].Opaque)[0].Path = "/source-mutation"
+	(*first.Services[0].Opaque)[0].Path = "/source-mutation"
 	assertRuntimeSnapshotHashIntact(t, instance)
 
 	second := lifecycleRuntimeSnapshot(t, "session-after-reconnect")
@@ -331,17 +331,16 @@ func TestRuntimeSnapshotAndPairingResultsAreDeeplyDetached(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantHash := first.Meta.DataHash
-	first.Pairing[0].Unknown[0].Value = eebusraw.OpaqueBytes([]byte("caller mutation"))
-	first.Services[0].Unknown[0].Value = eebusraw.OpaqueBytes([]byte("caller mutation"))
-	first.Topology.Devices[0].Entities[0].Features = nil
-	first.Raw[0].Unknown[0].Value = eebusraw.OpaqueBytes([]byte("caller mutation"))
+	(*first.Pairing[0].Opaque)[0].Path = "/caller-mutation"
+	(*first.Services[0].Opaque)[0].Path = "/caller-mutation"
+	first.Features = nil
+	first.Opaque[0].Path = "/caller-mutation"
 
 	pairing, err := instance.PairingState()
 	if err != nil {
 		t.Fatal(err)
 	}
-	pairing[0].Unknown[0].Value = eebusraw.OpaqueBytes([]byte("pairing mutation"))
-	pairing[0].Raw[0].Unknown[0].Value = eebusraw.OpaqueBytes([]byte("pairing raw mutation"))
+	(*pairing[0].Opaque)[0].Path = "/pairing-mutation"
 
 	again, err := instance.Snapshot()
 	if err != nil {
@@ -360,7 +359,7 @@ func TestRuntimeSnapshotAndPairingResultsAreDeeplyDetached(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pairingAgain) != 1 || len(pairingAgain[0].Unknown) != 1 || len(pairingAgain[0].Raw) != 1 {
+	if len(pairingAgain) != 1 || pairingAgain[0].Opaque == nil || len(*pairingAgain[0].Opaque) != 1 {
 		t.Fatal("PairingState returned caller-owned nested storage")
 	}
 }
@@ -577,26 +576,27 @@ func lifecycleRuntimeSnapshot(t *testing.T, sessionName string) SnapshotV1 {
 	draft.Pairing = append([]PairingObservationV1(nil), draft.Pairing[:1]...)
 	draft.Services = append([]ServiceV1(nil), draft.Services[:1]...)
 	draft.Sessions = []SessionV1{{
-		ID:     rawSnapshotID(t, eebusraw.IDKindSession, sessionName),
-		Remote: draft.Pairing[0].Remote,
-		State:  ObservedSessionStateV1Connected,
-		Since:  draft.Meta.DataTimestamp,
+		ID:        sessionName,
+		RemoteSKI: draft.Pairing[0].RemoteSKI,
+		State:     ObservedSessionStateV1Connected,
+		Since:     draft.Meta.DataTimestamp,
 	}}
-	for _, device := range draft.Topology.Devices {
-		if len(device.Entities) != 0 {
-			draft.Topology.Devices = []DeviceV1{device}
-			break
-		}
-	}
-	evidence := eebusevidence.NewObjectV1(
-		eebusevidence.ObjectKindIdentity,
-		rawSnapshotDigest("f"),
-		1,
-		draft.Meta.DataTimestamp,
-	)
-	evidence.Unknown = []eebusraw.UnknownField{rawSnapshotUnknown("pairing evidence")}
-	draft.Pairing[0].Raw = []eebusevidence.ObjectV1{evidence}
-	draft.Pairing[0].Unknown = []eebusraw.UnknownField{rawSnapshotUnknown("pairing")}
+	draft.Devices = append([]DeviceV1(nil), draft.Devices[:1]...)
+	deviceAddress := draft.Devices[0].Address
+	draft.Entities = slices.DeleteFunc(draft.Entities, func(value EntityV1) bool {
+		return value.DeviceAddress != deviceAddress
+	})
+	draft.Features = slices.DeleteFunc(draft.Features, func(value FeatureV1) bool {
+		return value.DeviceAddress != deviceAddress
+	})
+	draft.UseCases = slices.DeleteFunc(draft.UseCases, func(value UseCaseV1) bool {
+		return !strings.Contains(value.ContextAddress, deviceAddress)
+	})
+	pairingOpaque := []OpaqueObservationV1{rawOpaqueObservationV1("/pairing/evidence", "test", "paired")}
+	serviceOpaque := []OpaqueObservationV1{rawOpaqueObservationV1("/service/evidence", "test", "visible")}
+	draft.Pairing[0].Opaque = &pairingOpaque
+	draft.Services[0].Opaque = &serviceOpaque
+	draft.Meta.DataHash = ""
 
 	snapshot, err := NewSnapshotV1(draft)
 	if err != nil {
@@ -629,8 +629,7 @@ func assertRuntimeReconnectGraph(t *testing.T, instance Runtime, sessionName str
 	if len(snapshot.Sessions) != 1 {
 		t.Fatalf("sessions after reconnect = %d, want 1", len(snapshot.Sessions))
 	}
-	wantSession := rawSnapshotID(t, eebusraw.IDKindSession, sessionName)
-	if snapshot.Sessions[0].ID != wantSession {
+	if snapshot.Sessions[0].ID != sessionName {
 		t.Fatal("reconnect retained the superseded session")
 	}
 	assertRuntimeFeatureGraphCounts(t, snapshot)
@@ -638,15 +637,14 @@ func assertRuntimeReconnectGraph(t *testing.T, instance Runtime, sessionName str
 
 func assertRuntimeFeatureGraphCounts(t *testing.T, snapshot SnapshotV1) {
 	t.Helper()
-	if len(snapshot.Services) != 1 || len(snapshot.Sessions) != 1 || len(snapshot.Topology.Devices) != 1 {
-		t.Fatalf("runtime graph counts services=%d sessions=%d devices=%d, want 1/1/1", len(snapshot.Services), len(snapshot.Sessions), len(snapshot.Topology.Devices))
+	if len(snapshot.Services) != 1 || len(snapshot.Sessions) != 1 || len(snapshot.Devices) != 1 {
+		t.Fatalf("runtime graph counts services=%d sessions=%d devices=%d, want 1/1/1", len(snapshot.Services), len(snapshot.Sessions), len(snapshot.Devices))
 	}
-	device := snapshot.Topology.Devices[0]
-	if len(device.Entities) != 1 || len(device.UseCaseClaims) != 2 {
-		t.Fatalf("device graph counts entities=%d usecases=%d, want 1/2", len(device.Entities), len(device.UseCaseClaims))
+	if len(snapshot.Entities) != 1 || len(snapshot.UseCases) != 1 {
+		t.Fatalf("runtime graph counts entities=%d usecases=%d, want 1/1", len(snapshot.Entities), len(snapshot.UseCases))
 	}
-	if len(device.Entities[0].Features) != 2 {
-		t.Fatalf("entity feature count = %d, want 2", len(device.Entities[0].Features))
+	if len(snapshot.Features) != 1 {
+		t.Fatalf("feature count = %d, want 1", len(snapshot.Features))
 	}
 }
 

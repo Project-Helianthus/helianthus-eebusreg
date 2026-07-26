@@ -91,7 +91,7 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	issue54AssertNoRemoteEvidence(t, initial)
 
 	clock.Advance(time.Second)
-	handler.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{Ski: remoteSKI}})
+	handler.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{runtimeRemoteServiceFixture(remoteSKI)})
 	visible := decodeRuntimePayload(t, waitRuntimePayload(t, updates))
 	if len(visible.Services) != 1 || !visible.Services[0].Visible || visible.Services[0].Paired {
 		t.Fatalf("visible services = %+v", visible.Services)
@@ -114,12 +114,12 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	if connected.Status.State != "ready" || len(connected.Sessions) != 1 || connected.Sessions[0].State != "connected" {
 		t.Fatalf("connected status=%+v sessions=%+v", connected.Status, connected.Sessions)
 	}
-	if len(connected.Topology.Devices) != 1 || len(connected.Topology.Devices[0].Entities) != 1 || len(connected.Topology.Devices[0].Entities[0].Features) != 1 {
-		t.Fatalf("connected topology = %+v", connected.Topology)
+	if len(connected.Devices) != 1 || len(connected.Entities) != 1 || len(connected.Features) != 1 {
+		t.Fatalf("connected graph = devices:%+v entities:%+v features:%+v", connected.Devices, connected.Entities, connected.Features)
 	}
 	connectedSessionID := connected.Sessions[0].ID
-	if strings.Contains(connectedSessionID.Digest, "fixture-ship-id") {
-		t.Fatal("SHIP ID escaped redaction")
+	if !strings.Contains(connectedSessionID, "fixture-ship-id") {
+		t.Fatal("raw SHIP session identity was not retained")
 	}
 
 	clock.Advance(time.Second)
@@ -128,7 +128,7 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	if disconnected.Status.State != "degraded" || disconnected.Status.Degradation == nil || disconnected.Status.Degradation.Reason != "remote-disconnect" {
 		t.Fatalf("disconnected status = %+v", disconnected.Status)
 	}
-	if len(disconnected.Topology.Devices) != 1 {
+	if len(disconnected.Devices) != 1 {
 		t.Fatal("disconnect discarded the last observed feature graph")
 	}
 
@@ -152,6 +152,13 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	}
 	if service.shutdowns != 1 {
 		t.Fatalf("service shutdown count = %d, want 1", service.shutdowns)
+	}
+}
+
+func runtimeRemoteServiceFixture(ski string) shipapi.RemoteService {
+	return shipapi.RemoteService{
+		Ski: ski, Name: "Helianthus eeBUS fixture", Identifier: "fixture-" + ski,
+		Brand: "Helianthus", Type: "eeBUS", Model: "test-peer",
 	}
 }
 
@@ -607,17 +614,29 @@ func eebusServiceWithFeatureGraph(t *testing.T, ski string) eebusapi.ServiceInte
 	entity := spinemocks.NewEntityRemoteInterface(t)
 	feature := spinemocks.NewFeatureRemoteInterface(t)
 	deviceAddress := spinemodel.AddressDeviceType("d:_n:Vaillant_VR940")
+	deviceType := spinemodel.DeviceTypeTypeEnergyManagementSystem
+	entityType := spinemodel.EntityTypeTypeCEM
+	entityDescription := spinemodel.DescriptionType("integration entity")
 	featureAddress := spinemodel.AddressFeatureType(1)
+	featureType := spinemodel.FeatureTypeTypeGeneric
+	featureDescription := spinemodel.DescriptionType("integration feature")
 
 	service.EXPECT().LocalDevice().Return(local)
 	local.EXPECT().RemoteDeviceForSki(ski).Return(remote)
 	remote.EXPECT().Address().Return(&deviceAddress)
+	remote.EXPECT().DeviceType().Return(&deviceType)
+	remote.EXPECT().DestinationData().Return(spinemodel.NodeManagementDestinationDataType{})
+	remote.EXPECT().FeatureSet().Return(nil)
 	remote.EXPECT().Entities().Return([]spineapi.EntityRemoteInterface{entity})
 	remote.EXPECT().UseCases().Return([]spinemodel.UseCaseInformationDataType{{}})
 	entity.EXPECT().Address().Return(&spinemodel.EntityAddressType{Device: &deviceAddress, Entity: []spinemodel.AddressEntityType{1}})
+	entity.EXPECT().EntityType().Return(entityType)
+	entity.EXPECT().Description().Return(&entityDescription)
 	entity.EXPECT().Features().Return([]spineapi.FeatureRemoteInterface{feature})
 	feature.EXPECT().Address().Return(&spinemodel.FeatureAddressType{Device: &deviceAddress, Entity: []spinemodel.AddressEntityType{1}, Feature: &featureAddress})
+	feature.EXPECT().Type().Return(featureType)
 	feature.EXPECT().Role().Return(spinemodel.RoleTypeClient)
+	feature.EXPECT().Description().Return(&featureDescription)
 	return service
 }
 

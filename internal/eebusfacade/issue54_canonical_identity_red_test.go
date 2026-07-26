@@ -169,7 +169,7 @@ func TestIssue54AllowlistIsPolicyAndCallbacksCreateEvidence(t *testing.T) {
 	initial, _ := msp045Capture(t, handler)
 	issue54AssertNoRemoteEvidence(t, initial)
 
-	handler.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{Ski: remoteSKI}})
+	handler.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{runtimeRemoteServiceFixture(remoteSKI)})
 	visible, _ := msp045Capture(t, handler)
 	if len(visible.Services) != 1 || !visible.Services[0].Visible {
 		t.Fatalf("visible callback services = %+v, want one visible service", visible.Services)
@@ -274,7 +274,13 @@ func issue54AssertCanonicalConfiguration(t *testing.T, configuration *eebusapi.C
 
 func issue54AssertNoRemoteEvidence(t *testing.T, snapshot runtimeSnapshotPayload) {
 	t.Helper()
-	if len(snapshot.Pairing) != 0 || len(snapshot.Services) != 0 || len(snapshot.Sessions) != 0 || len(snapshot.Topology.Devices) != 0 {
-		t.Fatalf("policy fabricated remote evidence: pairing=%+v services=%+v sessions=%+v topology=%+v", snapshot.Pairing, snapshot.Services, snapshot.Sessions, snapshot.Topology)
+	if len(snapshot.Pairing) != 0 || len(snapshot.Services) != 0 || len(snapshot.Sessions) != 0 ||
+		len(snapshot.Devices) != 0 || len(snapshot.Entities) != 0 ||
+		len(snapshot.Features) != 0 || len(snapshot.UseCases) != 0 {
+		t.Fatalf(
+			"policy fabricated remote evidence: pairing=%+v services=%+v sessions=%+v devices=%+v entities=%+v features=%+v usecases=%+v",
+			snapshot.Pairing, snapshot.Services, snapshot.Sessions, snapshot.Devices,
+			snapshot.Entities, snapshot.Features, snapshot.UseCases,
+		)
 	}
 }
