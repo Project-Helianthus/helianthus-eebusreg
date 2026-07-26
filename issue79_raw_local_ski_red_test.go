@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-func TestIssue79RawSnapshotExposesLocalSKIAndRedactedProjectionDoesNot(t *testing.T) {
-	const localSKI = "1111111111111111111111111111111111111111"
+func TestIssue79RawSnapshotExposesLocalSKIAndRedactedExportDoesNot(t *testing.T) {
+	const localSKI = "3333333333333333333333333333333333333333"
 
-	raw := rawSnapshotV1(t, false)
+	raw := issue77Snapshot(t)
 	encodedRaw, err := json.Marshal(raw)
 	if err != nil {
 		t.Fatal(err)

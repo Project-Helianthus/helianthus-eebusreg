@@ -117,6 +117,7 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 		"RedactedServiceV1":       {},
 		"RedactedSessionV1":       {},
 		"RedactedSnapshotV1":      {},
+		"RedactedSnapshotMetaV1":  {},
 		"RedactedUseCaseV1":       {},
 		"ServiceV1":               {},
 		"SessionV1":               {},
@@ -147,6 +148,10 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 		if symbol.Name == "Remote" {
 			symbol.Type = "struct{ SKI string }"
 			symbol.Signature = "type Remote struct{ SKI string }"
+		}
+		if symbol.Name == "SnapshotMetaV1" {
+			symbol.Type = `struct{ Contract string "json:\"contract\""; Runtime eebusraw.RedactedID "json:\"runtime\""; LocalSKI eebusraw.RedactedID "json:\"local_ski\""; MaskTier eebusraw.MaskTier "json:\"mask_tier\""; CapturedAt time.Time "json:\"captured_at\""; DataTimestamp time.Time "json:\"data_timestamp\""; DataHash string "json:\"data_hash,omitempty\"" }`
+			symbol.Signature = "type SnapshotMetaV1 " + symbol.Type
 		}
 		symbols = append(symbols, symbol)
 	}

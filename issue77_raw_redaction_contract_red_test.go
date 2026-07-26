@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const issue77FixtureHash = "sha256:d96ace89205ac10f710c0a2f249828131fb8e796065c90bc77dfe60d5c19dcd2"
+const issue77FixtureHash = "sha256:3012981ca22cbaf5bd992e5f89a3735d49255023ebabd871742d39a163b31dac"
 
 func TestIssue77InitialV1PublicValueSurfaceIsExact(t *testing.T) {
 	for _, check := range []struct {

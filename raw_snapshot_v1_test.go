@@ -200,10 +200,7 @@ func rawSnapshotDraftV1(t *testing.T, reverse bool) SnapshotV1 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	localSKI, err := eebusraw.RedactID(eebusraw.IDKindLocalSKI, strings.Repeat("1", 40))
-	if err != nil {
-		t.Fatal(err)
-	}
+	localSKI := strings.Repeat("1", 40)
 	shipA, shipB := "ship-a", "ship-b"
 	description := "observed"
 	scenarios := []string{"2", "1"}
