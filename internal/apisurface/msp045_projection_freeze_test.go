@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-const msp045FrozenPublicAPIHash = "c93492bd275b5e14d3c9e05da701730d6d34a197e0653e6b169d103418bfcc8c"
+const msp045FrozenPublicAPIHash = "b619574847d01a277e8bf120ae481c5c98ea8c0986d3bad1710148e045ba8ad0"
 
 func TestMSP045PublicAPIRemainsByteIdenticalAndProjectionFree(t *testing.T) {
 	doc, err := extract(moduleRoot(t))
@@ -21,8 +21,8 @@ func TestMSP045PublicAPIRemainsByteIdenticalAndProjectionFree(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload = append(payload, '\n')
-	if len(payload) != 95_207 {
-		t.Fatalf("public API bytes = %d, want 95207", len(payload))
+	if len(payload) != 95_480 {
+		t.Fatalf("public API bytes = %d, want 95480", len(payload))
 	}
 	digest := sha256.Sum256(payload)
 	if got := hex.EncodeToString(digest[:]); got != msp045FrozenPublicAPIHash {

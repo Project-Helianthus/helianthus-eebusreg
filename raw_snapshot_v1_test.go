@@ -64,6 +64,7 @@ func TestRawSnapshotV1PublicContract(t *testing.T) {
 		{string(FeatureRoleV1Unspecified), ""},
 		{string(FeatureRoleV1Client), "client"},
 		{string(FeatureRoleV1Server), "server"},
+		{string(FeatureRoleV1Special), "special"},
 	} {
 		if check.got != check.want {
 			t.Fatalf("enum value = %q, want %q", check.got, check.want)
@@ -149,6 +150,14 @@ func TestRawSnapshotV1IdentityKinds(t *testing.T) {
 				t.Fatal("NewSnapshotV1() accepted an invalid identity kind")
 			}
 		})
+	}
+}
+
+func TestRawSnapshotV1AcceptsSpecialFeatureRole(t *testing.T) {
+	snapshot := rawSnapshotV1(t, false)
+	snapshot.Topology.Devices[1].Entities[0].Features[0].Role = FeatureRoleV1Special
+	if _, err := NewSnapshotV1(snapshot); err != nil {
+		t.Fatalf("special SPINE feature role rejected: %v", err)
 	}
 }
 

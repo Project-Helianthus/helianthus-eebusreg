@@ -57,6 +57,7 @@ type serviceBackend struct {
 	handler          *runtimeServiceHandler
 	firstTrust       *runtimeFirstTrustResources
 	outgoingAttempts *firstTrustOutgoingAttemptBridge
+	unsubscribeSPINE func() error
 	listenerTerminal <-chan error
 	runClaimed       bool
 	serviceStarted   bool
@@ -98,6 +99,10 @@ type runtimeService interface {
 	LocalDevice() spineapi.DeviceLocalInterface
 }
 
+type runtimeDeviceProvider interface {
+	LocalDevice() spineapi.DeviceLocalInterface
+}
+
 type runtimeScopedService interface {
 	StartWithPolicy() error
 	ListenerTerminal() <-chan error
@@ -105,9 +110,12 @@ type runtimeScopedService interface {
 
 type runtimeServiceFactory func(RuntimeConfig, runtimeMaterial, eebusapi.ServiceReaderInterface) (runtimeService, error)
 
+type runtimeSPINEEventSubscriber func(spineapi.EventHandlerInterface) (func() error, error)
+
 type runtimeDependencies struct {
 	loadMaterial          runtimeMaterialLoader
 	newService            runtimeServiceFactory
+	subscribeSPINEEvents  runtimeSPINEEventSubscriber
 	now                   func() time.Time
 	openAssociationBridge runtimeAssociationBridgeFactory
 	startFirstTrustAdmin  runtimeFirstTrustAdminFactory
@@ -160,6 +168,7 @@ var _ Backend = (*serviceBackend)(nil)
 var defaultRuntimeDependencies = runtimeDependencies{
 	loadMaterial:          loadProtectedRuntimeMaterial,
 	newService:            newEEBusService,
+	subscribeSPINEEvents:  subscribeRuntimeSPINEEvents,
 	now:                   time.Now,
 	openAssociationBridge: openRuntimeAssociationBridge,
 	startFirstTrustAdmin:  startFirstTrustAdmin,
@@ -265,25 +274,45 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if err := service.Setup(); err != nil {
 		return nil, closeRuntime(fmt.Errorf("setup eebus runtime service: %w", err))
 	}
+	if dependencies.subscribeSPINEEvents == nil {
+		return nil, closeRuntime(errors.New("runtime SPINE event dependency is incomplete"))
+	}
+	handler.activateSPINEEvents(service)
+	unsubscribeSPINE, err := dependencies.subscribeSPINEEvents(handler)
+	if err != nil {
+		handler.deactivateSPINEEvents()
+		return nil, closeRuntime(fmt.Errorf("subscribe to SPINE runtime events: %w", err))
+	}
+	if unsubscribeSPINE == nil {
+		handler.deactivateSPINEEvents()
+		return nil, closeRuntime(errors.New("SPINE runtime event subscription omitted unsubscribe"))
+	}
+	closeRuntimeWithSPINE := func(cause error) error {
+		handler.deactivateSPINEEvents()
+		eventErr := unsubscribeSPINE()
+		handler.waitForSPINEEvents()
+		return errors.Join(closeRuntime(cause), eventErr)
+	}
 	if firstTrust != nil {
 		if err := attachRuntimeFirstTrust(ctx, firstTrust, config, service, reader, dependencies); err != nil {
-			return nil, closeRuntime(err)
+			return nil, closeRuntimeWithSPINE(err)
 		}
 		outgoingAttemptBridge.bindTLSLifecycle(firstTrust.facade)
 	}
 	backend := &serviceBackend{
 		service: service, handler: handler, firstTrust: firstTrust, outgoingAttempts: outgoingAttemptBridge,
+		unsubscribeSPINE: unsubscribeSPINE,
 	}
 	if scoped, ok := service.(runtimeScopedService); ok {
 		if !backend.runtimeStartAuthorized() {
-			return nil, closeRuntime(errRuntimeTrustEffectsDenied)
+			return nil, closeRuntimeWithSPINE(errRuntimeTrustEffectsDenied)
 		}
 		if err := scoped.StartWithPolicy(); err != nil {
-			return nil, closeRuntime(fmt.Errorf("start scoped eebus runtime service: %w", err))
+			return nil, closeRuntimeWithSPINE(fmt.Errorf("start scoped eebus runtime service: %w", err))
 		}
 		terminal := scoped.ListenerTerminal()
 		if terminal == nil {
-			return nil, closeRuntime(errors.New("scoped eebus runtime service omitted listener terminal signal"))
+			return nil, closeRuntimeWithSPINE(errors.New("scoped eebus runtime service omitted listener terminal signal"))
 		}
 		backend.listenerTerminal = terminal
 		backend.serviceStarted = true
@@ -359,6 +388,16 @@ func (backend *serviceBackend) Close() error {
 		return backend.closeErr
 	}
 	backend.closed = true
+	if backend.handler != nil {
+		backend.handler.deactivateSPINEEvents()
+	}
+	var eventErr error
+	if backend.unsubscribeSPINE != nil {
+		eventErr = backend.unsubscribeSPINE()
+	}
+	if backend.handler != nil {
+		backend.handler.waitForSPINEEvents()
+	}
 	if backend.service != nil {
 		backend.service.Shutdown()
 	}
@@ -370,7 +409,7 @@ func (backend *serviceBackend) Close() error {
 	if backend.firstTrust != nil {
 		trustErr = backend.firstTrust.Close()
 	}
-	backend.closeErr = errors.Join(attemptErr, trustErr)
+	backend.closeErr = errors.Join(eventErr, attemptErr, trustErr)
 	return backend.closeErr
 }
 
@@ -467,6 +506,8 @@ func validRuntimeSKI(value string) bool {
 type runtimeServiceHandler struct {
 	mu        sync.Mutex
 	publishMu sync.Mutex
+	spineWG   sync.WaitGroup
+	spineWork sync.WaitGroup
 
 	runtimeID                 string
 	localSKI                  string
@@ -476,10 +517,18 @@ type runtimeServiceHandler struct {
 	projectionLivenessAllowed func(string) bool
 	projectionRemotes         []string
 	policyRemotes             []string
+	runtimeRevision           uint64
+	publishedRuntimeRevision  uint64
 	publishedTrustRevision    uint64
 	now                       func() time.Time
 	publish                   func([]byte)
 	errors                    chan error
+	spineService              runtimeService
+	spineEventsActive         bool
+	spineGeneration           uint64
+	spineCancel               context.CancelFunc
+	spineWake                 chan struct{}
+	spinePending              map[string]runtimeSPINERefresh
 }
 
 func newRuntimeServiceHandler(config RuntimeConfig, localSKI string, now func() time.Time) (*runtimeServiceHandler, error) {
@@ -575,6 +624,7 @@ func (handler *runtimeServiceHandler) VisibleRemoteServicesUpdated(_ eebusapi.Se
 			return
 		}
 		handler.observations[ski] = observation
+		handler.runtimeRevision++
 		changed = true
 	}
 	for ski, observation := range handler.observations {
@@ -593,6 +643,7 @@ func (handler *runtimeServiceHandler) VisibleRemoteServicesUpdated(_ eebusapi.Se
 			return
 		}
 		handler.observations[ski] = observation
+		handler.runtimeRevision++
 		changed = true
 	}
 	handler.mu.Unlock()
@@ -663,6 +714,7 @@ func (handler *runtimeServiceHandler) updateRemote(ski string, create bool, upda
 		return
 	}
 	handler.observations[ski] = observation
+	handler.runtimeRevision++
 	handler.mu.Unlock()
 	handler.publishOrReport()
 }
@@ -685,23 +737,30 @@ func (handler *runtimeServiceHandler) publishOrReport() {
 func (handler *runtimeServiceHandler) publishCurrent() error {
 	handler.mu.Lock()
 	capture := handler.projectionCapture
+	revision := handler.runtimeRevision
+	graph := handler.reducer.Snapshot()
 	handler.mu.Unlock()
 	if capture != nil {
 		return handler.publishTrustAdminProjection(capture())
 	}
-	return handler.publishRuntimeGraph(handler.reducer.Snapshot())
+	return handler.publishRuntimeGraphAtRevision(graph, revision)
 }
 
 func (handler *runtimeServiceHandler) publishTrustAdminProjection(projection trustAdminProjection) error {
+	graph, remotes, runtimeRevision := handler.runtimeGraphAndProjectionRemotes()
 	handler.publishMu.Lock()
 	defer handler.publishMu.Unlock()
-	if projection.revision < handler.publishedTrustRevision {
+	if projection.revision < handler.publishedTrustRevision ||
+		runtimeRevision < handler.publishedRuntimeRevision {
 		return nil
 	}
-	handler.publishedTrustRevision = projection.revision
-	graph, remotes := handler.runtimeGraphAndProjectionRemotes()
 	applyTrustAdminProjection(graph, remotes, projection)
-	return handler.publishRuntimeGraph(graph)
+	if err := handler.publishRuntimeGraph(graph); err != nil {
+		return err
+	}
+	handler.publishedRuntimeRevision = runtimeRevision
+	handler.publishedTrustRevision = projection.revision
+	return nil
 }
 
 func (handler *runtimeServiceHandler) remoteLivenessAllowed(ski string) bool {
@@ -729,11 +788,26 @@ func (handler *runtimeServiceHandler) publishRuntimeGraph(graph []runtimeGraphOb
 	return nil
 }
 
-func (handler *runtimeServiceHandler) runtimeGraphAndProjectionRemotes() ([]runtimeGraphObservation, []string) {
+func (handler *runtimeServiceHandler) publishRuntimeGraphAtRevision(graph []runtimeGraphObservation, revision uint64) error {
+	handler.publishMu.Lock()
+	defer handler.publishMu.Unlock()
+	if revision < handler.publishedRuntimeRevision {
+		return nil
+	}
+	if err := handler.publishRuntimeGraph(graph); err != nil {
+		return err
+	}
+	handler.publishedRuntimeRevision = revision
+	return nil
+}
+
+func (handler *runtimeServiceHandler) runtimeGraphAndProjectionRemotes() ([]runtimeGraphObservation, []string, uint64) {
 	handler.mu.Lock()
 	remotes := append([]string(nil), handler.projectionRemotes...)
+	revision := handler.runtimeRevision
+	graph := handler.reducer.Snapshot()
 	handler.mu.Unlock()
-	return handler.reducer.Snapshot(), remotes
+	return graph, remotes, revision
 }
 
 func (handler *runtimeServiceHandler) report(err error) {
@@ -754,11 +828,15 @@ func (handler *runtimeServiceHandler) timestamp() time.Time {
 	return value
 }
 
-func runtimeDevicesForRemote(service eebusapi.ServiceInterface, ski string) ([]runtimeDeviceObservation, error) {
+func runtimeDevicesForRemote(service runtimeDeviceProvider, ski string) ([]runtimeDeviceObservation, error) {
 	if service == nil || service.LocalDevice() == nil {
 		return nil, nil
 	}
 	remote := service.LocalDevice().RemoteDeviceForSki(ski)
+	return runtimeDevicesForRemoteDevice(remote, ski)
+}
+
+func runtimeDevicesForRemoteDevice(remote spineapi.DeviceRemoteInterface, ski string) ([]runtimeDeviceObservation, error) {
 	if remote == nil {
 		return nil, nil
 	}
@@ -785,7 +863,7 @@ func runtimeDevicesForRemote(service eebusapi.ServiceInterface, ski string) ([]r
 				return nil, err
 			}
 			role := strings.ToLower(string(feature.Role()))
-			if role != "client" && role != "server" {
+			if role != "client" && role != "server" && role != "special" {
 				role = ""
 			}
 			entityObservation.Features = append(entityObservation.Features, runtimeFeatureObservation{ID: featureID, Role: role})
@@ -1180,7 +1258,7 @@ func normalizeRuntimeEntityObservation(source runtimeEntityObservation) (runtime
 			return runtimeEntityObservation{}, errors.New("runtime feature identity is required")
 		}
 		switch feature.Role {
-		case "", "client", "server":
+		case "", "client", "server", "special":
 		default:
 			return runtimeEntityObservation{}, errors.New("runtime feature role is unsupported")
 		}

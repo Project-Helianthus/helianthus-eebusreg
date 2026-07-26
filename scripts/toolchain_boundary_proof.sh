@@ -11,6 +11,8 @@ eebus_module_path="github.com/Project-Helianthus/helianthus-eebus-go"
 eebus_module_version="v0.7.1-helianthus.8"
 ship_module_path="github.com/Project-Helianthus/helianthus-ship-go"
 ship_module_version="v0.6.1-helianthus.8"
+spine_module_path="github.com/Project-Helianthus/helianthus-spine-go"
+spine_module_version="v0.7.1-helianthus.4"
 
 echo "==> toolchain boundary proof"
 go version
@@ -46,15 +48,17 @@ fi
 
 eebus_module_json="$(mktemp)"
 ship_module_json="$(mktemp)"
+spine_module_json="$(mktemp)"
 module_graph="$(mktemp)"
 cleanup() {
-  rm -f "$eebus_module_json" "$ship_module_json" "$module_graph"
+  rm -f "$eebus_module_json" "$ship_module_json" "$spine_module_json" "$module_graph"
 }
 trap cleanup EXIT
 
 echo "==> module pin"
 go list -m -json "$eebus_module_path" | tee "$eebus_module_json"
 go list -m -json "$ship_module_path" | tee "$ship_module_json"
+go list -m -json "$spine_module_path" | tee "$spine_module_json"
 
 echo "==> go.mod boundary"
 go run -mod=readonly ./internal/toolchainproof \
@@ -71,6 +75,13 @@ go run -mod=readonly ./internal/toolchainproof \
   -module "$ship_module_path" \
   -version "$ship_module_version" \
   -module-json "$ship_module_json"
+go run -mod=readonly ./internal/toolchainproof \
+  -repo-root "$repo_root" \
+  -max-go "$max_go" \
+  -active-go "$active_go" \
+  -module "$spine_module_path" \
+  -version "$spine_module_version" \
+  -module-json "$spine_module_json"
 
 echo "==> public boundary"
 ./scripts/api_boundary_gate.sh

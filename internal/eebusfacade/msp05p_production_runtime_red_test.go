@@ -114,7 +114,8 @@ func TestMSP05PServiceBackendReportsListenerTerminalAndClaimsPublisherOnce(t *te
 		newService: func(RuntimeConfig, runtimeMaterial, eebusapi.ServiceReaderInterface) (runtimeService, error) {
 			return service, nil
 		},
-		now: time.Now,
+		subscribeSPINEEvents: runtimeTestSPINEEventSubscriber,
+		now:                  time.Now,
 	}
 	backend, err := acquireRuntime(context.Background(), RuntimeConfig{
 		StateRoot: filepath.Join(canonicalRuntimeTempDir(t), "state"), Interface: "fixture-interface", ListenPort: 4711,

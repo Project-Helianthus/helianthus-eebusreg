@@ -63,6 +63,7 @@ const (
 	FeatureRoleV1Unspecified FeatureRoleV1 = ""
 	FeatureRoleV1Client      FeatureRoleV1 = "client"
 	FeatureRoleV1Server      FeatureRoleV1 = "server"
+	FeatureRoleV1Special     FeatureRoleV1 = "special"
 )
 
 type SnapshotV1 struct {
@@ -465,7 +466,10 @@ func validateFeaturesV1(values []FeatureV1) error {
 		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindPeer); err != nil {
 			return fmt.Errorf("feature %d id: %w", i, err)
 		}
-		if value.Role != FeatureRoleV1Unspecified && value.Role != FeatureRoleV1Client && value.Role != FeatureRoleV1Server {
+		if value.Role != FeatureRoleV1Unspecified &&
+			value.Role != FeatureRoleV1Client &&
+			value.Role != FeatureRoleV1Server &&
+			value.Role != FeatureRoleV1Special {
 			return fmt.Errorf("feature %d: unsupported role", i)
 		}
 		if err := validateSnapshotRawV1(value.Raw); err != nil {
