@@ -187,7 +187,8 @@ func (coordinator *firstTrustCoordinator) captureTrustAdminProjectionLocked() tr
 		}
 		return projection
 	}
-	if coordinator.recovery != "PAIRED_TRUSTED" {
+	if coordinator.recovery != "PAIRED_TRUSTED" &&
+		!(coordinator.recovery == "QUARANTINED" && coordinator.recoveryReasonCode == "RETRYABLE_FAILURE") {
 		return projection
 	}
 
@@ -268,13 +269,38 @@ func (coordinator *firstTrustCoordinator) trustAdminStructuralIndeterminateLocke
 		return true
 	}
 	for _, record := range coordinator.controlView.control.quarantines {
+		if !firstTrustQuarantineRecordValid(record, coordinator.backoffPolicy) {
+			return true
+		}
+		if coordinator.trustAdminVolatileCandidateQuarantineLocked(record) {
+			continue
+		}
 		switch record.state {
-		case "RETRY_READY":
-			if !firstTrustQuarantineRecordValid(record, coordinator.backoffPolicy) {
+		case "RETRY_READY", "BACKOFF_ACTIVE":
+			matches := 0
+			for _, remote := range coordinator.trustAdminProjection.remotes {
+				if record.scope == firstTrustRuntimeRetryScope(firstTrustNormalizedSKI(remote)) {
+					matches++
+				}
+			}
+			if matches != 1 {
 				return true
 			}
-		case "BACKOFF_ACTIVE", "ADMIN_HOLD":
+		case "ADMIN_HOLD":
 		default:
+			return true
+		}
+	}
+	for _, remote := range coordinator.trustAdminProjection.remotes {
+		matches := 0
+		for _, association := range coordinator.controlView.associations {
+			if bytes.Equal(association.subject, remote) &&
+				firstTrustAssociationUsable(association, coordinator.controlView.control.associationLineage) &&
+				!coordinator.firstTrustTombstonedLocked(association) {
+				matches++
+			}
+		}
+		if matches > 1 {
 			return true
 		}
 	}
@@ -292,7 +318,7 @@ func (coordinator *firstTrustCoordinator) trustAdminStructuralIndeterminateLocke
 		case "ADMIN_HOLD", "HANDSHAKE_ATTEMPT_LIMIT":
 			return !coordinator.trustAdminHasQuarantineStateLocked("ADMIN_HOLD")
 		case "RETRYABLE_FAILURE":
-			return !coordinator.trustAdminHasQuarantineStateLocked("BACKOFF_ACTIVE")
+			return !coordinator.trustAdminHasRetryQuarantineLocked()
 		default:
 			return true
 		}
@@ -307,9 +333,32 @@ func (coordinator *firstTrustCoordinator) trustAdminStructuralIndeterminateLocke
 	}
 }
 
+func (coordinator *firstTrustCoordinator) trustAdminVolatileCandidateQuarantineLocked(
+	record firstTrustQuarantineRecord,
+) bool {
+	candidate := coordinator.currentCandidate
+	if candidate == nil || len(candidate.remote) != 20 ||
+		(coordinator.phase != firstTrustCandidatePending &&
+			coordinator.phase != firstTrustTransientTrusted &&
+			coordinator.phase != firstTrustCommitting) {
+		return false
+	}
+	return record.scope == firstTrustRuntimeRetryScope(firstTrustNormalizedSKI(candidate.remote))
+}
+
 func (coordinator *firstTrustCoordinator) trustAdminHasQuarantineStateLocked(state string) bool {
 	for _, record := range coordinator.controlView.control.quarantines {
 		if record.state == state && firstTrustQuarantineRecordValid(record, coordinator.backoffPolicy) {
+			return true
+		}
+	}
+	return false
+}
+
+func (coordinator *firstTrustCoordinator) trustAdminHasRetryQuarantineLocked() bool {
+	for _, record := range coordinator.controlView.control.quarantines {
+		if (record.state == "BACKOFF_ACTIVE" || record.state == "RETRY_READY") &&
+			firstTrustQuarantineRecordValid(record, coordinator.backoffPolicy) {
 			return true
 		}
 	}
@@ -330,7 +379,7 @@ func (coordinator *firstTrustCoordinator) trustAdminTerminalDenialLocked() bool 
 
 func (coordinator *firstTrustCoordinator) trustAdminHasTerminalQuarantineLocked() bool {
 	for _, record := range coordinator.controlView.control.quarantines {
-		if record.state == "ADMIN_HOLD" || record.state == "BACKOFF_ACTIVE" {
+		if record.state == "ADMIN_HOLD" {
 			return true
 		}
 	}

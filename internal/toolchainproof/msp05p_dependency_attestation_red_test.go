@@ -13,7 +13,7 @@ func TestMSP05PCommandDefaultPinsReviewedEEBusGo(t *testing.T) {
 
 go 1.22.0
 
-require github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.8
+require github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.9
 `)
 	command := exec.Command("go", "run", ".", "-repo-root", root, "-max-go", "1.22")
 	command.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local")
@@ -21,7 +21,7 @@ require github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.8
 	if err != nil {
 		t.Fatalf("toolchain proof default rejected reviewed eebus-go: %v\n%s", err, output)
 	}
-	if !strings.Contains(string(output), "github.com/Project-Helianthus/helianthus-eebus-go@v0.7.1-helianthus.8") {
+	if !strings.Contains(string(output), "github.com/Project-Helianthus/helianthus-eebus-go@v0.7.1-helianthus.9") {
 		t.Fatalf("toolchain proof output omitted reviewed eebus-go pin:\n%s", output)
 	}
 }
@@ -34,9 +34,9 @@ func TestMSP05PToolchainScriptDeclaresReviewedRuntimeClosure(t *testing.T) {
 	source := string(payload)
 	for _, required := range []string{
 		"github.com/Project-Helianthus/helianthus-eebus-go",
-		"v0.7.1-helianthus.8",
+		"v0.7.1-helianthus.9",
 		"github.com/Project-Helianthus/helianthus-ship-go",
-		"v0.6.1-helianthus.8",
+		"v0.6.1-helianthus.9",
 		"github.com/Project-Helianthus/helianthus-spine-go",
 		"v0.7.1-helianthus.4",
 	} {
@@ -44,7 +44,7 @@ func TestMSP05PToolchainScriptDeclaresReviewedRuntimeClosure(t *testing.T) {
 			t.Errorf("toolchain boundary proof omits current dependency token %q", required)
 		}
 	}
-	for _, stale := range []string{"v0.7.1-helianthus.1", "v0.7.1-helianthus.2", "v0.7.1-helianthus.3", "v0.7.1-helianthus.7", "v0.6.1-helianthus.2", "v0.6.1-helianthus.4", "v0.6.1-helianthus.5", "v0.6.1-helianthus.7"} {
+	for _, stale := range []string{"v0.7.1-helianthus.1", "v0.7.1-helianthus.2", "v0.7.1-helianthus.3", "v0.7.1-helianthus.7", "v0.7.1-helianthus.8", "v0.6.1-helianthus.2", "v0.6.1-helianthus.4", "v0.6.1-helianthus.5", "v0.6.1-helianthus.7", "v0.6.1-helianthus.8"} {
 		if strings.Contains(source, stale) {
 			t.Errorf("toolchain boundary proof retains stale current pin %q", stale)
 		}
