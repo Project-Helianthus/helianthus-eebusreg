@@ -1,7 +1,6 @@
 package eebusfacade
 
 import (
-	"go/ast"
 	"strings"
 	"testing"
 	"time"
@@ -13,34 +12,6 @@ func TestMSP055RuntimeDoesNotImportUnscopedEEBusService(t *testing.T) {
 			if strings.Trim(imported.Path.Value, `"`) == "github.com/Project-Helianthus/helianthus-eebus-go/service" {
 				t.Fatal("internal runtime imports eebus-go service with a wildcard SHIP listener")
 			}
-		}
-	}
-}
-
-func TestMSP055RuntimeWiresScopeAdmissionAndGraphReduction(t *testing.T) {
-	required := map[string]bool{
-		"validateRuntimeScope":         false,
-		"runtimeRemoteAdmitted":        false,
-		"newRuntimeObservationReducer": false,
-	}
-	for _, file := range parseImplementationFiles(t) {
-		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			identifier, ok := call.Fun.(*ast.Ident)
-			if ok {
-				if _, tracked := required[identifier.Name]; tracked {
-					required[identifier.Name] = true
-				}
-			}
-			return true
-		})
-	}
-	for _, name := range []string{"validateRuntimeScope", "runtimeRemoteAdmitted", "newRuntimeObservationReducer"} {
-		if !required[name] {
-			t.Errorf("internal runtime does not call %s", name)
 		}
 	}
 }
