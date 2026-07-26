@@ -49,7 +49,8 @@ func (coordinator *firstTrustCoordinator) prepareOutgoingAttemptLocked(
 	coordinator.mu.Lock()
 	if !coordinator.firstTrustOutgoingAttemptEligibleLocked(request.remoteSKI) ||
 		coordinator.outgoingAttemptLease <= 0 || coordinator.outgoingAttemptSchedule == nil ||
-		coordinator.controlView.control.controlEpoch == math.MaxUint64 {
+		coordinator.controlView.control.controlEpoch == math.MaxUint64 ||
+		coordinator.successfulOutgoingAttemptOwnerLocked(request.remoteSKI) {
 		coordinator.mu.Unlock()
 		return nil, "attempt_denied"
 	}
@@ -180,7 +181,6 @@ func (coordinator *firstTrustCoordinator) prepareOutgoingAttemptLocked(
 		cancellationGeneration: record.cancellationGeneration,
 		candidateConnection:    candidateConnection, leaseDeadline: leaseDeadline,
 	}
-	coordinator.supersedeSuccessfulOutgoingAttemptsLocked(request.remoteSKI, attemptID)
 	coordinator.retryInflight[scope] = true
 	coordinator.storeGeneration = publication.target.manifest.current.sequence
 	coordinator.mu.Unlock()
@@ -869,18 +869,13 @@ func (coordinator *firstTrustCoordinator) outgoingAttemptOwnerCountLocked() int 
 	return owners
 }
 
-func (coordinator *firstTrustCoordinator) supersedeSuccessfulOutgoingAttemptsLocked(
-	remote []byte,
-	currentAttemptID [32]byte,
-) {
-	for attemptID, runtime := range coordinator.outgoingAttemptContexts {
-		if attemptID == currentAttemptID || runtime.settlement != "success" ||
-			!bytes.Equal(runtime.remoteSKI, remote) {
-			continue
+func (coordinator *firstTrustCoordinator) successfulOutgoingAttemptOwnerLocked(remote []byte) bool {
+	for _, runtime := range coordinator.outgoingAttemptContexts {
+		if runtime.settlement == "success" && bytes.Equal(runtime.remoteSKI, remote) {
+			return true
 		}
-		runtime.settlement = "superseded"
-		coordinator.outgoingAttemptContexts[attemptID] = runtime
 	}
+	return false
 }
 
 func (coordinator *firstTrustCoordinator) firstTrustOutgoingAttemptMetadataLocked(metadata firstTrustOutgoingAttemptMetadata) int {

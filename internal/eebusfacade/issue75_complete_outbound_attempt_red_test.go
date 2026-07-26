@@ -254,6 +254,168 @@ func TestIssue75CompleteWinsLeaseRaceAndDelayedLeaseNoOps(t *testing.T) {
 	}
 }
 
+func TestIssue75SuccessfulOwnerDeniesSameSKIPrepareUntilExactClose(t *testing.T) {
+	attempt := newIssue75TrustedAttempt(t)
+	cancelCalls := issue75InstallCancelCounter(t, attempt.coordinator, attempt.permit.Metadata)
+	oldRuntime := attempt.handle.(*runtimeOutgoingAttemptHandle)
+	oldMetadata, ok := runtimeOutgoingAttemptMetadataFromSHIP(attempt.permit.Metadata)
+	if !ok {
+		t.Fatal("fixture permit metadata is invalid")
+	}
+	oldCancellationGeneration := oldRuntime.handle.cancellationGeneration
+
+	completionEntered := make(chan struct{})
+	releaseCompletion := make(chan struct{})
+	attempt.lifecycle.onPairing = func(_ string, state shipapi.ConnectionState) {
+		if state != shipapi.ConnectionStateCompleted {
+			return
+		}
+		close(completionEntered)
+		<-releaseCompletion
+	}
+	completeDone := make(chan struct{})
+	go func() {
+		attempt.complete()
+		close(completeDone)
+	}()
+	waitMSP04CSignal(t, completionEntered)
+
+	type prepareResult struct {
+		handle shipapi.OutgoingAttemptHandle
+		err    error
+	}
+	prepareStarted := make(chan struct{})
+	prepareDone := make(chan prepareResult, 1)
+	go func() {
+		close(prepareStarted)
+		handle, err := attempt.bridge.Prepare(issue75SHIPRequest(attempt.remoteSKI, "replacement.invalid"))
+		prepareDone <- prepareResult{handle: handle, err: err}
+	}()
+	waitMSP04CSignal(t, prepareStarted)
+	select {
+	case result := <-prepareDone:
+		t.Fatalf("same-SKI prepare crossed the completion lane: handle=%v err=%v", result.handle, result.err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseCompletion)
+	waitMSP04CSignal(t, completeDone)
+	result := <-prepareDone
+	if result.err == nil || result.handle != nil {
+		t.Fatalf("same-SKI prepare while successful owner was live = %v/%v, want denial", result.handle, result.err)
+	}
+	issue75AssertSuccessfulRetirement(t, attempt.coordinator, attempt.scope, attempt.permit.Context)
+	if got := cancelCalls.Load(); got != 0 {
+		t.Fatalf("denied replacement cancelled successful owner %d times", got)
+	}
+	issue75AssertCompletedLifecycle(t, attempt.lifecycle, 1, 0)
+	if classes := attempt.store.classesContaining("failure"); len(classes) != 0 {
+		t.Fatalf("denied replacement charged retry failure: %v", classes)
+	}
+	attempt.coordinator.mu.Lock()
+	runtime, markerOK := attempt.coordinator.outgoingAttemptContexts[oldMetadata.attemptID]
+	ownerCount := attempt.coordinator.outgoingAttemptOwnerCountLocked()
+	attempt.coordinator.mu.Unlock()
+	if !markerOK || runtime.metadata != oldMetadata || runtime.settlement != "success" || ownerCount != 1 {
+		t.Fatalf("denied replacement mutated successful owner: runtime=%#v present=%t owners=%d", runtime, markerOK, ownerCount)
+	}
+
+	attempt.close(true)
+	issue75AssertContextCancelled(t, attempt.permit.Context)
+	if got := cancelCalls.Load(); got != 1 {
+		t.Fatalf("exact close cancel calls = %d, want 1", got)
+	}
+	issue75AssertCompletedLifecycle(t, attempt.lifecycle, 1, 1)
+	attempt.coordinator.mu.Lock()
+	ownerCount = attempt.coordinator.outgoingAttemptOwnerCountLocked()
+	attempt.coordinator.mu.Unlock()
+	if ownerCount != 0 {
+		t.Fatalf("exact close retained %d outgoing owner(s)", ownerCount)
+	}
+
+	current, err := attempt.bridge.Prepare(issue75SHIPRequest(attempt.remoteSKI, "replacement.invalid"))
+	if err != nil || current == nil {
+		t.Fatalf("prepare after exact close = %v/%v", current, err)
+	}
+	currentPermit, err := attempt.bridge.AuthorizeLaunch(current)
+	if err != nil || currentPermit.Decision != shipapi.OutgoingAttemptDecisionPermit {
+		t.Fatalf("authorize after exact close = %#v/%v", currentPermit, err)
+	}
+	before, ok := soleMSP04CR2Attempt(attempt.coordinator)
+	if !ok {
+		t.Fatal("replacement attempt is absent")
+	}
+
+	attempt.complete()
+	attempt.bridge.OutgoingAttemptHandshakeStateUpdate(
+		attempt.remoteSKI,
+		shipmodel.ShipState{State: shipmodel.SmeStateError},
+		attempt.permit.Metadata,
+	)
+	attempt.close(true)
+	attempt.coordinator.expireOutgoingAttemptLease(
+		attempt.remote,
+		oldMetadata,
+		oldCancellationGeneration,
+	)
+
+	after, ok := soleMSP04CR2Attempt(attempt.coordinator)
+	if !ok || !reflect.DeepEqual(after, before) ||
+		after.attemptID != permitMetadataAttemptID(t, currentPermit.Metadata) {
+		t.Fatalf("stale successful-owner callbacks changed replacement: before=%#v after=%#v present=%t", before, after, ok)
+	}
+	if currentPermit.Context.Err() != nil {
+		t.Fatal("stale successful-owner callback cancelled replacement permit")
+	}
+	issue75AssertCompletedLifecycle(t, attempt.lifecycle, 1, 1)
+	if classes := attempt.store.classesContaining("failure"); len(classes) != 0 {
+		t.Fatalf("stale successful-owner callbacks charged retry failure: %v", classes)
+	}
+}
+
+func TestIssue75RepeatedSuccessfulOwnerCyclesDoNotExhaustCapacity(t *testing.T) {
+	attempt := newIssue75TrustedAttempt(t)
+	for cycle := 0; cycle <= firstTrustMaximumOutgoingAttempts; cycle++ {
+		if cycle > 0 {
+			handle, err := attempt.bridge.Prepare(issue75SHIPRequest(
+				attempt.remoteSKI,
+				fmt.Sprintf("cycle-%03d.invalid", cycle),
+			))
+			if err != nil || handle == nil {
+				t.Fatalf("prepare cycle %d = %v/%v", cycle, handle, err)
+			}
+			permit, err := attempt.bridge.AuthorizeLaunch(handle)
+			if err != nil || permit.Decision != shipapi.OutgoingAttemptDecisionPermit {
+				t.Fatalf("authorize cycle %d = %#v/%v", cycle, permit, err)
+			}
+			attempt.handle = handle
+			attempt.permit = permit
+		}
+
+		attempt.complete()
+		if handle, err := attempt.bridge.Prepare(issue75SHIPRequest(attempt.remoteSKI, "overlap.invalid")); err == nil || handle != nil {
+			t.Fatalf("cycle %d admitted an overlapping same-SKI owner: handle=%v err=%v", cycle, handle, err)
+		}
+		attempt.close(true)
+		issue75AssertContextCancelled(t, attempt.permit.Context)
+		attempt.coordinator.mu.Lock()
+		owners := attempt.coordinator.outgoingAttemptOwnerCountLocked()
+		attempt.coordinator.mu.Unlock()
+		if owners != 0 {
+			t.Fatalf("cycle %d retained %d outgoing owner(s)", cycle, owners)
+		}
+	}
+	issue75AssertCompletedLifecycle(
+		t,
+		attempt.lifecycle,
+		firstTrustMaximumOutgoingAttempts+1,
+		firstTrustMaximumOutgoingAttempts+1,
+	)
+	if classes := attempt.store.classesContaining("failure"); len(classes) != 0 {
+		t.Fatalf("repeated successful cycles charged retry failure: %v", classes)
+	}
+}
+
 func TestIssue75RetiredCallbacksCannotMutateNewerAttempt(t *testing.T) {
 	attempt := newIssue75TrustedAttempt(t)
 	oldRuntime := attempt.handle.(*runtimeOutgoingAttemptHandle)

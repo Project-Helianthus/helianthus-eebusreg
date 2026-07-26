@@ -419,6 +419,9 @@ func TestMSP04CR2PermitIsSingleUseAndFallbackNeedsFreshReservation(t *testing.T)
 	if got := coordinator.completeOutgoingAttempt(context.Background(), first.metadata, true); got != "attempt_succeeded" {
 		t.Fatalf("first terminal success = %q", got)
 	}
+	if _, consumed := coordinator.consumeSuccessfulOutgoingAttemptLocked(first.metadata, remote); !consumed {
+		t.Fatal("first exact success release was not consumed")
+	}
 
 	second, outcome := coordinator.prepareOutgoingAttempt(context.Background(), msp04cr2Request(remote, "peer.invalid", 4712, ""))
 	if outcome != "attempt_reserved" || second == nil {
