@@ -613,7 +613,12 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		observation.SessionState = "connected"
 		observation.Visible = true
 		observation.Since = handler.timestamp()
-		observation.Devices = devices
+		merged, mergeErr := mergeRuntimeDeviceCollections(observation.Devices, devices)
+		if mergeErr != nil {
+			handler.report(mergeErr)
+			return
+		}
+		observation.Devices = merged
 	})
 }
 
@@ -936,7 +941,7 @@ func runtimeDevicesForRemoteDevice(remote spineapi.DeviceRemoteInterface, ski st
 		device.Metadata = map[string]string{"network_feature_set": string(*featureSet)}
 	}
 	rolesByAddress := make(map[string]string)
-	for index, entity := range remote.Entities() {
+	for _, entity := range remote.Entities() {
 		if entity == nil {
 			continue
 		}
@@ -945,7 +950,7 @@ func runtimeDevicesForRemoteDevice(remote spineapi.DeviceRemoteInterface, ski st
 		if entityAddress == nil || entityType == "" {
 			continue
 		}
-		entityID, err := runtimeIdentity("entity", ski, entity.Address(), index)
+		entityID, err := runtimeIdentity("entity", ski, entityAddress.String())
 		if err != nil {
 			return nil, err
 		}
@@ -953,7 +958,7 @@ func runtimeDevicesForRemoteDevice(remote spineapi.DeviceRemoteInterface, ski st
 			ID: entityID, DeviceAddress: device.Address, EntityAddress: entityAddress.String(),
 			Type: string(entityType), Description: cloneRuntimeDescription(entity.Description()),
 		}
-		for featureIndex, feature := range entity.Features() {
+		for _, feature := range entity.Features() {
 			if feature == nil {
 				continue
 			}
@@ -962,7 +967,7 @@ func runtimeDevicesForRemoteDevice(remote spineapi.DeviceRemoteInterface, ski st
 			if featureAddress == nil || featureType == "" {
 				continue
 			}
-			featureID, err := runtimeIdentity("feature", ski, feature.Address(), featureIndex)
+			featureID, err := runtimeIdentity("feature", ski, featureAddress.String())
 			if err != nil {
 				return nil, err
 			}
@@ -979,17 +984,21 @@ func runtimeDevicesForRemoteDevice(remote spineapi.DeviceRemoteInterface, ski st
 		}
 		device.Entities = append(device.Entities, entityObservation)
 	}
-	for index, information := range remote.UseCases() {
+	for _, information := range remote.UseCases() {
 		if information.Address == nil || information.Actor == nil {
 			continue
 		}
 		contextAddress := information.Address.String()
 		actor := string(*information.Actor)
-		for supportIndex, support := range information.UseCaseSupport {
+		for _, support := range information.UseCaseSupport {
 			if support.UseCaseName == nil {
 				continue
 			}
-			useCaseID, err := runtimeIdentity("usecase", ski, information.Address, index, supportIndex)
+			useCaseID, err := runtimeIdentity(
+				"usecase", ski, contextAddress, actor, string(*support.UseCaseName),
+				cloneRuntimeSpecificationVersion(support.UseCaseVersion),
+				cloneRuntimeString(support.UseCaseDocumentSubRevision),
+			)
 			if err != nil {
 				return nil, err
 			}
@@ -1150,11 +1159,11 @@ type runtimeServicePayload struct {
 	Kind       string  `json:"kind"`
 	Visible    bool    `json:"visible"`
 	Paired     bool    `json:"paired"`
-	Name       string  `json:"name"`
-	Identifier string  `json:"identifier"`
-	Brand      string  `json:"brand"`
-	Type       string  `json:"type"`
-	Model      string  `json:"model"`
+	Name       *string `json:"name,omitempty"`
+	Identifier *string `json:"identifier,omitempty"`
+	Brand      *string `json:"brand,omitempty"`
+	Type       *string `json:"type,omitempty"`
+	Model      *string `json:"model,omitempty"`
 }
 
 type runtimeSessionPayload struct {
@@ -1254,12 +1263,12 @@ func marshalRuntimeSnapshotWithIdentity(runtimeIdentity, localIdentity string, g
 				RemoteSKI: remote.RemoteSKI, State: remote.PairingState, Since: remote.Since,
 			})
 		}
-		if runtimeServiceObservationComplete(remote) {
+		if remote.RemoteSKI != "" {
 			payload.Services = append(payload.Services, runtimeServicePayload{
 				SKI: remote.RemoteSKI, SHIPID: runtimeOptionalString(remote.ShipID), Kind: "remote",
-				Visible: remote.Visible, Paired: remote.Paired, Name: remote.ServiceName,
-				Identifier: remote.ServiceIdentifier, Brand: remote.ServiceBrand,
-				Type: remote.ServiceType, Model: remote.ServiceModel,
+				Visible: remote.Visible, Paired: remote.Paired, Name: runtimeOptionalString(remote.ServiceName),
+				Identifier: runtimeOptionalString(remote.ServiceIdentifier), Brand: runtimeOptionalString(remote.ServiceBrand),
+				Type: runtimeOptionalString(remote.ServiceType), Model: runtimeOptionalString(remote.ServiceModel),
 			})
 		}
 		if remote.SessionID != "" && remote.SessionState != "" {
@@ -1364,12 +1373,6 @@ func marshalRuntimeDevice(source runtimeDeviceObservation) (
 		})
 	}
 	return result, entities, features, useCases
-}
-
-func runtimeServiceObservationComplete(observation runtimeGraphObservation) bool {
-	return observation.RemoteSKI != "" && observation.ServiceName != "" &&
-		observation.ServiceIdentifier != "" && observation.ServiceBrand != "" &&
-		observation.ServiceType != "" && observation.ServiceModel != ""
 }
 
 func runtimeOptionalString(value string) *string {
@@ -1557,6 +1560,9 @@ func normalizeRuntimeDeviceObservation(source runtimeDeviceObservation) (runtime
 		if value.ID == "" {
 			return runtimeDeviceObservation{}, errors.New("runtime use-case identity is required")
 		}
+		if existing, ok := useCases[value.ID]; ok {
+			value = mergeRuntimeUseCaseObservations(existing, value)
+		}
 		useCases[value.ID] = value
 	}
 	result.UseCases = make([]runtimeUseCaseObservation, 0, len(useCases))
@@ -1614,8 +1620,12 @@ func normalizeRuntimeEntityObservation(source runtimeEntityObservation) (runtime
 		if feature.ID == "" {
 			return runtimeEntityObservation{}, errors.New("runtime feature identity is required")
 		}
-		if existing, ok := features[feature.ID]; ok && existing.Role != feature.Role {
-			return runtimeEntityObservation{}, errors.New("runtime feature identity has conflicting roles")
+		if existing, ok := features[feature.ID]; ok {
+			var err error
+			feature, err = mergeRuntimeFeatureObservations(existing, feature)
+			if err != nil {
+				return runtimeEntityObservation{}, err
+			}
 		}
 		features[feature.ID] = feature
 	}
@@ -1644,6 +1654,9 @@ func mergeRuntimeDeviceObservations(left, right runtimeDeviceObservation) (runti
 		useCases[value.ID] = value
 	}
 	for _, value := range right.UseCases {
+		if existing, ok := useCases[value.ID]; ok {
+			value = mergeRuntimeUseCaseObservations(existing, value)
+		}
 		useCases[value.ID] = value
 	}
 	result.UseCases = make([]runtimeUseCaseObservation, 0, len(useCases))
@@ -1729,8 +1742,12 @@ func mergeRuntimeEntityObservations(left, right runtimeEntityObservation) (runti
 		features[feature.ID] = feature
 	}
 	for _, feature := range right.Features {
-		if existing, ok := features[feature.ID]; ok && existing.Role != feature.Role {
-			return runtimeEntityObservation{}, errors.New("runtime feature identity has conflicting roles")
+		if existing, ok := features[feature.ID]; ok {
+			var err error
+			feature, err = mergeRuntimeFeatureObservations(existing, feature)
+			if err != nil {
+				return runtimeEntityObservation{}, err
+			}
 		}
 		features[feature.ID] = feature
 	}
@@ -1745,6 +1762,74 @@ func mergeRuntimeEntityObservations(left, right runtimeEntityObservation) (runti
 		return result.Features[left].ID < result.Features[right].ID
 	})
 	return result, nil
+}
+
+func mergeRuntimeFeatureObservations(
+	left, right runtimeFeatureObservation,
+) (runtimeFeatureObservation, error) {
+	result := left
+	if right.DeviceAddress != "" {
+		result.DeviceAddress = right.DeviceAddress
+	}
+	if right.EntityAddress != "" {
+		result.EntityAddress = right.EntityAddress
+	}
+	if right.FeatureAddress != "" {
+		result.FeatureAddress = right.FeatureAddress
+	}
+	if right.Type != "" {
+		result.Type = right.Type
+	}
+	if right.Role != "" {
+		if result.Role != "" && result.Role != right.Role {
+			return runtimeFeatureObservation{}, errors.New("runtime feature identity has conflicting roles")
+		}
+		result.Role = right.Role
+	}
+	if right.Description != nil {
+		result.Description = cloneRuntimeString(right.Description)
+	}
+	return result, nil
+}
+
+func mergeRuntimeUseCaseObservations(
+	left, right runtimeUseCaseObservation,
+) runtimeUseCaseObservation {
+	result := left
+	if right.ContextAddress != "" {
+		result.ContextAddress = right.ContextAddress
+	}
+	if right.Name != "" {
+		result.Name = right.Name
+	}
+	if right.Actor != "" {
+		result.Actor = right.Actor
+	}
+	if right.ResolvedRole != nil {
+		result.ResolvedRole = cloneRuntimeString(right.ResolvedRole)
+	}
+	scenarios := make(map[string]struct{}, len(left.Scenarios)+len(right.Scenarios))
+	for _, value := range append(append([]string(nil), left.Scenarios...), right.Scenarios...) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			scenarios[value] = struct{}{}
+		}
+	}
+	result.Scenarios = make([]string, 0, len(scenarios))
+	for value := range scenarios {
+		result.Scenarios = append(result.Scenarios, value)
+	}
+	sort.Strings(result.Scenarios)
+	if right.Version != nil {
+		result.Version = cloneRuntimeString(right.Version)
+	}
+	if right.Availability != nil {
+		result.Availability = cloneRuntimeBool(right.Availability)
+	}
+	if right.DocumentSubrevision != nil {
+		result.DocumentSubrevision = cloneRuntimeString(right.DocumentSubrevision)
+	}
+	return result
 }
 
 func mergeRuntimeDeviceFields(left, right runtimeDeviceObservation) runtimeDeviceObservation {

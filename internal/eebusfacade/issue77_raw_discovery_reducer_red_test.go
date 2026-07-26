@@ -3,6 +3,9 @@ package eebusfacade
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -139,6 +142,188 @@ func TestIssue77PartialSPINEEventMergePreservesDetailedRawFacts(t *testing.T) {
 	}
 }
 
+func TestIssue77ReconnectAndSparseSameIDMergeRetainDetailedFacts(t *testing.T) {
+	description := "feature description"
+	resolvedRole := "server"
+	version := "1.0.0"
+	available := true
+	subrevision := "release"
+	rich := []runtimeDeviceObservation{{
+		ID: "device-1", SKI: issue77ReducerRemoteSKI,
+		Address: "d:_n:Vaillant_VR940", Type: "EnergyManagementSystem",
+		Entities: []runtimeEntityObservation{{
+			ID: "entity-1", DeviceAddress: "d:_n:Vaillant_VR940",
+			EntityAddress: "[1]", Type: "HvacController",
+			Features: []runtimeFeatureObservation{{
+				ID: "feature-1", DeviceAddress: "d:_n:Vaillant_VR940",
+				EntityAddress: "[1]", FeatureAddress: "[1]:0", Type: "Hvac",
+				Role: "server", Description: &description,
+			}},
+		}},
+		UseCaseIDs: []string{"usecase-1"},
+		UseCases: []runtimeUseCaseObservation{{
+			ID: "usecase-1", ContextAddress: "d:_n:Vaillant_VR940:[1]:0",
+			Name: "monitoring", Actor: "heatingZone", ResolvedRole: &resolvedRole,
+			Scenarios: []string{"1", "2"}, Version: &version, Availability: &available,
+			DocumentSubrevision: &subrevision,
+		}},
+	}}
+	sparse := []runtimeDeviceObservation{{
+		ID: "device-1",
+		Entities: []runtimeEntityObservation{{
+			ID:       "entity-1",
+			Features: []runtimeFeatureObservation{{ID: "feature-1"}},
+		}},
+		UseCaseIDs: []string{"usecase-1"},
+		UseCases:   []runtimeUseCaseObservation{{ID: "usecase-1"}},
+	}}
+	merged, err := mergeRuntimeDeviceCollections(rich, sparse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue77AssertRichDeviceFacts(t, merged)
+
+	handler, _ := issue77RawHandler(t)
+	observation := handler.newRemoteObservation(issue77ReducerRemoteSKI)
+	observation.SessionID = "session-before-reconnect"
+	observation.SessionState = "connected"
+	observation.SessionIndex = 1
+	observation.Devices = rich
+	if err := handler.reducer.Replace(observation); err != nil {
+		t.Fatal(err)
+	}
+	handler.observations[issue77ReducerRemoteSKI] = observation
+	handler.RemoteSKIConnected(nil, issue77ReducerRemoteSKI)
+	handler.mu.Lock()
+	reconnected := cloneRuntimeGraphObservation(handler.observations[issue77ReducerRemoteSKI])
+	handler.mu.Unlock()
+	issue77AssertRichDeviceFacts(t, reconnected.Devices)
+}
+
+func TestIssue77PendingSPINERefreshMergesRichAndSparseInBothOrders(t *testing.T) {
+	description := "retained"
+	rich := runtimeSPINERefresh{
+		generation: 1, sessionIndex: 7,
+		devices: []runtimeDeviceObservation{{
+			ID: "device-1", SKI: issue77ReducerRemoteSKI,
+			Address: "device-1", Type: "gateway", Description: &description,
+		}},
+	}
+	sparse := runtimeSPINERefresh{
+		generation: 1, sessionIndex: 7,
+		devices: []runtimeDeviceObservation{{ID: "device-1"}},
+	}
+	for _, order := range []struct {
+		name          string
+		first, second runtimeSPINERefresh
+	}{
+		{name: "rich-then-sparse", first: rich, second: sparse},
+		{name: "sparse-then-rich", first: sparse, second: rich},
+	} {
+		t.Run(order.name, func(t *testing.T) {
+			handler, _ := issue77RawHandler(t)
+			handler.spineEventsActive = true
+			handler.spineGeneration = 1
+			handler.spinePending = make(map[string]runtimeSPINERefresh)
+			handler.spineWake = make(chan struct{}, 1)
+			handler.observations[issue77ReducerRemoteSKI] = runtimeGraphObservation{
+				RemoteSKI: issue77ReducerRemoteSKI, SessionState: "connected", SessionIndex: 7,
+			}
+			handler.enqueueSPINERefresh(issue77ReducerRemoteSKI, order.first)
+			handler.enqueueSPINERefresh(issue77ReducerRemoteSKI, order.second)
+			got, ok := handler.takeSPINERefresh(issue77ReducerRemoteSKI)
+			if !ok || len(got.devices) != 1 || got.devices[0].Description == nil ||
+				*got.devices[0].Description != description || got.devices[0].Address != "device-1" ||
+				got.devices[0].Type != "gateway" {
+				t.Fatalf("pending refresh lost richer facts: ok=%t refresh=%+v", ok, got)
+			}
+		})
+	}
+}
+
+func TestIssue77SKIOnlyServiceEmitsThenEnrichesWithoutLosingState(t *testing.T) {
+	handler, updates := issue77RawHandler(t)
+	handler.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{Ski: issue77ReducerRemoteSKI}})
+	sparse := issue77Objects(t, issue77DecodeObject(t, issue77WaitPayload(t, updates)), "services")
+	if len(sparse) != 1 || sparse[0]["kind"] != "remote" || sparse[0]["visible"] != true ||
+		sparse[0]["paired"] != false {
+		t.Fatalf("SKI-only service state = %+v, want remote/visible/unpaired", sparse)
+	}
+	for _, field := range []string{"name", "identifier", "brand", "type", "model"} {
+		if _, present := sparse[0][field]; present {
+			t.Errorf("SKI-only service fabricated optional metadata %q", field)
+		}
+	}
+
+	handler.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{issue77RemoteService()})
+	_ = issue77WaitPayload(t, updates)
+	handler.updateRemote(issue77ReducerRemoteSKI, false, func(observation *runtimeGraphObservation) {
+		observation.PairingState = "paired"
+		observation.Paired = true
+	})
+	_ = issue77WaitPayload(t, updates)
+	handler.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{Ski: issue77ReducerRemoteSKI}})
+	if err := handler.publishCurrent(); err != nil {
+		t.Fatal(err)
+	}
+	enriched := issue77Objects(t, issue77DecodeObject(t, issue77WaitPayload(t, updates)), "services")
+	if len(enriched) != 1 || enriched[0]["name"] != "Vaillant VR940f eeBUS" ||
+		enriched[0]["identifier"] != "vr940f-lab-service" || enriched[0]["visible"] != true ||
+		enriched[0]["paired"] != true {
+		t.Fatalf("sparse service update erased enrichment/state: %+v", enriched)
+	}
+}
+
+func TestIssue77SPINEObservationIDsArePermutationStable(t *testing.T) {
+	first, err := runtimeDevicesForRemoteDevice(issue77DetailedVR940WithOrder(t, false), issue77ReducerRemoteSKI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := runtimeDevicesForRemoteDevice(issue77DetailedVR940WithOrder(t, true), issue77ReducerRemoteSKI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := issue77ObservationIDs(first), issue77ObservationIDs(second); !reflect.DeepEqual(got, want) {
+		t.Fatalf("SPINE IDs depend on source slice order:\nfirst=%v\nsecond=%v", got, want)
+	}
+}
+
+func issue77AssertRichDeviceFacts(t *testing.T, devices []runtimeDeviceObservation) {
+	t.Helper()
+	if len(devices) != 1 || len(devices[0].Entities) != 1 ||
+		len(devices[0].Entities[0].Features) != 1 || len(devices[0].UseCases) != 1 {
+		t.Fatalf("merged graph cardinality = %+v", devices)
+	}
+	feature := devices[0].Entities[0].Features[0]
+	useCase := devices[0].UseCases[0]
+	if feature.Description == nil || *feature.Description != "feature description" ||
+		feature.Role != "server" || useCase.ResolvedRole == nil || *useCase.ResolvedRole != "server" ||
+		!reflect.DeepEqual(useCase.Scenarios, []string{"1", "2"}) ||
+		useCase.Version == nil || *useCase.Version != "1.0.0" ||
+		useCase.Availability == nil || !*useCase.Availability ||
+		useCase.DocumentSubrevision == nil || *useCase.DocumentSubrevision != "release" {
+		t.Fatalf("sparse merge erased feature/use-case facts: feature=%+v usecase=%+v", feature, useCase)
+	}
+}
+
+func issue77ObservationIDs(devices []runtimeDeviceObservation) map[string]string {
+	result := make(map[string]string)
+	for _, device := range devices {
+		result["device:"+device.Address] = device.ID
+		for _, entity := range device.Entities {
+			result["entity:"+entity.EntityAddress] = entity.ID
+			for _, feature := range entity.Features {
+				result["feature:"+feature.FeatureAddress] = feature.ID
+			}
+		}
+		for _, useCase := range device.UseCases {
+			key := strings.Join([]string{useCase.ContextAddress, useCase.Name, useCase.Actor}, "\x00")
+			result["usecase:"+key] = useCase.ID
+		}
+	}
+	return result
+}
+
 func issue77RawHandler(t *testing.T) (*runtimeServiceHandler, chan []byte) {
 	t.Helper()
 	handler, err := newRuntimeServiceHandler(
@@ -168,6 +353,10 @@ func issue77RemoteService() shipapi.RemoteService {
 }
 
 func issue77DetailedVR940(t *testing.T) spineapi.DeviceRemoteInterface {
+	return issue77DetailedVR940WithOrder(t, false)
+}
+
+func issue77DetailedVR940WithOrder(t *testing.T, reverse bool) spineapi.DeviceRemoteInterface {
 	t.Helper()
 	deviceAddress := spinemodel.AddressDeviceType("d:_n:Vaillant_VR940")
 	deviceType := spinemodel.DeviceTypeTypeEnergyManagementSystem
@@ -269,8 +458,13 @@ func issue77DetailedVR940(t *testing.T) spineapi.DeviceRemoteInterface {
 		entity.EXPECT().Features().Return(features)
 		entities = append(entities, entity)
 	}
+	useCases := issue77UseCases(deviceAddress)
+	if reverse {
+		slices.Reverse(entities)
+		slices.Reverse(useCases)
+	}
 	remote.EXPECT().Entities().Return(entities)
-	remote.EXPECT().UseCases().Return(issue77UseCases(deviceAddress))
+	remote.EXPECT().UseCases().Return(useCases)
 	return remote
 }
 

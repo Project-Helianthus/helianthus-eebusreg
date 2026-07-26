@@ -1398,8 +1398,11 @@ func msp045AssertTrust(t *testing.T, snapshot runtimeSnapshotPayload, state stri
 	if len(snapshot.Pairing) != 1 || snapshot.Pairing[0].State != state {
 		t.Fatalf("pairing = %+v, want one %q row", snapshot.Pairing, state)
 	}
-	if got := snapshot.Pairing[0].State == "paired"; got != paired {
-		t.Fatalf("pairing state = %q, paired observation = %t, want %t", snapshot.Pairing[0].State, got, paired)
+	if len(snapshot.Services) != 1 {
+		t.Fatalf("services = %+v, want one durable remote service", snapshot.Services)
+	}
+	if got := snapshot.Services[0].Paired; got != paired {
+		t.Fatalf("service paired observation = %t, want %t", got, paired)
 	}
 	if reason == "" {
 		return

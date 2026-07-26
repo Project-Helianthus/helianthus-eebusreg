@@ -274,7 +274,13 @@ func issue54AssertCanonicalConfiguration(t *testing.T, configuration *eebusapi.C
 
 func issue54AssertNoRemoteEvidence(t *testing.T, snapshot runtimeSnapshotPayload) {
 	t.Helper()
-	if len(snapshot.Pairing) != 0 || len(snapshot.Services) != 0 || len(snapshot.Sessions) != 0 || len(snapshot.Devices) != 0 {
-		t.Fatalf("policy fabricated remote evidence: pairing=%+v services=%+v sessions=%+v devices=%+v", snapshot.Pairing, snapshot.Services, snapshot.Sessions, snapshot.Devices)
+	if len(snapshot.Pairing) != 0 || len(snapshot.Services) != 0 || len(snapshot.Sessions) != 0 ||
+		len(snapshot.Devices) != 0 || len(snapshot.Entities) != 0 ||
+		len(snapshot.Features) != 0 || len(snapshot.UseCases) != 0 {
+		t.Fatalf(
+			"policy fabricated remote evidence: pairing=%+v services=%+v sessions=%+v devices=%+v entities=%+v features=%+v usecases=%+v",
+			snapshot.Pairing, snapshot.Services, snapshot.Sessions, snapshot.Devices,
+			snapshot.Entities, snapshot.Features, snapshot.UseCases,
+		)
 	}
 }
