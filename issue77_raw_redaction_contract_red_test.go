@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const issue77FixtureHash = "sha256:a8c602ea1227d207557a97f9958222a416e583061863cfcaa0133a8be4740d47"
+const issue77FixtureHash = "sha256:d96ace89205ac10f710c0a2f249828131fb8e796065c90bc77dfe60d5c19dcd2"
 
 func TestIssue77InitialV1PublicValueSurfaceIsExact(t *testing.T) {
 	for _, check := range []struct {
@@ -24,7 +24,7 @@ func TestIssue77InitialV1PublicValueSurfaceIsExact(t *testing.T) {
 		{SnapshotV1{}, []string{"Meta:meta", "Status:status", "Pairing:pairing", "Services:services", "Sessions:sessions", "Devices:devices", "Entities:entities", "Features:features", "UseCases:usecases", "Opaque:opaque"}},
 		{RedactedSnapshotV1{}, []string{"Meta:meta", "Status:status", "Pairing:pairing", "Services:services", "Sessions:sessions", "Devices:devices", "Entities:entities", "Features:features", "UseCases:usecases"}},
 		{PairingObservationV1{}, []string{"RemoteSKI:remote_ski", "State:state", "Since:since", "Opaque:opaque"}},
-		{ServiceV1{}, []string{"SKI:ski", "SHIPID:ship_id", "Name:name", "Identifier:identifier", "Brand:brand", "Type:type", "Model:model", "SecondaryDigest:secondary_digest", "Opaque:opaque"}},
+		{ServiceV1{}, []string{"SKI:ski", "SHIPID:ship_id", "Kind:kind", "Visible:visible", "Paired:paired", "Name:name", "Identifier:identifier", "Brand:brand", "Type:type", "Model:model", "SecondaryDigest:secondary_digest", "Opaque:opaque"}},
 		{SessionV1{}, []string{"ID:id", "RemoteSKI:remote_ski", "State:state", "Since:since", "Opaque:opaque"}},
 		{DeviceV1{}, []string{"SKI:ski", "SHIPID:ship_id", "Address:address", "Type:type", "Description:description", "Metadata:metadata", "SecondaryDigest:secondary_digest", "Opaque:opaque"}},
 		{EntityV1{}, []string{"DeviceAddress:device_address", "EntityAddress:entity_address", "Type:type", "Description:description", "SecondaryDigest:secondary_digest", "Opaque:opaque"}},
@@ -53,6 +53,7 @@ func TestIssue77InitialV1PublicValueSurfaceIsExact(t *testing.T) {
 		usecase = UseCaseV1{}
 	)
 	assertIssue77Type[*string](t, service.SHIPID)
+	assertIssue77Type[ServiceKindV1](t, service.Kind)
 	assertIssue77Type[*string](t, service.SecondaryDigest)
 	assertIssue77Type[*[]OpaqueObservationV1](t, service.Opaque)
 	assertIssue77Type[*string](t, device.Description)
@@ -83,6 +84,7 @@ func TestIssue77VR940FixtureRetainsRawOperationalFacts(t *testing.T) {
 
 	service := snapshot.Services[0]
 	if service.SKI != issue77RemoteSKI || service.SHIPID == nil || *service.SHIPID != "vaillant-vr940f-ship-id" ||
+		service.Kind != ServiceKindV1Remote || !service.Visible || !service.Paired ||
 		service.Name != "Vaillant VR940f eeBUS" || service.Identifier != "vr940f-lab-service" ||
 		service.Brand != "Vaillant" || service.Type != "eeBUS" || service.Model != "VR940f" {
 		t.Fatalf("raw mDNS/SHIP service facts were not retained: %+v", service)
@@ -234,6 +236,10 @@ func TestIssue77RedactedSnapshotIsSeparateIrreversibleAndIndependentlyHashed(t *
 	}
 	if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(redacted.Meta.DataHash) {
 		t.Fatalf("redacted data_hash is not canonical: %q", redacted.Meta.DataHash)
+	}
+	if len(redacted.Services) != 1 || redacted.Services[0].Kind != ServiceKindV1Remote ||
+		!redacted.Services[0].Visible || !redacted.Services[0].Paired {
+		t.Fatalf("redacted service state = %+v, want remote/visible/paired", redacted.Services)
 	}
 	for _, forbidden := range []string{
 		issue77RemoteSKI,

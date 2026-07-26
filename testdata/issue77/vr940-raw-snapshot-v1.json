@@ -14,7 +14,7 @@
     "mask_tier": "raw",
     "captured_at": "2026-07-26T12:01:00Z",
     "data_timestamp": "2026-07-26T12:00:00Z",
-    "data_hash": "sha256:a8c602ea1227d207557a97f9958222a416e583061863cfcaa0133a8be4740d47"
+    "data_hash": "sha256:d96ace89205ac10f710c0a2f249828131fb8e796065c90bc77dfe60d5c19dcd2"
   },
   "status": {
     "state": "ready"
@@ -39,6 +39,9 @@
     {
       "ski": "2222222222222222222222222222222222222222",
       "ship_id": "vaillant-vr940f-ship-id",
+      "kind": "remote",
+      "visible": true,
+      "paired": true,
       "name": "Vaillant VR940f eeBUS",
       "identifier": "vr940f-lab-service",
       "brand": "Vaillant",

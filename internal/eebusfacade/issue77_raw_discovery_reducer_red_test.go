@@ -46,6 +46,9 @@ func TestIssue77SparseDiscoveryEventsDoNotEraseRawFacts(t *testing.T) {
 	for field, want := range map[string]any{
 		"ski":        issue77ReducerRemoteSKI,
 		"ship_id":    "vaillant-vr940f-ship-id",
+		"kind":       "remote",
+		"visible":    true,
+		"paired":     false,
 		"name":       "Vaillant VR940f eeBUS",
 		"identifier": "vr940f-lab-service",
 		"brand":      "Vaillant",
@@ -82,6 +85,9 @@ func TestIssue77ConcurrentPartialEventsPreserveCompleteRawService(t *testing.T) 
 	service := issue77Objects(t, raw, "services")[0]
 	if service["ski"] != issue77ReducerRemoteSKI ||
 		service["ship_id"] != "vaillant-vr940f-ship-id" ||
+		service["kind"] != "remote" ||
+		service["visible"] != true ||
+		service["paired"] != false ||
 		service["name"] != "Vaillant VR940f eeBUS" ||
 		service["identifier"] != "vr940f-lab-service" ||
 		service["brand"] != "Vaillant" ||
@@ -280,6 +286,9 @@ func issue77AssertRawGraph(t *testing.T, raw map[string]any) {
 	for field, want := range map[string]any{
 		"ski":        issue77ReducerRemoteSKI,
 		"ship_id":    "vaillant-vr940f-ship-id",
+		"kind":       "remote",
+		"visible":    true,
+		"paired":     false,
 		"name":       "Vaillant VR940f eeBUS",
 		"identifier": "vr940f-lab-service",
 		"brand":      "Vaillant",
