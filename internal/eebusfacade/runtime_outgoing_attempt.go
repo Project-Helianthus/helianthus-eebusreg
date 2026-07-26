@@ -220,6 +220,9 @@ func (bridge *firstTrustOutgoingAttemptBridge) OutgoingAttemptConnectionClosed(
 	}
 	unlock := bridge.coordinator.lockOutgoingAttemptLane(remote)
 	defer unlock()
+	if bridge.finishSuccessfulOutgoingAttemptClose(normalized, remote, converted) {
+		return
+	}
 	if !bridge.coordinator.outgoingAttemptCallbackExactLocked(converted, remote) {
 		return
 	}
@@ -234,6 +237,10 @@ func (bridge *firstTrustOutgoingAttemptBridge) OutgoingAttemptConnectionClosed(
 	}
 	result := bridge.coordinator.completeOutgoingAttemptLocked(context.Background(), converted, remote, complete)
 	if !firstTrustOutgoingAttemptCompletionDurable(result) {
+		return
+	}
+	if result == "attempt_succeeded" {
+		bridge.finishSuccessfulOutgoingAttemptClose(normalized, remote, converted)
 		return
 	}
 	bridge.clearPendingFailure(normalized, converted)
@@ -293,6 +300,35 @@ func (bridge *firstTrustOutgoingAttemptBridge) OutgoingAttemptHandshakeStateUpda
 	bridge.mutateLifecycle(func(lifecycle firstTrustOutgoingAttemptLifecycle) {
 		lifecycle.ServicePairingDetailUpdate(normalized, runtimeOutgoingAttemptPairingDetail(state))
 	})
+	if stateName == "complete" {
+		result := bridge.coordinator.completeOutgoingAttemptLocked(context.Background(), converted, remote, true)
+		if firstTrustOutgoingAttemptCompletionDurable(result) || result == "failure_state_failed_closed" {
+			bridge.clearPendingFailure(normalized, converted)
+			bridge.clearHandshakeObservation(converted)
+		}
+	}
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) finishSuccessfulOutgoingAttemptClose(
+	normalized string,
+	remote []byte,
+	metadata firstTrustOutgoingAttemptMetadata,
+) bool {
+	candidateConnection, consumed := bridge.coordinator.consumeSuccessfulOutgoingAttemptLocked(metadata, remote)
+	if !consumed {
+		return false
+	}
+	bridge.clearPendingFailure(normalized, metadata)
+	bridge.clearHandshakeObservation(metadata)
+	if candidateConnection != 0 {
+		bridge.mutateTerminalLifecycle(func(lifecycle firstTrustOutgoingAttemptTerminalLifecycle) {
+			lifecycle.outgoingAttemptTerminated(remote, candidateConnection)
+		})
+	}
+	bridge.mutateLifecycle(func(lifecycle firstTrustOutgoingAttemptLifecycle) {
+		lifecycle.RemoteSKIDisconnected(normalized)
+	})
+	return true
 }
 
 func (bridge *firstTrustOutgoingAttemptBridge) mutateLifecycle(mutate func(firstTrustOutgoingAttemptLifecycle)) {
@@ -422,7 +458,9 @@ func (bridge *firstTrustOutgoingAttemptBridge) shutdown() error {
 	}
 	bridge.handshakeObserved = make(map[[32]byte]bool)
 	bridge.attemptMu.Unlock()
-	return bridge.coordinator.settleOutgoingAttemptsForShutdown(context.Background())
+	err := bridge.coordinator.settleOutgoingAttemptsForShutdown(context.Background())
+	bridge.coordinator.cancelAllOutgoingAttemptContexts()
+	return err
 }
 
 func (bridge *firstTrustOutgoingAttemptBridge) recordHandshakeObservation(metadata firstTrustOutgoingAttemptMetadata) {

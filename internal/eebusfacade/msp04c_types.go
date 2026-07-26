@@ -147,12 +147,14 @@ type firstTrustOutgoingAttemptSchedule func(time.Duration, func()) firstTrustOut
 
 type firstTrustOutgoingAttemptRuntime struct {
 	metadata               firstTrustOutgoingAttemptMetadata
+	remoteSKI              []byte
 	context                context.Context
 	cancel                 context.CancelFunc
 	cancellationGeneration uint64
 	candidateConnection    uint64
 	leaseDeadline          time.Duration
 	leaseTimer             firstTrustOutgoingAttemptTimer
+	settlement             string
 }
 
 type firstTrustLocalIdentityBinding struct {

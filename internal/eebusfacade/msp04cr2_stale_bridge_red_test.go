@@ -88,8 +88,6 @@ func newMSP04CR2StaleBridgeFixture(t *testing.T) (
 	t.Helper()
 	fixture, coordinator, remote, _ := newMSP04CR2AttemptFixture(t)
 	bridge := newFirstTrustOutgoingAttemptBridge(&runtimeFirstTrustResources{coordinator: coordinator})
-	lifecycle := newMSP04CR2LifecycleSpy()
-	bridge.bindLifecycle(lifecycle)
 	remoteSKI := hex.EncodeToString(remote)
 	request := shipapi.OutgoingAttemptRequest{
 		RemoteSKI: remoteSKI,
@@ -112,6 +110,7 @@ func newMSP04CR2StaleBridgeFixture(t *testing.T) (
 	if got := coordinator.completeOutgoingAttempt(context.Background(), runtimeStale.handle.metadata, true); got != "attempt_succeeded" {
 		t.Fatalf("retire stale-source attempt = %q", got)
 	}
+	bridge.OutgoingAttemptConnectionClosed(remoteSKI, true, stalePermit.Metadata)
 
 	request.Endpoint.Host = "2001:db8::1"
 	request.Path = ""
@@ -119,6 +118,8 @@ func newMSP04CR2StaleBridgeFixture(t *testing.T) (
 	if err != nil || current == nil {
 		t.Fatalf("prepare current attempt = %v/%v", current, err)
 	}
+	lifecycle := newMSP04CR2LifecycleSpy()
+	bridge.bindLifecycle(lifecycle)
 	return fixture, coordinator, bridge, lifecycle, remoteSKI, stalePermit.Metadata, current
 }
 
