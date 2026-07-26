@@ -140,6 +140,7 @@ type RedactedEntityV1
 type RedactedFeatureV1
 type RedactedServiceV1
 type RedactedSessionV1
+type RedactedSnapshotMetaV1
 type RedactedSnapshotV1
 type RedactedUseCaseV1
 type Remote

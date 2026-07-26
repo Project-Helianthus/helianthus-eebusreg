@@ -16,7 +16,7 @@ import (
 )
 
 type RedactedSnapshotV1 struct {
-	Meta     SnapshotMetaV1          `json:"meta"`
+	Meta     RedactedSnapshotMetaV1  `json:"meta"`
 	Status   RuntimeObservationV1    `json:"status"`
 	Pairing  []eebusraw.PairingState `json:"pairing"`
 	Services []RedactedServiceV1     `json:"services"`
@@ -25,6 +25,16 @@ type RedactedSnapshotV1 struct {
 	Entities []RedactedEntityV1      `json:"entities"`
 	Features []RedactedFeatureV1     `json:"features"`
 	UseCases []RedactedUseCaseV1     `json:"usecases"`
+}
+
+type RedactedSnapshotMetaV1 struct {
+	Contract      string              `json:"contract"`
+	Runtime       eebusraw.RedactedID `json:"runtime"`
+	LocalSKI      eebusraw.RedactedID `json:"local_ski"`
+	MaskTier      eebusraw.MaskTier   `json:"mask_tier"`
+	CapturedAt    time.Time           `json:"captured_at"`
+	DataTimestamp time.Time           `json:"data_timestamp"`
+	DataHash      string              `json:"data_hash,omitempty"`
 }
 
 type RedactedServiceV1 struct {
@@ -66,8 +76,19 @@ func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 	if err != nil {
 		return RedactedSnapshotV1{}, err
 	}
+	localSKI, err := eebusraw.RedactID(eebusraw.IDKindLocalSKI, raw.Meta.LocalSKI)
+	if err != nil {
+		return RedactedSnapshotV1{}, errors.New("redact local SKI")
+	}
 	result := RedactedSnapshotV1{
-		Meta:     raw.Meta,
+		Meta: RedactedSnapshotMetaV1{
+			Contract:      raw.Meta.Contract,
+			Runtime:       raw.Meta.Runtime,
+			LocalSKI:      localSKI,
+			MaskTier:      eebusraw.MaskTierRedacted,
+			CapturedAt:    raw.Meta.CapturedAt,
+			DataTimestamp: raw.Meta.DataTimestamp,
+		},
 		Status:   raw.Status,
 		Pairing:  make([]eebusraw.PairingState, 0, len(raw.Pairing)),
 		Services: make([]RedactedServiceV1, 0, len(raw.Services)),
@@ -77,8 +98,6 @@ func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 		Features: make([]RedactedFeatureV1, 0, len(raw.Features)),
 		UseCases: make([]RedactedUseCaseV1, 0, len(raw.UseCases)),
 	}
-	result.Meta.MaskTier = eebusraw.MaskTierRedacted
-	result.Meta.DataHash = ""
 	for _, pairing := range raw.Pairing {
 		result.Pairing = append(result.Pairing, pairing.State)
 	}

@@ -81,7 +81,7 @@ type SnapshotV1 struct {
 type SnapshotMetaV1 struct {
 	Contract      string              `json:"contract"`
 	Runtime       eebusraw.RedactedID `json:"runtime"`
-	LocalSKI      eebusraw.RedactedID `json:"local_ski"`
+	LocalSKI      string              `json:"local_ski"`
 	MaskTier      eebusraw.MaskTier   `json:"mask_tier"`
 	CapturedAt    time.Time           `json:"captured_at"`
 	DataTimestamp time.Time           `json:"data_timestamp"`
@@ -199,8 +199,8 @@ func (snapshot SnapshotV1) validate(checkHash bool) error {
 	if err := validateSnapshotIDV1(snapshot.Meta.Runtime, eebusraw.IDKindPeer, eebusraw.IDKindLocalSKI); err != nil {
 		return fmt.Errorf("runtime identity is invalid: %w", err)
 	}
-	if err := validateSnapshotIDV1(snapshot.Meta.LocalSKI, eebusraw.IDKindLocalSKI); err != nil {
-		return fmt.Errorf("local identity is invalid: %w", err)
+	if !validSnapshotSKIV1(snapshot.Meta.LocalSKI) {
+		return errors.New("local_ski must contain 40 lowercase hexadecimal characters")
 	}
 	if snapshot.Meta.MaskTier != snapshotMaskTierRawV1 {
 		return errors.New("mask_tier must be raw")
@@ -337,7 +337,7 @@ func (snapshot SnapshotV1) computeDataHash() (string, error) {
 	payload := struct {
 		Contract      string                 `json:"contract"`
 		Runtime       eebusraw.RedactedID    `json:"runtime"`
-		LocalSKI      eebusraw.RedactedID    `json:"local_ski"`
+		LocalSKI      string                 `json:"local_ski"`
 		MaskTier      eebusraw.MaskTier      `json:"mask_tier"`
 		DataTimestamp time.Time              `json:"data_timestamp"`
 		Status        RuntimeObservationV1   `json:"status"`
@@ -700,6 +700,7 @@ func containsSecretJSONV1(value any) bool {
 
 func canonicalSnapshotV1(source SnapshotV1) SnapshotV1 {
 	result := source.Clone()
+	result.Meta.LocalSKI = strings.ToLower(strings.TrimSpace(result.Meta.LocalSKI))
 	result.Meta.CapturedAt = result.Meta.CapturedAt.UTC()
 	result.Meta.DataTimestamp = result.Meta.DataTimestamp.UTC()
 	if result.Status.Degradation != nil {
@@ -755,6 +756,14 @@ func canonicalSnapshotV1(source SnapshotV1) SnapshotV1 {
 	result.Opaque = canonicalOpaqueObservationsV1(result.Opaque)
 	normalizeEmptyCollectionsV1(&result)
 	return result
+}
+
+func validSnapshotSKIV1(value string) bool {
+	if len(value) != 40 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func normalizeEmptyCollectionsV1(snapshot *SnapshotV1) {

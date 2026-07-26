@@ -1131,7 +1131,7 @@ type runtimeSnapshotPayload struct {
 type runtimeSnapshotMetaPayload struct {
 	Contract      string              `json:"contract"`
 	Runtime       eebusraw.RedactedID `json:"runtime"`
-	LocalSKI      eebusraw.RedactedID `json:"local_ski"`
+	LocalSKI      string              `json:"local_ski"`
 	MaskTier      eebusraw.MaskTier   `json:"mask_tier"`
 	CapturedAt    time.Time           `json:"captured_at"`
 	DataTimestamp time.Time           `json:"data_timestamp"`
@@ -1229,16 +1229,12 @@ func marshalRuntimeSnapshotWithIdentity(runtimeIdentity, localIdentity string, g
 	if err != nil {
 		return nil, err
 	}
-	localSKI, err := eebusraw.RedactID(eebusraw.IDKindLocalSKI, localIdentity)
-	if err != nil {
-		return nil, err
-	}
 	now = now.UTC()
 	payload := runtimeSnapshotPayload{
 		Meta: runtimeSnapshotMetaPayload{
 			Contract:      "helianthus.eebus.runtime.raw-snapshot.v1",
 			Runtime:       runtimeID,
-			LocalSKI:      localSKI,
+			LocalSKI:      localIdentity,
 			MaskTier:      eebusraw.MaskTier("raw"),
 			CapturedAt:    now,
 			DataTimestamp: now,
