@@ -923,11 +923,13 @@ func writeMSP035DependencyFixture(t *testing.T, root string) {
 	writeFile(t, root, "go.mod", "module github.com/Project-Helianthus/helianthus-eebusreg\n\ngo 1.22.0\n")
 	copyMSP035FixtureDirectory(t, root, "eebusraw")
 	copyMSP035FixtureDirectory(t, root, "eebusevidence")
-	data, err := os.ReadFile(filepath.Join(msp035FixtureSourceRoot(t), "raw_snapshot_v1.go"))
-	if err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"raw_snapshot_v1.go", "raw_snapshot_value_v1.go", "redacted_snapshot_v1.go"} {
+		data, err := os.ReadFile(filepath.Join(msp035FixtureSourceRoot(t), name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, root, name, string(data))
 	}
-	writeFile(t, root, "raw_snapshot_v1.go", string(data))
 	runGit(t, root, nil, "add", "--", ".")
 }
 

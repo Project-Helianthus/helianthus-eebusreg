@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-const msp04bFrozenPublicAPIHash = "b619574847d01a277e8bf120ae481c5c98ea8c0986d3bad1710148e045ba8ad0"
+const msp04bFrozenPublicAPIHash = "2cc4ebe0e21704e879f882d878e549ed5dcbc3ec3e12240ccc804e3a4b381081"
 
 func TestMSP04BPublicAPIRemainsExactlyFrozen(t *testing.T) {
 	doc, err := extract(moduleRoot(t))

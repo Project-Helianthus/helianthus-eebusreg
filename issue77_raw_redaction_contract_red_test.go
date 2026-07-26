@@ -394,6 +394,11 @@ func TestIssue77SecretDenylistFailsClosedWithoutFormatterOrErrorDisclosure(t *te
 }
 
 func TestIssue77OpaqueJCSBoundsRejectEveryOverflow(t *testing.T) {
+	var negativeZero OpaqueValueV1
+	if err := json.Unmarshal([]byte("-0"), &negativeZero); err == nil {
+		t.Fatal("opaque decoder accepted JCS-forbidden negative zero")
+	}
+
 	tests := []struct {
 		name  string
 		value func() any
@@ -477,6 +482,17 @@ func TestIssue77OpaqueJCSBoundsRejectEveryOverflow(t *testing.T) {
 	document["meta"].(map[string]any)["data_hash"] = ""
 	if _, err := issue77TryConstructDocument(document); err == nil {
 		t.Fatal("NewSnapshotV1 accepted more than 262144 aggregate canonical opaque bytes")
+	}
+
+	document = issue77FixtureDocument(t)
+	scenarios := make([]any, 129)
+	for index := range scenarios {
+		scenarios[index] = fmt.Sprintf("scenario-%03d", index)
+	}
+	document["usecases"].([]any)[0].(map[string]any)["scenarios"] = scenarios
+	document["meta"].(map[string]any)["data_hash"] = ""
+	if _, err := issue77TryConstructDocument(document); err == nil {
+		t.Fatal("NewSnapshotV1 accepted more than 128 use-case scenarios")
 	}
 }
 
