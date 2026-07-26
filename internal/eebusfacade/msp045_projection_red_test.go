@@ -136,7 +136,7 @@ func TestMSP045ClosedDegradationPrecedence(t *testing.T) {
 			wantState: "denied", wantReason: "denied-trust",
 		},
 		{
-			name: "backoff hold",
+			name: "unmatched backoff hold is structural uncertainty",
 			mutate: func(setup *msp045ProductSetup) {
 				setup.view.associations = nil
 				setup.view.control.quarantines = []firstTrustQuarantineRecord{{
@@ -145,7 +145,7 @@ func TestMSP045ClosedDegradationPrecedence(t *testing.T) {
 					lastControlEpoch: setup.view.control.controlEpoch,
 				}}
 			},
-			wantState: "denied", wantReason: "denied-trust",
+			wantState: "unknown", wantReason: "denied-trust",
 		},
 		{
 			name: "invalid quarantine record closes as admin hold",
