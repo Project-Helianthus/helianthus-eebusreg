@@ -54,6 +54,11 @@ func TestIssue77InitialV1PublicValueSurfaceIsExact(t *testing.T) {
 	)
 	assertIssue77Type[*string](t, service.SHIPID)
 	assertIssue77Type[ServiceKindV1](t, service.Kind)
+	assertIssue77Type[*string](t, service.Name)
+	assertIssue77Type[*string](t, service.Identifier)
+	assertIssue77Type[*string](t, service.Brand)
+	assertIssue77Type[*string](t, service.Type)
+	assertIssue77Type[*string](t, service.Model)
 	assertIssue77Type[*string](t, service.SecondaryDigest)
 	assertIssue77Type[*[]OpaqueObservationV1](t, service.Opaque)
 	assertIssue77Type[*string](t, device.Description)
@@ -85,8 +90,11 @@ func TestIssue77VR940FixtureRetainsRawOperationalFacts(t *testing.T) {
 	service := snapshot.Services[0]
 	if service.SKI != issue77RemoteSKI || service.SHIPID == nil || *service.SHIPID != "vaillant-vr940f-ship-id" ||
 		service.Kind != ServiceKindV1Remote || !service.Visible || !service.Paired ||
-		service.Name != "Vaillant VR940f eeBUS" || service.Identifier != "vr940f-lab-service" ||
-		service.Brand != "Vaillant" || service.Type != "eeBUS" || service.Model != "VR940f" {
+		optionalStringV1(service.Name) != "Vaillant VR940f eeBUS" ||
+		optionalStringV1(service.Identifier) != "vr940f-lab-service" ||
+		optionalStringV1(service.Brand) != "Vaillant" ||
+		optionalStringV1(service.Type) != "eeBUS" ||
+		optionalStringV1(service.Model) != "VR940f" {
 		t.Fatalf("raw mDNS/SHIP service facts were not retained: %+v", service)
 	}
 	device := snapshot.Devices[0]
@@ -274,11 +282,6 @@ func TestIssue77SecondaryDigestNeverSubstitutesForRawFields(t *testing.T) {
 		field      string
 	}{
 		{"services", "ski"},
-		{"services", "name"},
-		{"services", "identifier"},
-		{"services", "brand"},
-		{"services", "type"},
-		{"services", "model"},
 		{"devices", "ski"},
 		{"devices", "address"},
 		{"devices", "type"},
@@ -300,6 +303,21 @@ func TestIssue77SecondaryDigestNeverSubstitutesForRawFields(t *testing.T) {
 				t.Fatalf("secondary_digest replaced required raw %s.%s", test.collection, test.field)
 			}
 		})
+	}
+}
+
+func TestIssue77SparseServiceMetadataRemainsAbsent(t *testing.T) {
+	document := issue77FixtureDocument(t)
+	service := document["services"].([]any)[0].(map[string]any)
+	for _, field := range []string{"ship_id", "name", "identifier", "brand", "type", "model"} {
+		delete(service, field)
+	}
+	document["meta"].(map[string]any)["data_hash"] = ""
+	snapshot := issue77ConstructDocument(t, document)
+	got := snapshot.Services[0]
+	if got.SHIPID != nil || got.Name != nil || got.Identifier != nil ||
+		got.Brand != nil || got.Type != nil || got.Model != nil {
+		t.Fatalf("sparse service fabricated optional metadata: %+v", got)
 	}
 }
 

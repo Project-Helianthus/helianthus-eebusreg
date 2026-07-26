@@ -18,6 +18,8 @@ const (
 	opaqueMaxMembers        = 32
 	opaqueMaxStringBytes    = 4096
 	opaqueMaxJCSBytes       = 16384
+	opaqueMaxWireBytes      = 65536
+	opaqueMaxTokens         = 40000
 	opaqueMaxObservations   = 256
 	opaqueMaxAggregateBytes = 262144
 	opaqueMaxPathLength     = 512
@@ -92,6 +94,9 @@ func (value OpaqueValueV1) MarshalJSON() ([]byte, error) {
 }
 
 func (value *OpaqueValueV1) UnmarshalJSON(data []byte) error {
+	if err := validateOpaqueJSONWireV1(data); err != nil {
+		return err
+	}
 	decoded, err := decodeJSONValueV1(data)
 	if err != nil {
 		return err
@@ -212,6 +217,150 @@ func decodeJSONValueV1(data []byte) (any, error) {
 		return nil, errors.New("multiple JSON values are not allowed")
 	}
 	return value, nil
+}
+
+type opaqueJSONFrameV1 struct {
+	kind      json.Delim
+	members   int
+	expectKey bool
+	keys      map[string]struct{}
+}
+
+func validateOpaqueJSONWireV1(data []byte) error {
+	if len(data) > opaqueMaxWireBytes {
+		return errors.New("opaque JSON exceeds the wire byte limit")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	stack := make([]opaqueJSONFrameV1, 0, opaqueMaxDepth)
+	rootValues := 0
+	tokens := 0
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		tokens++
+		if tokens > opaqueMaxTokens {
+			return errors.New("opaque JSON exceeds the token limit")
+		}
+		switch typed := token.(type) {
+		case json.Delim:
+			switch typed {
+			case '{', '[':
+				if err := beginOpaqueJSONValueV1(stack, &rootValues); err != nil {
+					return err
+				}
+				if len(stack)+1 > opaqueMaxDepth {
+					return errors.New("opaque value exceeds the nesting depth limit")
+				}
+				frame := opaqueJSONFrameV1{kind: typed, expectKey: typed == '{'}
+				if typed == '{' {
+					frame.keys = make(map[string]struct{})
+				}
+				stack = append(stack, frame)
+			case '}', ']':
+				if len(stack) == 0 {
+					return errors.New("opaque JSON contains an unmatched delimiter")
+				}
+				frame := stack[len(stack)-1]
+				if frame.kind == '{' && (typed != '}' || !frame.expectKey) ||
+					frame.kind == '[' && typed != ']' {
+					return errors.New("opaque JSON contains an invalid delimiter")
+				}
+				stack = stack[:len(stack)-1]
+				completeOpaqueJSONValueV1(stack)
+			}
+		case string:
+			if len(stack) > 0 && stack[len(stack)-1].kind == '{' &&
+				stack[len(stack)-1].expectKey {
+				frame := &stack[len(stack)-1]
+				if !utf8.ValidString(typed) || utf8.RuneCountInString(typed) > opaqueMaxKeyLength {
+					return errors.New("opaque object key is invalid")
+				}
+				if _, forbidden := snapshotSecretKeysV1[strings.ToLower(typed)]; forbidden {
+					return errors.New("snapshot contains forbidden secret material")
+				}
+				if _, duplicate := frame.keys[typed]; duplicate {
+					return errors.New("opaque object contains a duplicate key")
+				}
+				frame.keys[typed] = struct{}{}
+				frame.members++
+				if frame.members > opaqueMaxMembers {
+					return errors.New("opaque object exceeds the member limit")
+				}
+				frame.expectKey = false
+				continue
+			}
+			if err := beginOpaqueJSONValueV1(stack, &rootValues); err != nil {
+				return err
+			}
+			if !utf8.ValidString(typed) || len(typed) > opaqueMaxStringBytes {
+				return errors.New("opaque string exceeds the UTF-8 byte limit")
+			}
+			if containsPEMMaterialV1(typed) {
+				return errors.New("snapshot contains forbidden secret material")
+			}
+			completeOpaqueJSONValueV1(stack)
+		case json.Number:
+			if err := beginOpaqueJSONValueV1(stack, &rootValues); err != nil {
+				return err
+			}
+			if string(typed) == "-0" {
+				return errors.New("opaque numbers must not use negative zero")
+			}
+			integer, err := strconv.ParseInt(string(typed), 10, 64)
+			if err != nil {
+				return errors.New("opaque numbers must be integers")
+			}
+			if integer < -maxSafeJSONInteger || integer > maxSafeJSONInteger {
+				return errors.New("opaque integer exceeds the safe JSON integer range")
+			}
+			completeOpaqueJSONValueV1(stack)
+		case nil, bool:
+			if err := beginOpaqueJSONValueV1(stack, &rootValues); err != nil {
+				return err
+			}
+			completeOpaqueJSONValueV1(stack)
+		default:
+			return errors.New("opaque JSON contains an unsupported token")
+		}
+	}
+	if len(stack) != 0 || rootValues != 1 {
+		return errors.New("opaque JSON must contain exactly one complete value")
+	}
+	return nil
+}
+
+func beginOpaqueJSONValueV1(stack []opaqueJSONFrameV1, rootValues *int) error {
+	if len(stack) == 0 {
+		(*rootValues)++
+		if *rootValues > 1 {
+			return errors.New("multiple JSON values are not allowed")
+		}
+		return nil
+	}
+	frame := &stack[len(stack)-1]
+	if frame.kind == '{' {
+		if frame.expectKey {
+			return errors.New("opaque object requires a string key")
+		}
+		return nil
+	}
+	frame.members++
+	if frame.members > opaqueMaxMembers {
+		return errors.New("opaque array exceeds the member limit")
+	}
+	return nil
+}
+
+func completeOpaqueJSONValueV1(stack []opaqueJSONFrameV1) {
+	if len(stack) > 0 && stack[len(stack)-1].kind == '{' {
+		stack[len(stack)-1].expectKey = true
+	}
 }
 
 func opaqueValueFromJSONV1(value any) (OpaqueValueV1, error) {
@@ -446,7 +595,11 @@ func containsPEMMaterialV1(value string) bool {
 	normalized := strings.ToUpper(value)
 	return strings.Contains(normalized, "-----BEGIN PRIVATE KEY-----") ||
 		strings.Contains(normalized, "-----BEGIN RSA PRIVATE KEY-----") ||
-		strings.Contains(normalized, "-----BEGIN EC PRIVATE KEY-----")
+		strings.Contains(normalized, "-----BEGIN EC PRIVATE KEY-----") ||
+		strings.Contains(normalized, "-----BEGIN ENCRYPTED PRIVATE KEY-----") ||
+		strings.Contains(normalized, "-----BEGIN OPENSSH PRIVATE KEY-----") ||
+		strings.Contains(normalized, "-----BEGIN DSA PRIVATE KEY-----") ||
+		strings.Contains(normalized, "-----BEGIN PGP PRIVATE KEY BLOCK-----")
 }
 
 func cloneOpaqueObservationsV1(source []OpaqueObservationV1) []OpaqueObservationV1 {

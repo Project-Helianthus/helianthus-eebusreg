@@ -1,6 +1,7 @@
 package eebusruntime
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -51,12 +52,45 @@ func TestSnapshotV1ClosedEnums(t *testing.T) {
 
 func TestSnapshotV1FormatRedactsEveryVerb(t *testing.T) {
 	snapshot := rawSnapshotV1(t, false)
-	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X"} {
-		if got := fmt.Sprintf(format, snapshot); got != snapshot.String() &&
-			got != fmt.Sprintf("%q", snapshot.String()) {
-			t.Fatalf("fmt.Sprintf(%q, SnapshotV1) = %q", format, got)
+	for _, format := range []string{
+		"%v", "%+v", "%#v", "%b", "%c", "%d", "%o", "%O", "%q", "%x", "%X", "%U",
+		"%e", "%E", "%f", "%F", "%g", "%G", "%s",
+	} {
+		t.Run(format, func(t *testing.T) {
+			if got := fmt.Sprintf(format, snapshot); got != snapshot.String() {
+				t.Fatalf("fmt.Sprintf(%q, SnapshotV1) = %q, want %q", format, got, snapshot.String())
+			}
+		})
+	}
+	for _, verb := range []rune{'v', 'b', 'c', 'd', 'o', 'O', 'q', 'x', 'X', 'U', 'e', 'E', 'f', 'F', 'g', 'G', 's', 'p'} {
+		state := &snapshotFormatStateV1{}
+		snapshot.Format(state, verb)
+		if got := state.String(); got != snapshot.String() {
+			t.Fatalf("SnapshotV1.Format(%q) = %q, want %q", verb, got, snapshot.String())
 		}
 	}
+	if got := fmt.Sprintf("%p", &snapshot); strings.Contains(got, "{") {
+		t.Fatalf("fmt.Sprintf(%%p, *SnapshotV1) dumped the snapshot: %q", got)
+	}
+	if got := fmt.Sprintf("%T", snapshot); got != "eebusruntime.SnapshotV1" {
+		t.Fatalf("fmt.Sprintf(%%T, SnapshotV1) = %q", got)
+	}
+}
+
+type snapshotFormatStateV1 struct {
+	bytes.Buffer
+}
+
+func (snapshotFormatStateV1) Flag(int) bool {
+	return false
+}
+
+func (snapshotFormatStateV1) Precision() (int, bool) {
+	return 0, false
+}
+
+func (snapshotFormatStateV1) Width() (int, bool) {
+	return 0, false
 }
 
 func TestSnapshotV1ConstructorDetachesAndCanonicalizes(t *testing.T) {
@@ -80,15 +114,73 @@ func TestSnapshotV1ConstructorDetachesAndCanonicalizes(t *testing.T) {
 	if string(firstJSON) != string(secondJSON) || first.Meta.DataHash != second.Meta.DataHash {
 		t.Fatal("equivalent input ordering changed canonical snapshot output")
 	}
-	source.Services[0].Name = "mutated"
+	source.Services[0].Name = stringPointerV1ForTest("mutated")
 	source.Opaque[0].Path = "/mutated"
-	if first.Services[0].Name == "mutated" || first.Opaque[0].Path == "/mutated" {
+	if optionalStringV1(first.Services[0].Name) == "mutated" || first.Opaque[0].Path == "/mutated" {
 		t.Fatal("NewSnapshotV1 retained caller-owned storage")
 	}
 	clone := first.Clone()
-	clone.Services[0].Name = "clone mutation"
-	if first.Services[0].Name == "clone mutation" {
+	clone.Services[0].Name = stringPointerV1ForTest("clone mutation")
+	if optionalStringV1(first.Services[0].Name) == "clone mutation" {
 		t.Fatal("Clone retained snapshot storage")
+	}
+}
+
+func TestSnapshotV1ConstructorAndCloneDeepDetachNestedStorage(t *testing.T) {
+	source := rawSnapshotDraftV1(t, false)
+	metadataText := "metadata-original"
+	source.Devices[1].Metadata = &MetadataV1{Values: map[string]MetadataValueV1{
+		"label": {String: &metadataText},
+	}}
+	opaqueText := "opaque-original"
+	opaqueLeaf := OpaqueValueV1{Scalar: &OpaqueScalarV1{String: &opaqueText}}
+	opaqueArray := []OpaqueValueV1{opaqueLeaf}
+	opaqueObject := map[string]OpaqueValueV1{
+		"nested": {Array: &opaqueArray},
+	}
+	source.Opaque = []OpaqueObservationV1{{
+		Path: "/recursive", Source: "test", Value: OpaqueValueV1{Object: &opaqueObject},
+	}}
+	first, err := NewSnapshotV1(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	metadataMutation := "metadata-source-mutation"
+	source.Devices[1].Metadata.Values["label"] = MetadataValueV1{String: &metadataMutation}
+	(*source.UseCases[0].Scenarios)[0] = "source-scenario-mutation"
+	sourceOpaque := (*(*source.Opaque[0].Value.Object)["nested"].Array)[0]
+	*sourceOpaque.Scalar.String = "opaque-source-mutation"
+	if got := *first.Devices[0].Metadata.Values["label"].String; got != metadataText {
+		t.Fatalf("constructor retained metadata map storage: %q", got)
+	}
+	if got := (*first.UseCases[0].Scenarios)[0]; got == "source-scenario-mutation" {
+		t.Fatal("constructor retained scenarios slice storage")
+	}
+	firstNested := (*(*first.Opaque[0].Value.Object)["nested"].Array)[0]
+	if got := *firstNested.Scalar.String; got != "opaque-original" {
+		t.Fatalf("constructor retained recursive opaque storage: %q", got)
+	}
+
+	clone := first.Clone()
+	clone.Opaque[0].Path = "/clone-path-mutation"
+	cloneMetadata := "metadata-clone-mutation"
+	clone.Devices[0].Metadata.Values["label"] = MetadataValueV1{String: &cloneMetadata}
+	(*clone.UseCases[0].Scenarios)[0] = "clone-scenario-mutation"
+	cloneNested := (*(*clone.Opaque[0].Value.Object)["nested"].Array)[0]
+	*cloneNested.Scalar.String = "opaque-clone-mutation"
+	if got := *first.Devices[0].Metadata.Values["label"].String; got != metadataText {
+		t.Fatalf("Clone retained metadata map storage: %q", got)
+	}
+	if first.Opaque[0].Path == "/clone-path-mutation" {
+		t.Fatal("Clone retained opaque observation slice storage")
+	}
+	if got := (*first.UseCases[0].Scenarios)[0]; got == "clone-scenario-mutation" {
+		t.Fatal("Clone retained scenarios slice storage")
+	}
+	firstNested = (*(*first.Opaque[0].Value.Object)["nested"].Array)[0]
+	if got := *firstNested.Scalar.String; got != "opaque-original" {
+		t.Fatalf("Clone retained recursive opaque storage: %q", got)
 	}
 }
 
@@ -127,8 +219,8 @@ func rawSnapshotDraftV1(t *testing.T, reverse bool) SnapshotV1 {
 			RemoteSKI: strings.Repeat("2", 40), State: eebusraw.PairingStatePaired, Since: now,
 		}},
 		Services: []ServiceV1{
-			{SKI: strings.Repeat("3", 40), SHIPID: &shipB, Kind: ServiceKindV1Remote, Visible: true, Paired: false, Name: "B", Identifier: "b", Brand: "brand", Type: "type", Model: "model"},
-			{SKI: strings.Repeat("2", 40), SHIPID: &shipA, Kind: ServiceKindV1Remote, Visible: true, Paired: true, Name: "A", Identifier: "a", Brand: "brand", Type: "type", Model: "model"},
+			{SKI: strings.Repeat("3", 40), SHIPID: &shipB, Kind: ServiceKindV1Remote, Visible: true, Paired: false, Name: stringPointerV1ForTest("B"), Identifier: stringPointerV1ForTest("b"), Brand: stringPointerV1ForTest("brand"), Type: stringPointerV1ForTest("type"), Model: stringPointerV1ForTest("model")},
+			{SKI: strings.Repeat("2", 40), SHIPID: &shipA, Kind: ServiceKindV1Remote, Visible: true, Paired: true, Name: stringPointerV1ForTest("A"), Identifier: stringPointerV1ForTest("a"), Brand: stringPointerV1ForTest("brand"), Type: stringPointerV1ForTest("type"), Model: stringPointerV1ForTest("model")},
 		},
 		Sessions: []SessionV1{{
 			ID: "session-a", RemoteSKI: strings.Repeat("2", 40),
@@ -165,4 +257,8 @@ func rawSnapshotDraftV1(t *testing.T, reverse bool) SnapshotV1 {
 func rawOpaqueObservationV1(path, source, value string) OpaqueObservationV1 {
 	scalar := OpaqueScalarV1{String: &value}
 	return OpaqueObservationV1{Path: path, Source: source, Value: OpaqueValueV1{Scalar: &scalar}}
+}
+
+func stringPointerV1ForTest(value string) *string {
+	return &value
 }

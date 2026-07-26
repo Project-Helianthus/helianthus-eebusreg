@@ -1,8 +1,10 @@
 package eebusruntime
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -143,7 +145,8 @@ func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 		value := RedactedUseCaseV1{ID: id}
 		result.UseCases = append(result.UseCases, value)
 		for _, device := range raw.Devices {
-			if strings.Contains(useCase.ContextAddress, device.Address) {
+			if useCase.ContextAddress == device.Address ||
+				strings.HasPrefix(useCase.ContextAddress, device.Address+":") {
 				useCasesByDevice[device.Address] = append(useCasesByDevice[device.Address], value)
 				break
 			}
@@ -169,14 +172,14 @@ func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 		return RedactedSnapshotV1{}, err
 	}
 	result.Meta.DataHash = hash
-	if err := result.validate(); err != nil {
+	if err := result.Validate(); err != nil {
 		return RedactedSnapshotV1{}, err
 	}
 	return result, nil
 }
 
 func (snapshot RedactedSnapshotV1) MarshalJSON() ([]byte, error) {
-	if err := snapshot.validate(); err != nil {
+	if err := snapshot.Validate(); err != nil {
 		return nil, err
 	}
 	type wire RedactedSnapshotV1
@@ -195,9 +198,64 @@ func (snapshot RedactedSnapshotV1) Format(state fmt.State, _ rune) {
 	_, _ = io.WriteString(state, snapshot.String())
 }
 
-func (snapshot RedactedSnapshotV1) validate() error {
-	if snapshot.Meta.Contract != SnapshotContractV1 || snapshot.Meta.MaskTier != eebusraw.MaskTierRedacted {
-		return errors.New("redacted snapshot metadata is invalid")
+func (snapshot *RedactedSnapshotV1) UnmarshalJSON(data []byte) error {
+	type wire RedactedSnapshotV1
+	var decoded wire
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("multiple JSON values are not allowed")
+	}
+	result := RedactedSnapshotV1(decoded)
+	if err := result.Validate(); err != nil {
+		return err
+	}
+	*snapshot = canonicalRedactedSnapshotV1(result)
+	return nil
+}
+
+func (snapshot RedactedSnapshotV1) Validate() error {
+	if snapshot.Meta.Contract != SnapshotContractV1 {
+		return errors.New("redacted snapshot contract is invalid")
+	}
+	if snapshot.Meta.MaskTier != eebusraw.MaskTierRedacted {
+		return errors.New("redacted snapshot mask tier is invalid")
+	}
+	if err := validateSnapshotIDV1(snapshot.Meta.Runtime, eebusraw.IDKindPeer, eebusraw.IDKindLocalSKI); err != nil {
+		return errors.New("redacted runtime identity is invalid")
+	}
+	if err := validateSnapshotIDV1(snapshot.Meta.LocalSKI, eebusraw.IDKindLocalSKI); err != nil {
+		return errors.New("redacted local identity is invalid")
+	}
+	if err := validateSnapshotTimestampV1(snapshot.Meta.CapturedAt, true); err != nil {
+		return errors.New("redacted captured_at is invalid")
+	}
+	if err := validateSnapshotTimestampV1(snapshot.Meta.DataTimestamp, true); err != nil {
+		return errors.New("redacted data_timestamp is invalid")
+	}
+	if err := validateRuntimeObservationV1(snapshot.Status); err != nil {
+		return err
+	}
+	for _, state := range snapshot.Pairing {
+		switch state {
+		case eebusraw.PairingStateUnknown, eebusraw.PairingStateUnpaired,
+			eebusraw.PairingStatePaired, eebusraw.PairingStateDenied:
+		default:
+			return errors.New("redacted pairing state is invalid")
+		}
+	}
+	if err := validateRedactedServicesV1(snapshot.Services); err != nil {
+		return err
+	}
+	if err := validateRedactedSessionsV1(snapshot.Sessions); err != nil {
+		return err
+	}
+	if err := validateRedactedGraphV1(snapshot); err != nil {
+		return err
 	}
 	if !validSnapshotDigestV1(snapshot.Meta.DataHash) {
 		return errors.New("redacted data_hash is invalid")
@@ -209,15 +267,213 @@ func (snapshot RedactedSnapshotV1) validate() error {
 	if expected != snapshot.Meta.DataHash {
 		return errors.New("redacted data_hash does not match snapshot content")
 	}
-	for _, service := range snapshot.Services {
-		if err := service.ID.Validate(); err != nil {
+	return nil
+}
+
+func validateRedactedServicesV1(values []RedactedServiceV1) error {
+	if len(values) > 256 {
+		return errors.New("redacted service count exceeds the contract limit")
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, service := range values {
+		if err := validateSnapshotIDV1(service.ID, eebusraw.IDKindPeer); err != nil {
 			return errors.New("redacted service identity is invalid")
 		}
 		if service.Kind != ServiceKindV1Local && service.Kind != ServiceKindV1Remote {
 			return errors.New("redacted service kind is invalid")
 		}
+		key := redactedIdentityKeyV1(service.ID)
+		if _, exists := seen[key]; exists {
+			return errors.New("redacted services contain a duplicate identity")
+		}
+		seen[key] = struct{}{}
 	}
 	return nil
+}
+
+func validateRedactedSessionsV1(values []RedactedSessionV1) error {
+	seen := make(map[string]struct{}, len(values))
+	for _, session := range values {
+		if err := validateSnapshotIDV1(session.ID, eebusraw.IDKindSession); err != nil {
+			return errors.New("redacted session identity is invalid")
+		}
+		if err := validateSnapshotIDV1(session.Remote, eebusraw.IDKindRemoteSKI); err != nil {
+			return errors.New("redacted session remote identity is invalid")
+		}
+		switch session.State {
+		case ObservedSessionStateV1Unknown, ObservedSessionStateV1Connecting,
+			ObservedSessionStateV1Connected, ObservedSessionStateV1Disconnected,
+			ObservedSessionStateV1Degraded:
+		default:
+			return errors.New("redacted session state is invalid")
+		}
+		if err := validateSnapshotTimestampV1(session.Since, true); err != nil {
+			return errors.New("redacted session timestamp is invalid")
+		}
+		key := redactedIdentityKeyV1(session.ID)
+		if _, exists := seen[key]; exists {
+			return errors.New("redacted sessions contain a duplicate identity")
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func validateRedactedGraphV1(snapshot RedactedSnapshotV1) error {
+	devices, err := redactedDeviceIndexV1(snapshot.Devices)
+	if err != nil {
+		return err
+	}
+	entities, err := redactedEntityIndexV1(snapshot.Entities)
+	if err != nil {
+		return err
+	}
+	features, err := redactedFeatureIndexV1(snapshot.Features)
+	if err != nil {
+		return err
+	}
+	useCases, err := redactedUseCaseIndexV1(snapshot.UseCases)
+	if err != nil {
+		return err
+	}
+	referencedEntities := make(map[string]struct{}, len(entities))
+	referencedFeatures := make(map[string]struct{}, len(features))
+	referencedUseCases := make(map[string]struct{}, len(useCases))
+	for _, device := range devices {
+		for _, entity := range device.Entities {
+			key := redactedIdentityKeyV1(entity.ID)
+			top, exists := entities[key]
+			if !exists || !equalRedactedEntityV1(top, entity) {
+				return errors.New("redacted device contains an invalid entity relationship")
+			}
+			if _, duplicate := referencedEntities[key]; duplicate {
+				return errors.New("redacted entity relationship is duplicated")
+			}
+			referencedEntities[key] = struct{}{}
+			for _, feature := range entity.Features {
+				featureKey := redactedIdentityKeyV1(feature.ID)
+				topFeature, exists := features[featureKey]
+				if !exists || topFeature.Role != feature.Role {
+					return errors.New("redacted entity contains an invalid feature relationship")
+				}
+				if _, duplicate := referencedFeatures[featureKey]; duplicate {
+					return errors.New("redacted feature relationship is duplicated")
+				}
+				referencedFeatures[featureKey] = struct{}{}
+			}
+		}
+		for _, useCase := range device.UseCaseClaims {
+			key := redactedIdentityKeyV1(useCase.ID)
+			if _, exists := useCases[key]; !exists {
+				return errors.New("redacted device contains an invalid use-case relationship")
+			}
+			if _, duplicate := referencedUseCases[key]; duplicate {
+				return errors.New("redacted use-case relationship is duplicated")
+			}
+			referencedUseCases[key] = struct{}{}
+		}
+	}
+	if len(referencedEntities) != len(entities) ||
+		len(referencedFeatures) != len(features) ||
+		len(referencedUseCases) != len(useCases) {
+		return errors.New("redacted graph contains an unreferenced relationship")
+	}
+	return nil
+}
+
+func redactedDeviceIndexV1(values []RedactedDeviceV1) (map[string]RedactedDeviceV1, error) {
+	if len(values) > 1024 {
+		return nil, errors.New("redacted device count exceeds the contract limit")
+	}
+	result := make(map[string]RedactedDeviceV1, len(values))
+	for _, value := range values {
+		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindPeer); err != nil {
+			return nil, errors.New("redacted device identity is invalid")
+		}
+		key := redactedIdentityKeyV1(value.ID)
+		if _, exists := result[key]; exists {
+			return nil, errors.New("redacted devices contain a duplicate identity")
+		}
+		result[key] = value
+	}
+	return result, nil
+}
+
+func redactedEntityIndexV1(values []RedactedEntityV1) (map[string]RedactedEntityV1, error) {
+	if len(values) > 4096 {
+		return nil, errors.New("redacted entity count exceeds the contract limit")
+	}
+	result := make(map[string]RedactedEntityV1, len(values))
+	for _, value := range values {
+		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindPeer); err != nil {
+			return nil, errors.New("redacted entity identity is invalid")
+		}
+		key := redactedIdentityKeyV1(value.ID)
+		if _, exists := result[key]; exists {
+			return nil, errors.New("redacted entities contain a duplicate identity")
+		}
+		result[key] = value
+	}
+	return result, nil
+}
+
+func redactedFeatureIndexV1(values []RedactedFeatureV1) (map[string]RedactedFeatureV1, error) {
+	if len(values) > 16384 {
+		return nil, errors.New("redacted feature count exceeds the contract limit")
+	}
+	result := make(map[string]RedactedFeatureV1, len(values))
+	for _, value := range values {
+		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindPeer); err != nil {
+			return nil, errors.New("redacted feature identity is invalid")
+		}
+		switch value.Role {
+		case FeatureRoleV1Unspecified, FeatureRoleV1Client, FeatureRoleV1Server:
+		default:
+			return nil, errors.New("redacted feature role is invalid")
+		}
+		key := redactedIdentityKeyV1(value.ID)
+		if _, exists := result[key]; exists {
+			return nil, errors.New("redacted features contain a duplicate identity")
+		}
+		result[key] = value
+	}
+	return result, nil
+}
+
+func redactedUseCaseIndexV1(values []RedactedUseCaseV1) (map[string]RedactedUseCaseV1, error) {
+	if len(values) > 4096 {
+		return nil, errors.New("redacted use-case count exceeds the contract limit")
+	}
+	result := make(map[string]RedactedUseCaseV1, len(values))
+	for _, value := range values {
+		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindPeer); err != nil {
+			return nil, errors.New("redacted use-case identity is invalid")
+		}
+		key := redactedIdentityKeyV1(value.ID)
+		if _, exists := result[key]; exists {
+			return nil, errors.New("redacted use cases contain a duplicate identity")
+		}
+		result[key] = value
+	}
+	return result, nil
+}
+
+func equalRedactedEntityV1(left, right RedactedEntityV1) bool {
+	if redactedIdentityKeyV1(left.ID) != redactedIdentityKeyV1(right.ID) ||
+		len(left.Features) != len(right.Features) {
+		return false
+	}
+	leftFeatures := append([]RedactedFeatureV1(nil), left.Features...)
+	rightFeatures := append([]RedactedFeatureV1(nil), right.Features...)
+	sortRedactedFeaturesV1(leftFeatures)
+	sortRedactedFeaturesV1(rightFeatures)
+	for index := range leftFeatures {
+		if redactedIdentityKeyV1(leftFeatures[index].ID) != redactedIdentityKeyV1(rightFeatures[index].ID) ||
+			leftFeatures[index].Role != rightFeatures[index].Role {
+			return false
+		}
+	}
+	return true
 }
 
 func (snapshot RedactedSnapshotV1) computeDataHash() (string, error) {

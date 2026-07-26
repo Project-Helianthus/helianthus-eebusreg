@@ -110,6 +110,8 @@ func RedactedSnapshotV1.Format
 func RedactedSnapshotV1.GoString
 func RedactedSnapshotV1.MarshalJSON
 func RedactedSnapshotV1.String
+func RedactedSnapshotV1.UnmarshalJSON
+func RedactedSnapshotV1.Validate
 func SnapshotV1.Clone
 func SnapshotV1.ComputeDataHash
 func SnapshotV1.Format

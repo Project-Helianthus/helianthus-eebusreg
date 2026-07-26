@@ -111,11 +111,11 @@ type ServiceV1 struct {
 	Kind            ServiceKindV1          `json:"kind"`
 	Visible         bool                   `json:"visible"`
 	Paired          bool                   `json:"paired"`
-	Name            string                 `json:"name"`
-	Identifier      string                 `json:"identifier"`
-	Brand           string                 `json:"brand"`
-	Type            string                 `json:"type"`
-	Model           string                 `json:"model"`
+	Name            *string                `json:"name,omitempty"`
+	Identifier      *string                `json:"identifier,omitempty"`
+	Brand           *string                `json:"brand,omitempty"`
+	Type            *string                `json:"type,omitempty"`
+	Model           *string                `json:"model,omitempty"`
 	SecondaryDigest *string                `json:"secondary_digest,omitempty"`
 	Opaque          *[]OpaqueObservationV1 `json:"opaque,omitempty"`
 }
@@ -241,6 +241,9 @@ func (snapshot SnapshotV1) validate(checkHash bool) error {
 	if err := validateSnapshotSecretsV1(snapshot); err != nil {
 		return err
 	}
+	if checkHash && snapshot.Meta.DataHash == "" {
+		return errors.New("data_hash is required")
+	}
 	if snapshot.Meta.DataHash != "" && !validSnapshotDigestV1(snapshot.Meta.DataHash) {
 		return errors.New("data_hash must use lowercase sha256:<64 hex chars>")
 	}
@@ -271,6 +274,11 @@ func (snapshot SnapshotV1) Clone() SnapshotV1 {
 	for index, value := range snapshot.Services {
 		result.Services[index] = value
 		result.Services[index].SHIPID = cloneStringPointerV1(value.SHIPID)
+		result.Services[index].Name = cloneStringPointerV1(value.Name)
+		result.Services[index].Identifier = cloneStringPointerV1(value.Identifier)
+		result.Services[index].Brand = cloneStringPointerV1(value.Brand)
+		result.Services[index].Type = cloneStringPointerV1(value.Type)
+		result.Services[index].Model = cloneStringPointerV1(value.Model)
 		result.Services[index].SecondaryDigest = cloneStringPointerV1(value.SecondaryDigest)
 		result.Services[index].Opaque = cloneOpaquePointerV1(value.Opaque)
 	}
@@ -433,13 +441,15 @@ func validateServicesV1(values []ServiceV1) error {
 	}
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		for _, required := range []string{value.SKI, value.Name, value.Identifier, value.Brand, value.Type, value.Model} {
-			if err := validateRequiredTextV1(required, 4096); err != nil {
-				return errors.New("service contains a missing or invalid raw field")
-			}
+		if err := validateRequiredTextV1(value.SKI, 4096); err != nil {
+			return errors.New("service contains a missing or invalid raw identity")
 		}
-		if err := validateOptionalTextV1(value.SHIPID, 4096); err != nil {
-			return errors.New("service ship_id is invalid")
+		for _, optional := range []*string{
+			value.SHIPID, value.Name, value.Identifier, value.Brand, value.Type, value.Model,
+		} {
+			if err := validateOptionalTextV1(optional, 4096); err != nil {
+				return errors.New("service contains an invalid optional raw field")
+			}
 		}
 		if value.Kind != ServiceKindV1Local && value.Kind != ServiceKindV1Remote {
 			return errors.New("service kind is unsupported")
@@ -776,7 +786,7 @@ func normalizeEmptyCollectionsV1(snapshot *SnapshotV1) {
 
 func serviceIdentityV1(value ServiceV1) string {
 	return strings.Join([]string{
-		value.SKI, optionalStringV1(value.SHIPID), value.Identifier, string(value.Kind),
+		value.SKI, optionalStringV1(value.SHIPID), optionalStringV1(value.Identifier), string(value.Kind),
 	}, "\x00")
 }
 
