@@ -69,6 +69,24 @@ func TestIssue83TypedValueIsCanonicalDetachedAndSecretSafe(t *testing.T) {
 	}
 }
 
+func TestIssue83CanonicalJSONUsesRFC8785StringEscaping(t *testing.T) {
+	value, err := eebusraw.NewTypedValueV1(map[string]any{
+		"a": "line\u2028separator",
+		"z": "\u000f",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := value.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"a\":\"line\xe2\x80\xa8separator\",\"z\":\"\\u000f\"}"
+	if string(encoded) != want {
+		t.Fatalf("RFC 8785 string encoding = %q, want %q", encoded, want)
+	}
+}
+
 func TestIssue83TypedValueRejectsSecretNamesAndValues(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -87,6 +105,12 @@ func TestIssue83TypedValueRejectsSecretNamesAndValues(t *testing.T) {
 			},
 		},
 		{
+			name: "unicode compatibility private field",
+			value: map[string]any{
+				"\uFF30rivateKey": "not-even-a-key",
+			},
+		},
+		{
 			name: "normalized protected store field",
 			value: map[string]any{
 				"trust" + "StoreBytes": "not-even-store-material",
@@ -96,6 +120,12 @@ func TestIssue83TypedValueRejectsSecretNamesAndValues(t *testing.T) {
 			name: "bearer scalar",
 			value: map[string]any{
 				"status": "Bearer restricted-value",
+			},
+		},
+		{
+			name: "unicode compatibility bearer scalar",
+			value: map[string]any{
+				"status": "\uFF22\uFF45\uFF41\uFF52\uFF45\uFF52 restricted-value",
 			},
 		},
 		{
@@ -124,6 +154,26 @@ func TestIssue83TypedValueRejectsSecretNamesAndValues(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestIssue83CanonicalToolNamesAndOptionalTimeoutShape(t *testing.T) {
+	if eebusraw.ToolV1FeaturesGet != "eebus.v1.features.get" ||
+		eebusraw.ToolV1FeaturesDataGet != "eebus.v1.features.data.get" {
+		t.Fatalf(
+			"canonical tools = %q, %q",
+			eebusraw.ToolV1FeaturesGet,
+			eebusraw.ToolV1FeaturesDataGet,
+		)
+	}
+	encoded, err := json.Marshal(eebusraw.FeatureDataGetRequestV1{
+		Targets: []eebusraw.FeatureTargetV1{issue83Target()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "timeout_ms") {
+		t.Fatalf("omitted optional timeout encoded as an invalid zero value: %s", encoded)
 	}
 }
 

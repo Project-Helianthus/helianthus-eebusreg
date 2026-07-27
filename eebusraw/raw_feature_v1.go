@@ -17,8 +17,8 @@ const (
 type ToolV1 string
 
 const (
-	ToolV1FeaturesGet     ToolV1 = "features.get"
-	ToolV1FeaturesDataGet ToolV1 = "features.data.get"
+	ToolV1FeaturesGet     ToolV1 = "eebus.v1.features.get"
+	ToolV1FeaturesDataGet ToolV1 = "eebus.v1.features.data.get"
 )
 
 type AuthScopeV1 string
@@ -287,7 +287,7 @@ func (data FeaturesGetDataV1) Format(state fmt.State, _ rune) {
 
 type FeatureDataGetRequestV1 struct {
 	Targets   []FeatureTargetV1 `json:"targets"`
-	TimeoutMS uint64            `json:"timeout_ms"`
+	TimeoutMS uint64            `json:"timeout_ms,omitempty"`
 }
 
 func (request FeatureDataGetRequestV1) Clone() FeatureDataGetRequestV1 {

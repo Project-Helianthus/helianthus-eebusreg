@@ -15,6 +15,8 @@ import (
 	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -22,7 +24,7 @@ const (
 	canonicalDocumentMaximumDepth = 16
 	typedValueMaximumMembers      = 256
 	typedValueMaximumStringBytes  = 16384
-	typedValueMaximumKeyRunes     = 1024
+	typedValueMaximumKeyRunes     = 256
 	typedValueMaximumJCSBytes     = 1048576
 	typedValueMaximumSafeInteger  = int64(9007199254740991)
 )
@@ -231,8 +233,7 @@ func canonicalTypedValueV1WithDepth(value any, depth int, maximumDepth int) (any
 		for iterator.Next() {
 			key := iterator.Key().String()
 			if !utf8.ValidString(key) || utf8.RuneCountInString(key) == 0 ||
-				utf8.RuneCountInString(key) > typedValueMaximumKeyRunes ||
-				!rawFeatureASCIIKeyV1(key) {
+				utf8.RuneCountInString(key) > typedValueMaximumKeyRunes {
 				return nil, errors.New("typed object key is invalid")
 			}
 			if rawFeatureSecretNameV1(key) {
@@ -257,7 +258,8 @@ func canonicalTypedStringV1(value string) (string, error) {
 	if !utf8.ValidString(value) || len(value) > typedValueMaximumStringBytes {
 		return "", errors.New("typed string exceeds the UTF-8 byte limit")
 	}
-	upper := strings.ToUpper(value)
+	normalized := strings.TrimSpace(norm.NFKC.String(value))
+	upper := strings.ToUpper(normalized)
 	for _, boundary := range []string{
 		"-----BEGIN PRIVATE KEY-----",
 		"-----BEGIN RSA PRIVATE KEY-----",
@@ -271,9 +273,9 @@ func canonicalTypedStringV1(value string) (string, error) {
 			return "", ErrSecretDetected
 		}
 	}
-	fields := strings.Fields(strings.TrimSpace(value))
+	fields := strings.Fields(normalized)
 	if len(fields) > 1 && strings.EqualFold(fields[0], "bearer") &&
-		strings.TrimSpace(strings.TrimPrefix(value, fields[0])) != "" {
+		strings.TrimSpace(strings.TrimPrefix(normalized, fields[0])) != "" {
 		return "", ErrSecretDetected
 	}
 	return value, nil
@@ -294,6 +296,7 @@ func rawFeatureSecretNameV1(value string) bool {
 }
 
 func normalizeRawFeatureFieldNameV1(value string) string {
+	value = norm.NFKC.String(value)
 	var result strings.Builder
 	underscore := false
 	var previous rune
@@ -321,15 +324,6 @@ func normalizeRawFeatureFieldNameV1(value string) string {
 		previous = current
 	}
 	return strings.Trim(result.String(), "_")
-}
-
-func rawFeatureASCIIKeyV1(value string) bool {
-	for _, current := range value {
-		if current < 0x20 || current > 0x7e {
-			return false
-		}
-	}
-	return true
 }
 
 func cloneTypedValueV1(value any) any {
@@ -362,13 +356,7 @@ func appendCanonicalJSONV1(output *bytes.Buffer, value any) error {
 	case int64:
 		output.WriteString(strconv.FormatInt(typed, 10))
 	case string:
-		var encoded bytes.Buffer
-		encoder := json.NewEncoder(&encoded)
-		encoder.SetEscapeHTML(false)
-		if err := encoder.Encode(typed); err != nil {
-			return err
-		}
-		output.Write(bytes.TrimSuffix(encoded.Bytes(), []byte("\n")))
+		appendCanonicalJSONStringV1(output, typed)
 	case []any:
 		output.WriteByte('[')
 		for index, item := range typed {
@@ -406,6 +394,38 @@ func appendCanonicalJSONV1(output *bytes.Buffer, value any) error {
 		return errors.New("typed value contains a non-canonical value")
 	}
 	return nil
+}
+
+func appendCanonicalJSONStringV1(output *bytes.Buffer, value string) {
+	const hexadecimal = "0123456789abcdef"
+
+	output.WriteByte('"')
+	for _, current := range value {
+		switch current {
+		case '"', '\\':
+			output.WriteByte('\\')
+			output.WriteRune(current)
+		case '\b':
+			output.WriteString(`\b`)
+		case '\t':
+			output.WriteString(`\t`)
+		case '\n':
+			output.WriteString(`\n`)
+		case '\f':
+			output.WriteString(`\f`)
+		case '\r':
+			output.WriteString(`\r`)
+		default:
+			if current >= 0 && current <= 0x1f {
+				output.WriteString(`\u00`)
+				output.WriteByte(hexadecimal[byte(current)>>4])
+				output.WriteByte(hexadecimal[byte(current)&0x0f])
+				continue
+			}
+			output.WriteRune(current)
+		}
+	}
+	output.WriteByte('"')
 }
 
 func lessUTF16V1(left, right string) bool {

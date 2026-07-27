@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -90,6 +91,10 @@ func newRawReadTokenIssuer(key []byte) (*rawReadTokenIssuer, error) {
 }
 
 func newRuntimeRawReadTokenIssuer(nodeToken string) (*rawReadTokenIssuer, error) {
+	nodeToken = strings.TrimSpace(nodeToken)
+	if nodeToken == "" {
+		return nil, errors.New("protected raw READ token material is unavailable")
+	}
 	entropy := make([]byte, sha256.Size)
 	if _, err := rand.Read(entropy); err != nil {
 		return nil, errors.New("protected raw READ token material is unavailable")
@@ -97,7 +102,7 @@ func newRuntimeRawReadTokenIssuer(nodeToken string) (*rawReadTokenIssuer, error)
 	defer clear(entropy)
 	mac := hmac.New(sha256.New, entropy)
 	_, _ = mac.Write([]byte(rawReadTokenDomainV1))
-	_, _ = mac.Write([]byte(strings.TrimSpace(nodeToken)))
+	_, _ = mac.Write([]byte(nodeToken))
 	key := mac.Sum(nil)
 	defer clear(key)
 	return newRawReadTokenIssuer(key)
@@ -168,7 +173,7 @@ func (issuer *rawReadTokenIssuer) issue(
 	_, _ = mac.Write([]byte(rawReadTokenDomainV1))
 	_, _ = mac.Write([]byte(bindingHash))
 	return eebusraw.ReadTokenV1{
-		ReadToken:   "read1:" + hex.EncodeToString(mac.Sum(nil)),
+		ReadToken:   base64.RawURLEncoding.EncodeToString(mac.Sum(nil)),
 		Reusable:    binding.Reusable,
 		ExpiresAt:   binding.ExpiresAt,
 		BindingHash: bindingHash,
@@ -338,7 +343,14 @@ func (bridge *rawFeatureRuntimeBridge) RoundTripIfCurrent(
 	if lease.address != expected.DeviceAddress {
 		return failure(executor.ExactRemoteBindingAddressMismatch)
 	}
+	currentAddress := lease.remote.Address()
+	if currentAddress == nil || *currentAddress != lease.address {
+		return failure(executor.ExactRemoteBindingAddressMismatch)
+	}
 	if lease.identity != expected.RemoteIdentity {
+		return failure(executor.ExactRemoteBindingIdentityMismatch)
+	}
+	if !strings.EqualFold(strings.TrimSpace(lease.remote.Ski()), lease.ski) {
 		return failure(executor.ExactRemoteBindingIdentityMismatch)
 	}
 	if lease.generation != expected.ConnectionGeneration ||

@@ -3,6 +3,7 @@ package eebusfacade
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -293,6 +294,46 @@ func TestIssue83ExactRuntimeRejectsReplacementAndSenderSubstitutionWithoutSend(t
 		}
 	})
 
+	t.Run("remote address substitution", func(t *testing.T) {
+		fixture := newIssue83RawBridgeFixture(t)
+		target := issue83TargetFromLocator(fixture.locators[0])
+		binding, request, err := fixture.bridge.exactBindingAndRequest(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.remote.setAddress("substituted-device")
+
+		_, err = fixture.bridge.RoundTripIfCurrent(context.Background(), binding, request)
+		var bindingError *executor.ExactRemoteBindingError
+		if !errors.As(err, &bindingError) ||
+			bindingError.Failure != executor.ExactRemoteBindingAddressMismatch {
+			t.Fatalf("binding error = %#v", bindingError)
+		}
+		if fixture.sender.calls.Load() != 0 {
+			t.Fatalf("address substitution sent %d frames", fixture.sender.calls.Load())
+		}
+	})
+
+	t.Run("remote SKI substitution", func(t *testing.T) {
+		fixture := newIssue83RawBridgeFixture(t)
+		target := issue83TargetFromLocator(fixture.locators[0])
+		binding, request, err := fixture.bridge.exactBindingAndRequest(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.remote.setSKI(strings.Repeat("b", 40))
+
+		_, err = fixture.bridge.RoundTripIfCurrent(context.Background(), binding, request)
+		var bindingError *executor.ExactRemoteBindingError
+		if !errors.As(err, &bindingError) ||
+			bindingError.Failure != executor.ExactRemoteBindingIdentityMismatch {
+			t.Fatalf("binding error = %#v", bindingError)
+		}
+		if fixture.sender.calls.Load() != 0 {
+			t.Fatalf("SKI substitution sent %d frames", fixture.sender.calls.Load())
+		}
+	})
+
 	t.Run("stale connection generation", func(t *testing.T) {
 		fixture := newIssue83RawBridgeFixture(t)
 		target := issue83TargetFromLocator(fixture.locators[0])
@@ -366,6 +407,10 @@ func TestIssue83ReadTokenIsDeterministicAndPurposeBound(t *testing.T) {
 	}
 	if first != second {
 		t.Fatalf("deterministic token mismatch: first=%+v second=%+v", first, second)
+	}
+	decodedToken, err := base64.RawURLEncoding.DecodeString(first.ReadToken)
+	if err != nil || len(decodedToken) != 32 || len(first.ReadToken) != 43 {
+		t.Fatalf("opaque token is not a 256-bit base64url reference: %q, %v", first.ReadToken, err)
 	}
 
 	tests := []struct {
@@ -630,8 +675,10 @@ func issue83RemoteDevice(
 
 type issue83MutableRemote struct {
 	spineapi.DeviceRemoteInterface
-	mu     sync.Mutex
-	sender spineapi.SenderInterface
+	mu              sync.Mutex
+	sender          spineapi.SenderInterface
+	addressOverride *spinemodel.AddressDeviceType
+	skiOverride     *string
 }
 
 func (remote *issue83MutableRemote) Sender() spineapi.SenderInterface {
@@ -643,6 +690,38 @@ func (remote *issue83MutableRemote) Sender() spineapi.SenderInterface {
 func (remote *issue83MutableRemote) setSender(sender spineapi.SenderInterface) {
 	remote.mu.Lock()
 	remote.sender = sender
+	remote.mu.Unlock()
+}
+
+func (remote *issue83MutableRemote) Address() *spinemodel.AddressDeviceType {
+	remote.mu.Lock()
+	defer remote.mu.Unlock()
+	if remote.addressOverride == nil {
+		return remote.DeviceRemoteInterface.Address()
+	}
+	value := *remote.addressOverride
+	return &value
+}
+
+func (remote *issue83MutableRemote) setAddress(address string) {
+	remote.mu.Lock()
+	value := spinemodel.AddressDeviceType(address)
+	remote.addressOverride = &value
+	remote.mu.Unlock()
+}
+
+func (remote *issue83MutableRemote) Ski() string {
+	remote.mu.Lock()
+	defer remote.mu.Unlock()
+	if remote.skiOverride == nil {
+		return remote.DeviceRemoteInterface.Ski()
+	}
+	return *remote.skiOverride
+}
+
+func (remote *issue83MutableRemote) setSKI(ski string) {
+	remote.mu.Lock()
+	remote.skiOverride = &ski
 	remote.mu.Unlock()
 }
 

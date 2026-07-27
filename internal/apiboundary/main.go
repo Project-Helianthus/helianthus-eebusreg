@@ -12,6 +12,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -722,6 +723,11 @@ type sourceImporter struct {
 	fallback    types.Importer
 	fset        *token.FileSet
 	inventories map[string]*packageInventory
+}
+
+type chainedImporter struct {
+	primary   types.Importer
+	secondary types.Importer
 }
 
 type stableContractSpec struct {
@@ -1474,7 +1480,7 @@ func inspectStableContracts(root, modulePath string, fset *token.FileSet, packag
 		return []manifestStableContract{}, nil
 	}
 
-	checkedPackages, typeViolations := typeCheckStablePackages(fset, packages, specs)
+	checkedPackages, typeViolations := typeCheckStablePackages(root, fset, packages, specs)
 	contracts := make([]manifestStableContract, 0, len(specs))
 	violations := append([]string(nil), typeViolations...)
 	for _, spec := range specs {
@@ -1572,11 +1578,18 @@ func inspectStableContracts(root, modulePath string, fset *token.FileSet, packag
 	return contracts, violations
 }
 
-func typeCheckStablePackages(fset *token.FileSet, inventories map[string]*packageInventory, specs []stableContractSpec) (map[string]*types.Package, []string) {
+func typeCheckStablePackages(root string, fset *token.FileSet, inventories map[string]*packageInventory, specs []stableContractSpec) (map[string]*types.Package, []string) {
+	fallback := types.Importer(importer.Default())
+	if len(specs) != 0 {
+		fallback = &chainedImporter{
+			primary:   fallback,
+			secondary: moduleExportImporter(fset, root),
+		}
+	}
 	loader := &sourceImporter{
 		checked:     make(map[string]*types.Package),
 		checking:    make(map[string]bool),
-		fallback:    importer.Default(),
+		fallback:    fallback,
 		fset:        fset,
 		inventories: inventories,
 	}
@@ -1590,6 +1603,41 @@ func typeCheckStablePackages(fset *token.FileSet, inventories map[string]*packag
 		}
 	}
 	return loader.checked, violations
+}
+
+func (i *chainedImporter) Import(path string) (*types.Package, error) {
+	checked, primaryErr := i.primary.Import(path)
+	if primaryErr == nil {
+		return checked, nil
+	}
+	checked, secondaryErr := i.secondary.Import(path)
+	if secondaryErr == nil {
+		return checked, nil
+	}
+	return nil, errors.Join(primaryErr, secondaryErr)
+}
+
+func moduleExportImporter(fset *token.FileSet, root string) types.Importer {
+	exportFiles := make(map[string]string)
+	lookup := func(path string) (io.ReadCloser, error) {
+		exportFile := exportFiles[path]
+		if exportFile == "" {
+			command := exec.Command("go", "list", "-export", "-f={{.Export}}", path)
+			command.Dir = root
+			command.Env = append(os.Environ(), "GOWORK=off")
+			output, err := command.Output()
+			if err != nil {
+				return nil, fmt.Errorf("resolve module export for %s: %w", path, err)
+			}
+			exportFile = strings.TrimSpace(string(output))
+			if exportFile == "" {
+				return nil, fmt.Errorf("resolve module export for %s: empty export path", path)
+			}
+			exportFiles[path] = exportFile
+		}
+		return os.Open(exportFile)
+	}
+	return importer.ForCompiler(fset, "gc", lookup)
 }
 
 func (i *sourceImporter) Import(path string) (*types.Package, error) {
