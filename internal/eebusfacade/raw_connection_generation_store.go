@@ -125,9 +125,11 @@ func (store *rawConnectionGenerationFileStore) writeLocked(runtimeEpoch uint64, 
 		return errors.New("raw connection generation state cannot be created")
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer func() { _ = os.Remove(temporaryPath) }()
 	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
+		if closeErr := temporary.Close(); closeErr != nil {
+			return errors.New("raw connection generation state cannot be closed")
+		}
 		return errors.New("raw connection generation state cannot be protected")
 	}
 	if _, err := temporary.Write(payload); err != nil || temporary.Sync() != nil || temporary.Close() != nil {
@@ -140,7 +142,7 @@ func (store *rawConnectionGenerationFileStore) writeLocked(runtimeEpoch uint64, 
 	if err != nil {
 		return errors.New("raw connection generation state directory is unavailable")
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	if err := directory.Sync(); err != nil {
 		return errors.New("raw connection generation state durability is unknown")
 	}
