@@ -287,6 +287,10 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if err != nil {
 		return nil, errors.Join(err, closeFirstTrust())
 	}
+	rawConnectionGenerations, err := newRawConnectionGenerationStore(stateRoot)
+	if err != nil {
+		return nil, errors.Join(err, closeFirstTrust())
+	}
 	outgoingAttemptBridge := newFirstTrustOutgoingAttemptBridge(firstTrust)
 	if outgoingAttemptBridge == nil {
 		return nil, errors.Join(errors.New("runtime outgoing-attempt gate is unavailable"), closeFirstTrust())
@@ -318,11 +322,12 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if err := service.Setup(); err != nil {
 		return nil, closeRuntime(fmt.Errorf("setup eebus runtime service: %w", err))
 	}
-	rawFeatures := newRawFeatureRuntimeBridge(
+	rawFeatures := newRawFeatureRuntimeBridgeWithGenerationStore(
 		service.LocalDevice(),
 		rawRuntimeEpochProvider(firstTrust, rawRuntimeEpoch),
 		dependencies.now,
 		rawTokenIssuer,
+		rawConnectionGenerations,
 	)
 	handler.bindRawFeatureRuntime(rawFeatures)
 	if dependencies.subscribeSPINEEvents == nil {
@@ -660,11 +665,14 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		handler.report(err)
 		return
 	}
+	var generation uint64
 	handler.updateRemote(ski, true, func(observation *runtimeGraphObservation) {
 		if len(observation.ServiceIDs) == 0 {
 			observation.ServiceIDs = []string{"service:" + ski}
 		}
 		observation.SessionIndex++
+		generation = observation.SessionIndex
+		observation.ShipID = ""
 		observation.SessionID = runtimeSessionIdentity(*observation)
 		observation.SessionState = "connected"
 		observation.Visible = true
@@ -676,7 +684,20 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		}
 		observation.Devices = merged
 	})
+	handler.beginRawFeatureConnectionGeneration(ski, generation)
 	handler.refreshRawFeatureRemote(ski)
+}
+
+func (handler *runtimeServiceHandler) beginRawFeatureConnectionGeneration(ski string, generation uint64) {
+	handler.mu.Lock()
+	bridge := handler.rawFeatures
+	handler.mu.Unlock()
+	if bridge == nil || generation == 0 {
+		return
+	}
+	if err := bridge.beginConnectionGeneration(ski, generation); err != nil {
+		handler.report(err)
+	}
 }
 
 func (handler *runtimeServiceHandler) RemoteSKIDisconnected(_ eebusapi.ServiceInterface, ski string) {
@@ -795,6 +816,9 @@ func (handler *runtimeServiceHandler) ServiceShipIDUpdate(ski string, shipID str
 	}
 	handler.updateRemote(ski, false, func(observation *runtimeGraphObservation) {
 		observation.ShipID = shipID
+		if observation.SessionIndex != 0 {
+			observation.SessionID = runtimeSessionIdentity(*observation)
+		}
 		observation.Since = handler.timestamp()
 	})
 	handler.refreshRawFeatureRemote(ski)

@@ -111,6 +111,8 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	clock.Advance(time.Second)
 	handler.RemoteSKIConnected(remoteService, remoteSKI)
 	connected := decodeRuntimePayload(t, waitRuntimePayload(t, updates))
+	handler.ServiceShipIDUpdate(remoteSKI, "fixture-ship-id")
+	connected = decodeRuntimePayload(t, waitRuntimePayload(t, updates))
 	if connected.Status.State != "ready" || len(connected.Sessions) != 1 || connected.Sessions[0].State != "connected" {
 		t.Fatalf("connected status=%+v sessions=%+v", connected.Status, connected.Sessions)
 	}

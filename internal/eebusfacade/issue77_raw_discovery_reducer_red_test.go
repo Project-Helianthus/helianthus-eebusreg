@@ -30,6 +30,8 @@ func TestIssue77DiscoveryReducerRetainsMDNSAndDetailedSPINEFacts(t *testing.T) {
 	service.EXPECT().LocalDevice().Return(local).Twice()
 	local.EXPECT().RemoteDeviceForSki(issue77ReducerRemoteSKI).Return(remote)
 	handler.RemoteSKIConnected(service, issue77ReducerRemoteSKI)
+	_ = issue77WaitPayload(t, updates)
+	handler.ServiceShipIDUpdate(issue77ReducerRemoteSKI, "vaillant-vr940f-ship-id")
 
 	raw := issue77DecodeObject(t, issue77WaitPayload(t, updates))
 	issue77AssertRawGraph(t, raw)
