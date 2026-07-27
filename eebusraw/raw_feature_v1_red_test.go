@@ -87,6 +87,71 @@ func TestIssue83CanonicalJSONUsesRFC8785StringEscaping(t *testing.T) {
 	}
 }
 
+func TestIssue83UnsafeJSONIntegersBecomeExactStrings(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "positive unsafe", raw: `{"value":9007199254740992}`, want: `{"value":"9007199254740992"}`},
+		{name: "negative unsafe", raw: `{"value":-9007199254740992}`, want: `{"value":"-9007199254740992"}`},
+		{name: "uint64 maximum", raw: `{"value":18446744073709551615}`, want: `{"value":"18446744073709551615"}`},
+		{name: "exact decimal", raw: `{"value":12.500}`, want: `{"value":"12.500"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value, err := eebusraw.DecodeTypedValueV1([]byte(test.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := value.MarshalJSON()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(encoded) != test.want {
+				t.Fatalf("canonical JSON = %s, want %s", encoded, test.want)
+			}
+		})
+	}
+
+	for _, value := range []any{int64(9007199254740992), uint64(18446744073709551615)} {
+		typed, err := eebusraw.NewTypedValueV1(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := typed.MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(encoded) < 2 || encoded[0] != '"' || encoded[len(encoded)-1] != '"' {
+			t.Fatalf("unsafe integer %T encoded as %s, want exact JSON string", value, encoded)
+		}
+	}
+}
+
+func TestIssue83TypedJSONRejectsLoneUTF16Surrogates(t *testing.T) {
+	for _, raw := range []string{
+		`{"value":"\uD800"}`,
+		`{"value":"\uDC00"}`,
+		`{"value":"prefix\uD800suffix"}`,
+	} {
+		if _, err := eebusraw.DecodeTypedValueV1([]byte(raw)); err == nil {
+			t.Fatalf("DecodeTypedValueV1(%q) accepted a lone UTF-16 surrogate", raw)
+		}
+	}
+	value, err := eebusraw.DecodeTypedValueV1([]byte(`{"value":"\uD83D\uDE00"}`))
+	if err != nil {
+		t.Fatalf("valid surrogate pair rejected: %v", err)
+	}
+	encoded, err := value.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"value":"😀"}` {
+		t.Fatalf("valid surrogate pair = %s", encoded)
+	}
+}
+
 func TestIssue83TypedValueRejectsSecretNamesAndValues(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -132,6 +197,18 @@ func TestIssue83TypedValueRejectsSecretNamesAndValues(t *testing.T) {
 			name: "private key boundary",
 			value: map[string]any{
 				"status": "-----BEGIN PRIVATE KEY-----",
+			},
+		},
+		{
+			name: "ed25519 private key boundary",
+			value: map[string]any{
+				"status": "-----BEGIN ED25519 PRIVATE KEY-----",
+			},
+		},
+		{
+			name: "generic private key boundary",
+			value: map[string]any{
+				"status": "-----BEGIN VENDOR HARDWARE PRIVATE KEY-----",
 			},
 		},
 	}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -384,6 +385,295 @@ func TestIssue83ExactRuntimeRejectsReplacementAndSenderSubstitutionWithoutSend(t
 	})
 }
 
+func TestIssue83RuntimeEpochUsesDurableIdentityEpoch(t *testing.T) {
+	coordinator := &firstTrustCoordinator{
+		controlView: firstTrustControlView{
+			manifest: firstTrustManifestBinding{epoch: 17},
+			control:  firstTrustControlRecord{controlEpoch: 41},
+		},
+	}
+	provider := rawRuntimeEpochProvider(
+		&runtimeFirstTrustResources{coordinator: coordinator},
+		99,
+	)
+	if got := provider(); got != 17 {
+		t.Fatalf("runtime epoch = %d, want durable manifest epoch 17", got)
+	}
+	coordinator.mu.Lock()
+	coordinator.controlView.control.controlEpoch++
+	coordinator.mu.Unlock()
+	if got := provider(); got != 17 {
+		t.Fatalf("outbound-attempt control churn changed runtime epoch to %d", got)
+	}
+	coordinator.mu.Lock()
+	coordinator.controlView.manifest.epoch = 18
+	coordinator.mu.Unlock()
+	if got := provider(); got != 18 {
+		t.Fatalf("durable identity replacement did not advance runtime epoch: %d", got)
+	}
+
+	restarted := &firstTrustCoordinator{
+		controlView: firstTrustControlView{
+			manifest: firstTrustManifestBinding{epoch: 18},
+			control:  firstTrustControlRecord{controlEpoch: 1},
+		},
+	}
+	restartedProvider := rawRuntimeEpochProvider(
+		&runtimeFirstTrustResources{coordinator: restarted},
+		101,
+	)
+	if got := restartedProvider(); got != 18 {
+		t.Fatalf("restart did not recover durable runtime epoch: %d", got)
+	}
+}
+
+func TestIssue83AdmissionsRejectRepeatedRegressingAndStaleRefresh(t *testing.T) {
+	fixture := newIssue83RawBridgeFixture(t)
+	if err := fixture.bridge.admitRemote(
+		fixture.remoteSKI,
+		fixture.shipID,
+		4,
+		fixture.remote,
+	); err == nil {
+		t.Fatal("repeated connection generation was admitted")
+	}
+	if err := fixture.bridge.admitRemote(
+		fixture.remoteSKI,
+		fixture.shipID,
+		3,
+		fixture.remote,
+	); err == nil {
+		t.Fatal("regressing connection generation was admitted")
+	}
+	if err := fixture.bridge.refreshRemote(
+		fixture.remoteSKI,
+		fixture.shipID,
+		3,
+		fixture.remote,
+	); err == nil {
+		t.Fatal("stale live topology refresh was admitted")
+	}
+
+	binding, request, err := fixture.bridge.exactBindingAndRequest(
+		issue83TargetFromLocator(fixture.locators[0]),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.ConnectionGeneration = 3
+	_, err = fixture.bridge.RoundTripIfCurrent(context.Background(), binding, request)
+	if !errors.Is(err, executor.ErrExactRemoteBindingMismatch) {
+		t.Fatalf("stale generation dispatch error = %v", err)
+	}
+	if fixture.sender.calls.Load() != 0 {
+		t.Fatalf("stale admission path sent %d frames", fixture.sender.calls.Load())
+	}
+
+	fixture.bridge.retireRemote(fixture.remoteSKI, 4)
+	if err := fixture.bridge.admitRemote(
+		fixture.remoteSKI,
+		fixture.shipID,
+		4,
+		fixture.remote,
+	); err == nil {
+		t.Fatal("retired connection generation was admitted again")
+	}
+}
+
+func TestIssue83FinalDispatchRevalidatesFunctionTopologyWithoutSend(t *testing.T) {
+	fixture := newIssue83RawBridgeFixture(t)
+	binding, request, err := fixture.bridge.exactBindingAndRequest(
+		issue83TargetFromLocator(fixture.locators[0]),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Cmd = issue83MeasurementReadCommand()
+	descriptionList := spinemodel.FunctionTypeMeasurementDescriptionListData
+	fixture.features[0].SetOperations([]spinemodel.FunctionPropertyType{{
+		Function: &descriptionList,
+		PossibleOperations: &spinemodel.PossibleOperationsType{
+			Read: &spinemodel.PossibleOperationsReadType{},
+		},
+	}})
+
+	_, err = fixture.bridge.RoundTripIfCurrent(context.Background(), binding, request)
+	if !errors.Is(err, executor.ErrExactTargetMismatch) {
+		t.Fatalf("topology drift error = %v, want exact target mismatch", err)
+	}
+	if fixture.sender.calls.Load() != 0 {
+		t.Fatalf("topology drift sent %d frames", fixture.sender.calls.Load())
+	}
+}
+
+func TestIssue83LiveInventoryRefreshRemovesDisappearedFeatures(t *testing.T) {
+	fixture := newIssue83RawBridgeFixture(t)
+	fixture.remote.hideFeature(12)
+	if err := fixture.bridge.refreshRemote(
+		fixture.remoteSKI,
+		fixture.shipID,
+		4,
+		fixture.remote,
+	); err != nil {
+		t.Fatal(err)
+	}
+	_, terminal := fixture.bridge.featuresGet(
+		context.Background(),
+		issue83FacadeAuthorization(eebusraw.ToolV1FeaturesGet),
+		eebusraw.FeaturesGetRequestV1{Target: fixture.locators[1]},
+	)
+	if terminal == nil || terminal.Code != eebusraw.ErrorCodeV1NotFound {
+		t.Fatalf("disappeared feature lookup error = %+v", terminal)
+	}
+}
+
+func TestIssue83RetirementCancelsInFlightWithoutHoldingRuntimeLock(t *testing.T) {
+	fixture := newIssue83RawBridgeFixture(t)
+	binding, request, err := fixture.bridge.exactBindingAndRequest(
+		issue83TargetFromLocator(fixture.locators[0]),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Cmd = issue83MeasurementReadCommand()
+	started := make(chan struct{})
+	fixture.sender.roundTrip = func(
+		ctx context.Context,
+		_ spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error) {
+		close(started)
+		<-ctx.Done()
+		return spineapi.CorrelatedResponse{}, ctx.Err()
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, roundTripErr := fixture.bridge.RoundTripIfCurrent(context.Background(), binding, request)
+		done <- roundTripErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("round trip did not start")
+	}
+	begin := time.Now()
+	fixture.bridge.retireAll()
+	select {
+	case roundTripErr := <-done:
+		if !errors.Is(roundTripErr, context.Canceled) {
+			t.Fatalf("retired round trip error = %v", roundTripErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retirement did not promptly cancel the in-flight round trip")
+	}
+	if elapsed := time.Since(begin); elapsed > 500*time.Millisecond {
+		t.Fatalf("retirement cancellation took %v", elapsed)
+	}
+}
+
+func TestIssue83RoundTripAllowsReentrantRetirementCallback(t *testing.T) {
+	fixture := newIssue83RawBridgeFixture(t)
+	binding, request, err := fixture.bridge.exactBindingAndRequest(
+		issue83TargetFromLocator(fixture.locators[0]),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Cmd = issue83MeasurementReadCommand()
+	fixture.sender.roundTrip = func(
+		_ context.Context,
+		request spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error) {
+		fixture.bridge.retireRemote(fixture.remoteSKI, 4)
+		return issue83MeasurementReply(request, 41, 11, 215), nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, roundTripErr := fixture.bridge.RoundTripIfCurrent(context.Background(), binding, request)
+		done <- roundTripErr
+	}()
+	select {
+	case roundTripErr := <-done:
+		if !errors.Is(roundTripErr, executor.ErrExactRemoteBindingMismatch) {
+			t.Fatalf("reentrant retirement error = %v", roundTripErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reentrant retirement deadlocked")
+	}
+}
+
+func TestIssue83AllFailedReadsReturnOrdinaryTerminalErrorWithoutPartialData(t *testing.T) {
+	fixture := newIssue83RawBridgeFixture(t)
+	fixture.sender.roundTrip = func(
+		_ context.Context,
+		request spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error) {
+		if *request.Destination.Feature == 11 {
+			return spineapi.CorrelatedResponse{}, context.DeadlineExceeded
+		}
+		return spineapi.CorrelatedResponse{}, &spineapi.CorrelatedProtocolError{}
+	}
+	data, terminal := fixture.bridge.featuresDataGet(
+		context.Background(),
+		issue83FacadeAuthorization(eebusraw.ToolV1FeaturesDataGet),
+		eebusraw.FeatureDataGetRequestV1{
+			Targets: []eebusraw.FeatureTargetV1{
+				issue83TargetFromLocator(fixture.locators[0]),
+				issue83TargetFromLocator(fixture.locators[1]),
+			},
+			TimeoutMS: 1000,
+		},
+	)
+	if terminal == nil || terminal.Code != eebusraw.ErrorCodeV1Timeout {
+		t.Fatalf("all-fail terminal = %+v, want first ordered timeout", terminal)
+	}
+	if !reflect.DeepEqual(data, eebusraw.FeatureDataGetDataV1{}) {
+		t.Fatalf("all-fail exposed partial data: %+v", data)
+	}
+}
+
+func TestIssue83TypedResponseHeaderMetadataIsBoundedOpaqueObservation(t *testing.T) {
+	fixture := newIssue83RawBridgeFixture(t)
+	fixture.sender.roundTrip = func(
+		_ context.Context,
+		request spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error) {
+		response := issue83MeasurementReply(request, 41, 11, 215)
+		ack := true
+		originator := cloneRawFeatureAddress(request.Destination)
+		response.Header.AckRequest = &ack
+		response.Header.AddressOriginator = &originator
+		return response, nil
+	}
+	data, terminal := fixture.bridge.featuresDataGet(
+		context.Background(),
+		issue83FacadeAuthorization(eebusraw.ToolV1FeaturesDataGet),
+		eebusraw.FeatureDataGetRequestV1{
+			Targets:   []eebusraw.FeatureTargetV1{issue83TargetFromLocator(fixture.locators[0])},
+			TimeoutMS: 1000,
+		},
+	)
+	if terminal != nil {
+		t.Fatalf("featuresDataGet() error = %+v", terminal)
+	}
+	if len(data.Results) != 1 ||
+		len(data.Results[0].RawResponse.Unknown) == 0 ||
+		len(data.Results[0].Unknown) == 0 {
+		t.Fatalf("typed header metadata was discarded: %+v", data)
+	}
+	paths := make([]string, 0, len(data.Results[0].RawResponse.Unknown))
+	for _, observation := range data.Results[0].RawResponse.Unknown {
+		paths = append(paths, observation.Path)
+		if observation.Source != "spine-go/api.CorrelatedResponse.Header" {
+			t.Fatalf("opaque source = %q", observation.Source)
+		}
+	}
+	if !sort.StringsAreSorted(paths) ||
+		!containsIssue83String(paths, "/header/ackRequest") ||
+		!containsIssue83String(paths, "/header/addressOriginator") {
+		t.Fatalf("opaque response paths = %v", paths)
+	}
+}
+
 func TestIssue83ReadTokenIsDeterministicAndPurposeBound(t *testing.T) {
 	target := issue83TargetFromLocator(issue83Locator(strings.Repeat("a", 40), "ship-a", "remote-device", 11))
 	runtime := eebusraw.RuntimeBindingV1{RuntimeEpoch: 9, ConnectionGeneration: 4}
@@ -679,6 +969,7 @@ type issue83MutableRemote struct {
 	sender          spineapi.SenderInterface
 	addressOverride *spinemodel.AddressDeviceType
 	skiOverride     *string
+	hiddenFeatures  map[spinemodel.AddressFeatureType]bool
 }
 
 func (remote *issue83MutableRemote) Sender() spineapi.SenderInterface {
@@ -722,6 +1013,26 @@ func (remote *issue83MutableRemote) Ski() string {
 func (remote *issue83MutableRemote) setSKI(ski string) {
 	remote.mu.Lock()
 	remote.skiOverride = &ski
+	remote.mu.Unlock()
+}
+
+func (remote *issue83MutableRemote) FeatureByAddress(
+	address *spinemodel.FeatureAddressType,
+) spineapi.FeatureRemoteInterface {
+	remote.mu.Lock()
+	defer remote.mu.Unlock()
+	if address != nil && address.Feature != nil && remote.hiddenFeatures[*address.Feature] {
+		return nil
+	}
+	return remote.DeviceRemoteInterface.FeatureByAddress(address)
+}
+
+func (remote *issue83MutableRemote) hideFeature(feature spinemodel.AddressFeatureType) {
+	remote.mu.Lock()
+	if remote.hiddenFeatures == nil {
+		remote.hiddenFeatures = make(map[spinemodel.AddressFeatureType]bool)
+	}
+	remote.hiddenFeatures[feature] = true
 	remote.mu.Unlock()
 }
 
@@ -799,6 +1110,21 @@ func issue83EmptyMeasurementReply(
 			MeasurementListData: &spinemodel.MeasurementListDataType{},
 		},
 	}
+}
+
+func issue83MeasurementReadCommand() spinemodel.CmdType {
+	return spinemodel.CmdType{
+		MeasurementListData: &spinemodel.MeasurementListDataType{},
+	}
+}
+
+func containsIssue83String(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func issue83Locator(ski, shipID, device string, feature uint64) eebusraw.FeatureLocatorV1 {
