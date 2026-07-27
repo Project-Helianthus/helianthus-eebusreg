@@ -234,7 +234,7 @@ func TestIssue83ExactRuntimeRejectsReplacementAndSenderSubstitutionWithoutSend(t
 	t.Run("same address replacement", func(t *testing.T) {
 		fixture := newIssue83RawBridgeFixture(t)
 		target := issue83TargetFromLocator(fixture.locators[0])
-		binding, request, err := fixture.bridge.exactBindingAndRequest(target)
+		binding, request, err := issue83ExactBindingAndRequest(fixture.bridge, target)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -274,7 +274,7 @@ func TestIssue83ExactRuntimeRejectsReplacementAndSenderSubstitutionWithoutSend(t
 	t.Run("sender capability substitution", func(t *testing.T) {
 		fixture := newIssue83RawBridgeFixture(t)
 		target := issue83TargetFromLocator(fixture.locators[0])
-		binding, request, err := fixture.bridge.exactBindingAndRequest(target)
+		binding, request, err := issue83ExactBindingAndRequest(fixture.bridge, target)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -298,7 +298,7 @@ func TestIssue83ExactRuntimeRejectsReplacementAndSenderSubstitutionWithoutSend(t
 	t.Run("remote address substitution", func(t *testing.T) {
 		fixture := newIssue83RawBridgeFixture(t)
 		target := issue83TargetFromLocator(fixture.locators[0])
-		binding, request, err := fixture.bridge.exactBindingAndRequest(target)
+		binding, request, err := issue83ExactBindingAndRequest(fixture.bridge, target)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -318,7 +318,7 @@ func TestIssue83ExactRuntimeRejectsReplacementAndSenderSubstitutionWithoutSend(t
 	t.Run("remote SKI substitution", func(t *testing.T) {
 		fixture := newIssue83RawBridgeFixture(t)
 		target := issue83TargetFromLocator(fixture.locators[0])
-		binding, request, err := fixture.bridge.exactBindingAndRequest(target)
+		binding, request, err := issue83ExactBindingAndRequest(fixture.bridge, target)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -338,7 +338,7 @@ func TestIssue83ExactRuntimeRejectsReplacementAndSenderSubstitutionWithoutSend(t
 	t.Run("stale connection generation", func(t *testing.T) {
 		fixture := newIssue83RawBridgeFixture(t)
 		target := issue83TargetFromLocator(fixture.locators[0])
-		binding, request, err := fixture.bridge.exactBindingAndRequest(target)
+		binding, request, err := issue83ExactBindingAndRequest(fixture.bridge, target)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -368,7 +368,7 @@ func TestIssue83ExactRuntimeRejectsReplacementAndSenderSubstitutionWithoutSend(t
 		epoch.Store(9)
 		fixture.bridge.runtimeEpoch = epoch.Load
 		target := issue83TargetFromLocator(fixture.locators[0])
-		binding, request, err := fixture.bridge.exactBindingAndRequest(target)
+		binding, request, err := issue83ExactBindingAndRequest(fixture.bridge, target)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -389,41 +389,59 @@ func TestIssue83RuntimeEpochUsesDurableIdentityEpoch(t *testing.T) {
 	coordinator := &firstTrustCoordinator{
 		controlView: firstTrustControlView{
 			manifest: firstTrustManifestBinding{epoch: 17},
-			control:  firstTrustControlRecord{controlEpoch: 41},
+			control: firstTrustControlRecord{
+				controlEpoch:   41,
+				repairSequence: 6,
+			},
 		},
 	}
 	provider := rawRuntimeEpochProvider(
 		&runtimeFirstTrustResources{coordinator: coordinator},
 		99,
 	)
-	if got := provider(); got != 17 {
-		t.Fatalf("runtime epoch = %d, want durable manifest epoch 17", got)
+	if got := provider(); got != 7 {
+		t.Fatalf("runtime epoch = %d, want durable repair epoch 7", got)
 	}
 	coordinator.mu.Lock()
 	coordinator.controlView.control.controlEpoch++
+	coordinator.controlView.manifest.epoch++
 	coordinator.mu.Unlock()
-	if got := provider(); got != 17 {
+	if got := provider(); got != 7 {
 		t.Fatalf("outbound-attempt control churn changed runtime epoch to %d", got)
 	}
 	coordinator.mu.Lock()
-	coordinator.controlView.manifest.epoch = 18
+	coordinator.controlView.control.repairSequence = 7
 	coordinator.mu.Unlock()
-	if got := provider(); got != 18 {
+	if got := provider(); got != 8 {
 		t.Fatalf("durable identity replacement did not advance runtime epoch: %d", got)
 	}
 
 	restarted := &firstTrustCoordinator{
 		controlView: firstTrustControlView{
 			manifest: firstTrustManifestBinding{epoch: 18},
-			control:  firstTrustControlRecord{controlEpoch: 1},
+			control: firstTrustControlRecord{
+				controlEpoch:   1,
+				repairSequence: 7,
+			},
 		},
 	}
 	restartedProvider := rawRuntimeEpochProvider(
 		&runtimeFirstTrustResources{coordinator: restarted},
 		101,
 	)
-	if got := restartedProvider(); got != 18 {
+	if got := restartedProvider(); got != 8 {
 		t.Fatalf("restart did not recover durable runtime epoch: %d", got)
+	}
+	fallback, err := rawRuntimeEpochForIdentity(strings.Repeat("c", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedFallback, err := rawRuntimeEpochForIdentity(strings.Repeat("c", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback == 0 || fallback != restartedFallback {
+		t.Fatalf("identity fallback is not restart-stable: %d, %d", fallback, restartedFallback)
 	}
 }
 
@@ -454,7 +472,8 @@ func TestIssue83AdmissionsRejectRepeatedRegressingAndStaleRefresh(t *testing.T) 
 		t.Fatal("stale live topology refresh was admitted")
 	}
 
-	binding, request, err := fixture.bridge.exactBindingAndRequest(
+	binding, request, err := issue83ExactBindingAndRequest(
+		fixture.bridge,
 		issue83TargetFromLocator(fixture.locators[0]),
 	)
 	if err != nil {
@@ -482,7 +501,8 @@ func TestIssue83AdmissionsRejectRepeatedRegressingAndStaleRefresh(t *testing.T) 
 
 func TestIssue83FinalDispatchRevalidatesFunctionTopologyWithoutSend(t *testing.T) {
 	fixture := newIssue83RawBridgeFixture(t)
-	binding, request, err := fixture.bridge.exactBindingAndRequest(
+	binding, request, err := issue83ExactBindingAndRequest(
+		fixture.bridge,
 		issue83TargetFromLocator(fixture.locators[0]),
 	)
 	if err != nil {
@@ -527,9 +547,14 @@ func TestIssue83LiveInventoryRefreshRemovesDisappearedFeatures(t *testing.T) {
 	}
 }
 
-func TestIssue83RetirementCancelsInFlightWithoutHoldingRuntimeLock(t *testing.T) {
+func TestIssue83CloseCancelsInFlightWithoutHoldingRuntimeLock(t *testing.T) {
 	fixture := newIssue83RawBridgeFixture(t)
-	binding, request, err := fixture.bridge.exactBindingAndRequest(
+	backend := &serviceBackend{
+		handler:     &runtimeServiceHandler{rawFeatures: fixture.bridge},
+		rawFeatures: fixture.bridge,
+	}
+	binding, request, err := issue83ExactBindingAndRequest(
+		fixture.bridge,
 		issue83TargetFromLocator(fixture.locators[0]),
 	)
 	if err != nil {
@@ -556,23 +581,88 @@ func TestIssue83RetirementCancelsInFlightWithoutHoldingRuntimeLock(t *testing.T)
 		t.Fatal("round trip did not start")
 	}
 	begin := time.Now()
-	fixture.bridge.retireAll()
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case roundTripErr := <-done:
-		if !errors.Is(roundTripErr, context.Canceled) {
+		if !errors.Is(roundTripErr, executor.ErrExactRemoteBindingMismatch) {
 			t.Fatalf("retired round trip error = %v", roundTripErr)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("retirement did not promptly cancel the in-flight round trip")
 	}
 	if elapsed := time.Since(begin); elapsed > 500*time.Millisecond {
-		t.Fatalf("retirement cancellation took %v", elapsed)
+		t.Fatalf("Close cancellation took %v", elapsed)
+	}
+}
+
+func TestIssue83ConcurrentNewGenerationRetiresActiveLease(t *testing.T) {
+	fixture := newIssue83RawBridgeFixture(t)
+	oldBinding, oldRequest, err := issue83ExactBindingAndRequest(
+		fixture.bridge,
+		issue83TargetFromLocator(fixture.locators[0]),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	fixture.sender.roundTrip = func(
+		ctx context.Context,
+		_ spineapi.CorrelatedRequest,
+	) (spineapi.CorrelatedResponse, error) {
+		close(started)
+		<-ctx.Done()
+		return spineapi.CorrelatedResponse{}, ctx.Err()
+	}
+	oldDone := make(chan error, 1)
+	go func() {
+		_, roundTripErr := fixture.bridge.RoundTripIfCurrent(
+			context.Background(),
+			oldBinding,
+			oldRequest,
+		)
+		oldDone <- roundTripErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("old generation did not begin dispatch")
+	}
+	if err := fixture.bridge.admitRemote(
+		fixture.remoteSKI,
+		fixture.shipID,
+		5,
+		fixture.remote,
+	); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case roundTripErr := <-oldDone:
+		if !errors.Is(roundTripErr, executor.ErrExactRemoteBindingMismatch) {
+			t.Fatalf("retired generation error = %v", roundTripErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("new admission did not retire the active lease")
+	}
+	before := fixture.sender.calls.Load()
+	_, err = fixture.bridge.RoundTripIfCurrent(
+		context.Background(),
+		oldBinding,
+		oldRequest,
+	)
+	if !errors.Is(err, executor.ErrExactRemoteBindingMismatch) {
+		t.Fatalf("retired binding error = %v", err)
+	}
+	if fixture.sender.calls.Load() != before {
+		t.Fatal("retired binding contacted the sender after concurrent replacement")
 	}
 }
 
 func TestIssue83RoundTripAllowsReentrantRetirementCallback(t *testing.T) {
 	fixture := newIssue83RawBridgeFixture(t)
-	binding, request, err := fixture.bridge.exactBindingAndRequest(
+	binding, request, err := issue83ExactBindingAndRequest(
+		fixture.bridge,
 		issue83TargetFromLocator(fixture.locators[0]),
 	)
 	if err != nil {
@@ -656,6 +746,7 @@ func TestIssue83TypedResponseHeaderMetadataIsBoundedOpaqueObservation(t *testing
 		t.Fatalf("featuresDataGet() error = %+v", terminal)
 	}
 	if len(data.Results) != 1 ||
+		len(data.Results[0].RawRequest.Unknown) == 0 ||
 		len(data.Results[0].RawResponse.Unknown) == 0 ||
 		len(data.Results[0].Unknown) == 0 {
 		t.Fatalf("typed header metadata was discarded: %+v", data)
@@ -1116,6 +1207,26 @@ func issue83MeasurementReadCommand() spinemodel.CmdType {
 	return spinemodel.CmdType{
 		MeasurementListData: &spinemodel.MeasurementListDataType{},
 	}
+}
+
+func issue83ExactBindingAndRequest(
+	bridge *rawFeatureRuntimeBridge,
+	target eebusraw.FeatureTargetV1,
+) (executor.ExactRemoteBinding, spineapi.CorrelatedRequest, error) {
+	request, _, terminal := bridge.exactReadRequest(target)
+	if terminal != nil {
+		return executor.ExactRemoteBinding{}, spineapi.CorrelatedRequest{}, terminal
+	}
+	return executor.ExactRemoteBinding{
+			DeviceAddress:        *request.Target.Address.Device,
+			RemoteIdentity:       request.Target.RemoteIdentity,
+			ConnectionGeneration: request.Target.ConnectionGeneration,
+		}, spineapi.CorrelatedRequest{
+			Classifier:  spinemodel.CmdClassifierTypeRead,
+			Source:      cloneRawFeatureAddress(request.Source),
+			Destination: cloneRawFeatureAddress(request.Target.Address),
+			Cmd:         issue83MeasurementReadCommand(),
+		}, nil
 }
 
 func containsIssue83String(values []string, want string) bool {

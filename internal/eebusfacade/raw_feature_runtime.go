@@ -26,12 +26,18 @@ import (
 )
 
 const (
-	rawReadTokenDomainV1   = "helianthus.eebus.raw.read-token.v1\x00"
-	rawRemoteIdentityV1    = "helianthus.eebus.raw.remote-identity.v1\x00"
-	rawReadTokenLifetimeV1 = time.Minute
+	rawReadTokenDomainV1        = "helianthus.eebus.raw.read-token.v1\x00"
+	rawRemoteIdentityV1         = "helianthus.eebus.raw.remote-identity.v1\x00"
+	rawDispatchIdentityV1       = "helianthus.eebus.raw.dispatch-identity.v1\x00"
+	rawRuntimeEpochDomainV1     = "helianthus.eebus.raw.runtime-epoch.v1\x00"
+	rawReadTokenLifetimeV1      = time.Minute
+	rawMetadataMaximumEntriesV1 = 256
 )
 
-var errRawRuntimeEpochMismatch = errors.New("raw runtime epoch changed")
+var (
+	errRawRuntimeEpochMismatch = errors.New("raw runtime epoch changed")
+	errRawRemoteNotAdmitted    = errors.New("raw remote is not admitted")
+)
 
 type RawFeatureBackend interface {
 	FeaturesGet(
@@ -108,12 +114,13 @@ func newRuntimeRawReadTokenIssuer(nodeToken string) (*rawReadTokenIssuer, error)
 	return newRawReadTokenIssuer(key)
 }
 
-func newRawRuntimeEpoch() (uint64, error) {
-	var encoded [8]byte
-	if _, err := rand.Read(encoded[:]); err != nil {
-		return 0, errors.New("raw runtime epoch material is unavailable")
+func rawRuntimeEpochForIdentity(localSKI string) (uint64, error) {
+	localSKI = strings.ToLower(strings.TrimSpace(localSKI))
+	if !validRuntimeSKI(localSKI) {
+		return 0, errors.New("raw runtime identity is unavailable")
 	}
-	epoch := binary.BigEndian.Uint64(encoded[:]) & ((uint64(1) << 53) - 1)
+	digest := sha256.Sum256([]byte(rawRuntimeEpochDomainV1 + localSKI))
+	epoch := binary.BigEndian.Uint64(digest[:8]) & ((uint64(1) << 53) - 1)
 	if epoch == 0 {
 		epoch = 1
 	}
@@ -130,12 +137,12 @@ func rawRuntimeEpochProvider(
 		}
 		coordinator := firstTrust.coordinator
 		coordinator.mu.Lock()
-		epoch := coordinator.controlView.control.controlEpoch
+		repairSequence := coordinator.controlView.control.repairSequence
 		coordinator.mu.Unlock()
-		if epoch == 0 {
-			return fallback
+		if repairSequence == ^uint64(0) {
+			return 0
 		}
-		return epoch
+		return repairSequence + 1
 	}
 }
 
@@ -189,18 +196,34 @@ type rawRemoteLease struct {
 	runtimeEpoch uint64
 	remote       spineapi.DeviceRemoteInterface
 	sender       spineapi.CorrelatedRoundTripper
+	retired      bool
+	inFlight     map[uint64]context.CancelFunc
+}
+
+type rawResponseMetadataKey struct {
+	address     spinemodel.AddressDeviceType
+	generation  executor.ExactConnectionGeneration
+	correlation spinemodel.MsgCounterType
+}
+
+type rawProtocolMetadata struct {
+	request  []eebusraw.OpaqueObservationV1
+	response []eebusraw.OpaqueObservationV1
 }
 
 type rawFeatureRuntimeBridge struct {
-	mu sync.RWMutex
+	mu sync.Mutex
 
-	local        spineapi.DeviceLocalInterface
-	runtimeEpoch func() uint64
-	now          func() time.Time
-	tokenIssuer  *rawReadTokenIssuer
-	leasesBySKI  map[string]*rawRemoteLease
-	leasesByAddr map[spinemodel.AddressDeviceType]*rawRemoteLease
-	inventory    map[string]eebusraw.FeaturesGetDataV1
+	local               spineapi.DeviceLocalInterface
+	runtimeEpoch        func() uint64
+	now                 func() time.Time
+	tokenIssuer         *rawReadTokenIssuer
+	leasesBySKI         map[string]*rawRemoteLease
+	leasesByAddr        map[spinemodel.AddressDeviceType]*rawRemoteLease
+	generationHighWater map[string]uint64
+	inventory           map[string]eebusraw.FeaturesGetDataV1
+	nextDispatch        uint64
+	responseMetadata    map[rawResponseMetadataKey]rawProtocolMetadata
 }
 
 var _ executor.ExactRemoteRuntime = (*rawFeatureRuntimeBridge)(nil)
@@ -212,13 +235,15 @@ func newRawFeatureRuntimeBridge(
 	issuer *rawReadTokenIssuer,
 ) *rawFeatureRuntimeBridge {
 	return &rawFeatureRuntimeBridge{
-		local:        local,
-		runtimeEpoch: runtimeEpoch,
-		now:          now,
-		tokenIssuer:  issuer,
-		leasesBySKI:  make(map[string]*rawRemoteLease),
-		leasesByAddr: make(map[spinemodel.AddressDeviceType]*rawRemoteLease),
-		inventory:    make(map[string]eebusraw.FeaturesGetDataV1),
+		local:               local,
+		runtimeEpoch:        runtimeEpoch,
+		now:                 now,
+		tokenIssuer:         issuer,
+		leasesBySKI:         make(map[string]*rawRemoteLease),
+		leasesByAddr:        make(map[spinemodel.AddressDeviceType]*rawRemoteLease),
+		generationHighWater: make(map[string]uint64),
+		inventory:           make(map[string]eebusraw.FeaturesGetDataV1),
+		responseMetadata:    make(map[rawResponseMetadataKey]rawProtocolMetadata),
 	}
 }
 
@@ -228,23 +253,80 @@ func (bridge *rawFeatureRuntimeBridge) admitRemote(
 	generation uint64,
 	remote spineapi.DeviceRemoteInterface,
 ) error {
+	lease, err := bridge.rawRemoteLease(ski, shipID, generation, remote)
+	if err != nil {
+		return err
+	}
+
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	if generation <= bridge.generationHighWater[lease.ski] {
+		return errors.New("exact remote connection generation is not new")
+	}
+	if prior := bridge.leasesBySKI[lease.ski]; prior != nil {
+		bridge.retireLeaseLocked(prior, false)
+	}
+	if prior := bridge.leasesByAddr[lease.address]; prior != nil {
+		bridge.retireLeaseLocked(prior, false)
+	}
+	bridge.generationHighWater[lease.ski] = generation
+	bridge.leasesBySKI[lease.ski] = lease
+	bridge.leasesByAddr[lease.address] = lease
+	bridge.captureRemoteInventoryLocked(lease)
+	return nil
+}
+
+func (bridge *rawFeatureRuntimeBridge) refreshRemote(
+	ski string,
+	shipID string,
+	generation uint64,
+	remote spineapi.DeviceRemoteInterface,
+) error {
+	refreshed, err := bridge.rawRemoteLease(ski, shipID, generation, remote)
+	if err != nil {
+		return err
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	lease := bridge.leasesBySKI[refreshed.ski]
+	if lease == nil {
+		return errRawRemoteNotAdmitted
+	}
+	if lease.retired || lease.generation != refreshed.generation ||
+		generation != bridge.generationHighWater[refreshed.ski] ||
+		lease.shipID != refreshed.shipID || lease.address != refreshed.address ||
+		lease.runtimeEpoch != refreshed.runtimeEpoch ||
+		!sameRawRuntimeValue(lease.sender, refreshed.sender) {
+		return errors.New("stale raw remote refresh rejected")
+	}
+	lease.remote = refreshed.remote
+	bridge.captureRemoteInventoryLocked(lease)
+	return nil
+}
+
+func (bridge *rawFeatureRuntimeBridge) rawRemoteLease(
+	ski string,
+	shipID string,
+	generation uint64,
+	remote spineapi.DeviceRemoteInterface,
+) (*rawRemoteLease, error) {
 	ski = strings.ToLower(strings.TrimSpace(ski))
 	shipID = strings.TrimSpace(shipID)
 	if !validRuntimeSKI(ski) || shipID == "" || generation == 0 ||
 		isNilRawRuntimeValue(remote) || remote.Address() == nil ||
 		*remote.Address() == "" || !strings.EqualFold(strings.TrimSpace(remote.Ski()), ski) {
-		return errors.New("exact remote admission binding is incomplete")
+		return nil, errors.New("exact remote admission binding is incomplete")
 	}
 	sender, ok := remote.Sender().(spineapi.CorrelatedRoundTripper)
 	if !ok || isNilRawRuntimeValue(sender) {
-		return errors.New("exact remote correlated round-tripper is unavailable")
+		return nil, errors.New("exact remote correlated round-tripper is unavailable")
 	}
 	address := *remote.Address()
 	runtimeEpoch := bridge.currentRuntimeEpoch()
 	if runtimeEpoch == 0 {
-		return errors.New("exact remote runtime epoch is unavailable")
+		return nil, errors.New("exact remote runtime epoch is unavailable")
 	}
-	lease := &rawRemoteLease{
+	return &rawRemoteLease{
 		ski:          ski,
 		shipID:       shipID,
 		address:      address,
@@ -253,20 +335,8 @@ func (bridge *rawFeatureRuntimeBridge) admitRemote(
 		runtimeEpoch: runtimeEpoch,
 		remote:       remote,
 		sender:       sender,
-	}
-
-	bridge.mu.Lock()
-	if prior := bridge.leasesBySKI[ski]; prior != nil {
-		delete(bridge.leasesByAddr, prior.address)
-	}
-	if prior := bridge.leasesByAddr[address]; prior != nil {
-		delete(bridge.leasesBySKI, prior.ski)
-	}
-	bridge.leasesBySKI[ski] = lease
-	bridge.leasesByAddr[address] = lease
-	bridge.captureRemoteInventoryLocked(lease)
-	bridge.mu.Unlock()
-	return nil
+		inFlight:     make(map[uint64]context.CancelFunc),
+	}, nil
 }
 
 func (bridge *rawFeatureRuntimeBridge) retireRemote(ski string, generation uint64) {
@@ -277,41 +347,59 @@ func (bridge *rawFeatureRuntimeBridge) retireRemote(ski string, generation uint6
 		bridge.mu.Unlock()
 		return
 	}
-	delete(bridge.leasesBySKI, ski)
-	delete(bridge.leasesByAddr, lease.address)
-	for key, item := range bridge.inventory {
-		if item.Feature.RemoteSKI == ski &&
-			item.Runtime.ConnectionGeneration == generation {
-			item.Source = eebusraw.ObservationSourceV1Cache
-			bridge.inventory[key] = item
-		}
-	}
+	bridge.retireLeaseLocked(lease, true)
 	bridge.mu.Unlock()
 }
 
 func (bridge *rawFeatureRuntimeBridge) retireAll() {
 	bridge.mu.Lock()
-	for ski, lease := range bridge.leasesBySKI {
-		for key, item := range bridge.inventory {
-			if item.Feature.RemoteSKI == ski &&
-				item.Runtime.ConnectionGeneration == uint64(lease.generation) {
-				item.Source = eebusraw.ObservationSourceV1Cache
-				bridge.inventory[key] = item
-			}
+	leases := make([]*rawRemoteLease, 0, len(bridge.leasesBySKI))
+	for _, lease := range bridge.leasesBySKI {
+		leases = append(leases, lease)
+	}
+	for _, lease := range leases {
+		bridge.retireLeaseLocked(lease, true)
+	}
+	bridge.mu.Unlock()
+}
+
+func (bridge *rawFeatureRuntimeBridge) retireLeaseLocked(
+	lease *rawRemoteLease,
+	cacheInventory bool,
+) {
+	if lease == nil || lease.retired {
+		return
+	}
+	lease.retired = true
+	if bridge.leasesBySKI[lease.ski] == lease {
+		delete(bridge.leasesBySKI, lease.ski)
+	}
+	if bridge.leasesByAddr[lease.address] == lease {
+		delete(bridge.leasesByAddr, lease.address)
+	}
+	for _, cancel := range lease.inFlight {
+		cancel()
+	}
+	if !cacheInventory {
+		bridge.removeRemoteInventoryLocked(lease.ski)
+		return
+	}
+	for key, item := range bridge.inventory {
+		if item.Feature.RemoteSKI == lease.ski &&
+			item.Runtime.ConnectionGeneration == uint64(lease.generation) {
+			item.Source = eebusraw.ObservationSourceV1Cache
+			bridge.inventory[key] = item
 		}
 	}
-	clear(bridge.leasesBySKI)
-	clear(bridge.leasesByAddr)
-	bridge.mu.Unlock()
 }
 
 func (bridge *rawFeatureRuntimeBridge) ResolveExactRemoteDevice(
 	address spinemodel.AddressDeviceType,
 ) (spineapi.DeviceRemoteInterface, error) {
-	bridge.mu.RLock()
-	defer bridge.mu.RUnlock()
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
 	lease := bridge.leasesByAddr[address]
-	if lease == nil {
+	if lease == nil || lease.retired {
 		return nil, executor.ErrExactTargetNotFound
 	}
 	return lease.remote, nil
@@ -334,40 +422,82 @@ func (bridge *rawFeatureRuntimeBridge) RoundTripIfCurrent(
 		return failure(executor.ExactRemoteBindingAddressMismatch)
 	}
 
-	bridge.mu.RLock()
-	defer bridge.mu.RUnlock()
+	if ctx == nil {
+		return spineapi.CorrelatedResponse{}, context.Canceled
+	}
+	bridge.mu.Lock()
 	lease := bridge.leasesByAddr[expected.DeviceAddress]
-	if lease == nil {
+	if lease == nil || lease.retired {
+		bridge.mu.Unlock()
 		return failure(executor.ExactRemoteBindingProofMissing)
 	}
 	if lease.address != expected.DeviceAddress {
+		bridge.mu.Unlock()
 		return failure(executor.ExactRemoteBindingAddressMismatch)
 	}
 	currentAddress := lease.remote.Address()
 	if currentAddress == nil || *currentAddress != lease.address {
+		bridge.mu.Unlock()
 		return failure(executor.ExactRemoteBindingAddressMismatch)
 	}
-	if lease.identity != expected.RemoteIdentity {
-		return failure(executor.ExactRemoteBindingIdentityMismatch)
-	}
 	if !strings.EqualFold(strings.TrimSpace(lease.remote.Ski()), lease.ski) {
+		bridge.mu.Unlock()
 		return failure(executor.ExactRemoteBindingIdentityMismatch)
 	}
-	if lease.generation != expected.ConnectionGeneration ||
-		!sameRawRuntimeValue(lease.remote.Sender(), lease.sender) ||
+	if !sameRawRuntimeValue(lease.remote.Sender(), lease.sender) ||
 		lease.sender.Stats().Closed {
+		bridge.mu.Unlock()
 		return failure(executor.ExactRemoteBindingGenerationMismatch)
 	}
 	if bridge.currentRuntimeEpoch() != lease.runtimeEpoch {
+		bridge.mu.Unlock()
 		return spineapi.CorrelatedResponse{}, errors.Join(
 			errRawRuntimeEpochMismatch,
 			&executor.ExactRemoteBindingError{Failure: executor.ExactRemoteBindingIdentityMismatch},
 		)
 	}
 	if err := ctx.Err(); err != nil {
+		bridge.mu.Unlock()
 		return spineapi.CorrelatedResponse{}, err
 	}
-	return lease.sender.RoundTrip(ctx, request)
+	feature, function, err := exactRawDispatchFeature(lease, request)
+	if err != nil {
+		bridge.mu.Unlock()
+		return spineapi.CorrelatedResponse{}, err
+	}
+	if exactRawDispatchIdentity(lease, feature, function) != expected.RemoteIdentity {
+		bridge.mu.Unlock()
+		return failure(executor.ExactRemoteBindingIdentityMismatch)
+	}
+	if lease.generation != expected.ConnectionGeneration {
+		bridge.mu.Unlock()
+		return failure(executor.ExactRemoteBindingGenerationMismatch)
+	}
+
+	dispatchContext, cancel := context.WithCancel(ctx)
+	bridge.nextDispatch++
+	dispatchID := bridge.nextDispatch
+	lease.inFlight[dispatchID] = cancel
+	sender := lease.sender
+	bridge.mu.Unlock()
+
+	response, roundTripErr := sender.RoundTrip(dispatchContext, request)
+	cancel()
+
+	bridge.mu.Lock()
+	delete(lease.inFlight, dispatchID)
+	current := !lease.retired &&
+		bridge.leasesBySKI[lease.ski] == lease &&
+		bridge.leasesByAddr[lease.address] == lease &&
+		bridge.currentRuntimeEpoch() == lease.runtimeEpoch
+	if current && roundTripErr == nil {
+		bridge.storeResponseMetadataLocked(lease, request, response)
+	}
+	bridge.mu.Unlock()
+	if !current {
+		return failure(executor.ExactRemoteBindingGenerationMismatch)
+	}
+	return response, roundTripErr
 }
 
 func (bridge *rawFeatureRuntimeBridge) featuresGet(
@@ -468,9 +598,9 @@ func (bridge *rawFeatureRuntimeBridge) featuresDataGet(
 	if data.Complete {
 		return data.Clone(), nil
 	}
-	if len(request.Targets) == 1 {
+	if len(data.Results) == 0 {
 		terminal := data.Failures[0].Error.Clone()
-		return data.Clone(), &terminal
+		return eebusraw.FeatureDataGetDataV1{}, &terminal
 	}
 	return data.Clone(), eebusraw.NewErrorV1(
 		eebusraw.ErrorCodeV1PartialResult,
@@ -490,6 +620,11 @@ func (bridge *rawFeatureRuntimeBridge) readTarget(
 		return eebusraw.ReadObservationV1{}, terminal
 	}
 	result, err := executor.NewExactFeatureExecutor(bridge.local, bridge).Execute(ctx, exactRequest)
+	protocolMetadata := bridge.takeResponseMetadata(
+		*exactRequest.Target.Address.Device,
+		exactRequest.Target.ConnectionGeneration,
+		result.CorrelationKey,
+	)
 	if err != nil {
 		return eebusraw.ReadObservationV1{}, translateRawExecutorError(err)
 	}
@@ -506,12 +641,14 @@ func (bridge *rawFeatureRuntimeBridge) readTarget(
 		CorrelationKey: uint64(result.CorrelationKey),
 		Function:       target.Function,
 		Data:           &requestValue,
+		Unknown:        cloneRawOpaqueObservations(protocolMetadata.request),
 	}
 	responseMessage := eebusraw.ProtocolMessageV1{
 		Classifier:     strings.ToUpper(string(spinemodel.CmdClassifierTypeReply)),
 		CorrelationKey: uint64(result.CorrelationKey),
 		Function:       target.Function,
 		Data:           &responseValue,
+		Unknown:        cloneRawOpaqueObservations(protocolMetadata.response),
 	}
 	requestHash, err := eebusraw.CanonicalSHA256V1(requestMessage)
 	if err != nil {
@@ -534,12 +671,15 @@ func (bridge *rawFeatureRuntimeBridge) readTarget(
 		return eebusraw.ReadObservationV1{}, rawInternalError()
 	}
 	observation := eebusraw.ReadObservationV1{
-		Target:        target.Clone(),
-		Runtime:       runtime,
-		RawRequest:    requestMessage,
-		RawResponse:   responseMessage,
-		Value:         responseValue,
-		Unknown:       []eebusraw.OpaqueObservationV1{},
+		Target:      target.Clone(),
+		Runtime:     runtime,
+		RawRequest:  requestMessage,
+		RawResponse: responseMessage,
+		Value:       responseValue,
+		Unknown: mergeRawOpaqueObservations(
+			protocolMetadata.request,
+			protocolMetadata.response,
+		),
 		RequestedAt:   result.RequestedAt.UTC(),
 		ReceivedAt:    receivedAt,
 		DataTimestamp: receivedAt,
@@ -556,8 +696,8 @@ func (bridge *rawFeatureRuntimeBridge) readTarget(
 func (bridge *rawFeatureRuntimeBridge) exactReadRequest(
 	target eebusraw.FeatureTargetV1,
 ) (executor.ExactFeatureRequest, eebusraw.RuntimeBindingV1, *eebusraw.ErrorV1) {
-	bridge.mu.RLock()
-	defer bridge.mu.RUnlock()
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
 	lease := bridge.leasesBySKI[strings.ToLower(target.RemoteSKI)]
 	if lease == nil {
 		return executor.ExactFeatureRequest{}, eebusraw.RuntimeBindingV1{}, eebusraw.NewErrorV1(
@@ -618,33 +758,19 @@ func (bridge *rawFeatureRuntimeBridge) exactReadRequest(
 	return executor.ExactFeatureRequest{
 		Source: source,
 		Target: executor.ExactFeatureTarget{
-			Address:              cloneRawFeatureAddress(*feature.Address()),
-			FeatureType:          feature.Type(),
-			Role:                 feature.Role(),
-			Function:             spinemodel.FunctionType(target.Function),
-			RemoteIdentity:       lease.identity,
+			Address:     cloneRawFeatureAddress(*feature.Address()),
+			FeatureType: feature.Type(),
+			Role:        feature.Role(),
+			Function:    spinemodel.FunctionType(target.Function),
+			RemoteIdentity: exactRawDispatchIdentity(
+				lease,
+				feature,
+				spinemodel.FunctionType(target.Function),
+			),
 			ConnectionGeneration: lease.generation,
 		},
 		Operation: executor.ExactFeatureOperationRead,
 	}, runtime, nil
-}
-
-func (bridge *rawFeatureRuntimeBridge) exactBindingAndRequest(
-	target eebusraw.FeatureTargetV1,
-) (executor.ExactRemoteBinding, spineapi.CorrelatedRequest, error) {
-	request, _, terminal := bridge.exactReadRequest(target)
-	if terminal != nil {
-		return executor.ExactRemoteBinding{}, spineapi.CorrelatedRequest{}, terminal
-	}
-	return executor.ExactRemoteBinding{
-			DeviceAddress:        *request.Target.Address.Device,
-			RemoteIdentity:       request.Target.RemoteIdentity,
-			ConnectionGeneration: request.Target.ConnectionGeneration,
-		}, spineapi.CorrelatedRequest{
-			Classifier:  spinemodel.CmdClassifierTypeRead,
-			Source:      cloneRawFeatureAddress(request.Source),
-			Destination: cloneRawFeatureAddress(request.Target.Address),
-		}, nil
 }
 
 func (bridge *rawFeatureRuntimeBridge) currentRuntimeEpoch() uint64 {
@@ -655,18 +781,31 @@ func (bridge *rawFeatureRuntimeBridge) currentRuntimeEpoch() uint64 {
 }
 
 func (bridge *rawFeatureRuntimeBridge) captureRemoteInventoryLocked(lease *rawRemoteLease) {
+	bridge.removeRemoteInventoryLocked(lease.ski)
 	for _, entity := range lease.remote.Entities() {
 		if isNilRawRuntimeValue(entity) {
 			continue
 		}
 		for _, feature := range entity.Features() {
-			if isNilRawRuntimeValue(feature) {
+			if isNilRawRuntimeValue(feature) || feature.Address() == nil {
 				continue
 			}
-			data, err := bridge.inventoryForFeatureLocked(lease, feature)
+			current := lease.remote.FeatureByAddress(feature.Address())
+			if isNilRawRuntimeValue(current) {
+				continue
+			}
+			data, err := bridge.inventoryForFeatureLocked(lease, current)
 			if err == nil {
 				bridge.inventory[rawFeatureLocatorKey(data.Feature)] = data
 			}
+		}
+	}
+}
+
+func (bridge *rawFeatureRuntimeBridge) removeRemoteInventoryLocked(ski string) {
+	for key, item := range bridge.inventory {
+		if item.Feature.RemoteSKI == ski {
+			delete(bridge.inventory, key)
 		}
 	}
 }
@@ -776,6 +915,74 @@ func exactRawRemoteFeature(
 	return feature, nil
 }
 
+func exactRawDispatchFeature(
+	lease *rawRemoteLease,
+	request spineapi.CorrelatedRequest,
+) (spineapi.FeatureRemoteInterface, spinemodel.FunctionType, error) {
+	if lease == nil || lease.retired ||
+		request.Classifier != spinemodel.CmdClassifierTypeRead ||
+		request.Destination.Device == nil ||
+		*request.Destination.Device != lease.address ||
+		len(request.Cmd.Filter) != 0 || request.Cmd.Function != nil {
+		return nil, "", executor.ErrExactTargetMismatch
+	}
+	data, err := request.Cmd.Data()
+	if err != nil || data == nil || data.Function == nil || *data.Function == "" {
+		return nil, "", executor.ErrExactTargetMismatch
+	}
+	feature := lease.remote.FeatureByAddress(&request.Destination)
+	if isNilRawRuntimeValue(feature) || feature.Address() == nil ||
+		!equalRawFeatureAddress(*feature.Address(), request.Destination) {
+		return nil, "", executor.ErrExactTargetMismatch
+	}
+	operations := feature.Operations()[*data.Function]
+	if operations == nil || !operations.Read() {
+		return nil, "", executor.ErrExactTargetMismatch
+	}
+	return feature, *data.Function, nil
+}
+
+func exactRawDispatchIdentity(
+	lease *rawRemoteLease,
+	feature spineapi.FeatureRemoteInterface,
+	function spinemodel.FunctionType,
+) executor.ExactRemoteIdentity {
+	if lease == nil || isNilRawRuntimeValue(feature) || feature.Address() == nil {
+		return ""
+	}
+	digest := sha256.New()
+	_, _ = digest.Write([]byte(rawDispatchIdentityV1))
+	_, _ = digest.Write([]byte(lease.identity))
+	for _, value := range []string{
+		feature.Address().String(),
+		string(feature.Type()),
+		string(feature.Role()),
+		string(function),
+	} {
+		_, _ = digest.Write([]byte{0})
+		_, _ = digest.Write([]byte(value))
+	}
+	return executor.ExactRemoteIdentity("sha256:" + hex.EncodeToString(digest.Sum(nil)))
+}
+
+func equalRawFeatureAddress(
+	left spinemodel.FeatureAddressType,
+	right spinemodel.FeatureAddressType,
+) bool {
+	if left.Device == nil || right.Device == nil ||
+		left.Feature == nil || right.Feature == nil ||
+		*left.Device != *right.Device || *left.Feature != *right.Feature ||
+		len(left.Entity) != len(right.Entity) {
+		return false
+	}
+	for index := range left.Entity {
+		if left.Entity[index] != right.Entity[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func exactRawSourceAddress(
 	local spineapi.DeviceLocalInterface,
 	target spineapi.FeatureRemoteInterface,
@@ -812,6 +1019,149 @@ func exactRawSourceAddress(
 		return spinemodel.FeatureAddressType{}, false
 	}
 	return candidates[0], true
+}
+
+func (bridge *rawFeatureRuntimeBridge) storeResponseMetadataLocked(
+	lease *rawRemoteLease,
+	request spineapi.CorrelatedRequest,
+	response spineapi.CorrelatedResponse,
+) {
+	metadata := rawProtocolMetadata{
+		request:  rawRequestObservations(request),
+		response: rawResponseHeaderObservations(response.Header),
+	}
+	if len(metadata.request) == 0 && len(metadata.response) == 0 {
+		return
+	}
+	key := rawResponseMetadataKey{
+		address:     lease.address,
+		generation:  lease.generation,
+		correlation: response.CorrelationKey,
+	}
+	if _, exists := bridge.responseMetadata[key]; !exists &&
+		len(bridge.responseMetadata) >= rawMetadataMaximumEntriesV1 {
+		return
+	}
+	bridge.responseMetadata[key] = cloneRawProtocolMetadata(metadata)
+}
+
+func (bridge *rawFeatureRuntimeBridge) takeResponseMetadata(
+	address spinemodel.AddressDeviceType,
+	generation executor.ExactConnectionGeneration,
+	correlation spinemodel.MsgCounterType,
+) rawProtocolMetadata {
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	key := rawResponseMetadataKey{
+		address:     address,
+		generation:  generation,
+		correlation: correlation,
+	}
+	result := cloneRawProtocolMetadata(bridge.responseMetadata[key])
+	delete(bridge.responseMetadata, key)
+	return result
+}
+
+func rawRequestObservations(
+	request spineapi.CorrelatedRequest,
+) []eebusraw.OpaqueObservationV1 {
+	const source = "spine-go/api.CorrelatedRequest"
+	return rawOpaqueObservations([]struct {
+		path  string
+		value any
+	}{
+		{path: "/request/ackRequest", value: request.AckRequest},
+		{path: "/request/addressDestination", value: request.Destination},
+		{path: "/request/addressSource", value: request.Source},
+	}, source)
+}
+
+func rawResponseHeaderObservations(
+	header spinemodel.HeaderType,
+) []eebusraw.OpaqueObservationV1 {
+	const source = "spine-go/api.CorrelatedResponse.Header"
+	return rawOpaqueObservations([]struct {
+		path  string
+		value any
+	}{
+		{path: "/header/ackRequest", value: header.AckRequest},
+		{path: "/header/addressDestination", value: header.AddressDestination},
+		{path: "/header/addressOriginator", value: header.AddressOriginator},
+		{path: "/header/addressSource", value: header.AddressSource},
+		{path: "/header/msgCounter", value: header.MsgCounter},
+		{path: "/header/msgCounterReference", value: header.MsgCounterReference},
+		{path: "/header/specificationVersion", value: header.SpecificationVersion},
+		{path: "/header/timestamp", value: header.Timestamp},
+	}, source)
+}
+
+func rawOpaqueObservations(
+	values []struct {
+		path  string
+		value any
+	},
+	source string,
+) []eebusraw.OpaqueObservationV1 {
+	result := make([]eebusraw.OpaqueObservationV1, 0, len(values))
+	for _, item := range values {
+		if isNilRawRuntimeValue(item.value) {
+			continue
+		}
+		encoded, err := json.Marshal(item.value)
+		if err != nil {
+			continue
+		}
+		value, err := eebusraw.DecodeTypedValueV1(encoded)
+		if err != nil {
+			continue
+		}
+		result = append(result, eebusraw.OpaqueObservationV1{
+			Path:   item.path,
+			Source: source,
+			Value:  value,
+		})
+	}
+	return result
+}
+
+func cloneRawProtocolMetadata(source rawProtocolMetadata) rawProtocolMetadata {
+	return rawProtocolMetadata{
+		request:  cloneRawOpaqueObservations(source.request),
+		response: cloneRawOpaqueObservations(source.response),
+	}
+}
+
+func mergeRawOpaqueObservations(
+	groups ...[]eebusraw.OpaqueObservationV1,
+) []eebusraw.OpaqueObservationV1 {
+	size := 0
+	for _, group := range groups {
+		size += len(group)
+	}
+	result := make([]eebusraw.OpaqueObservationV1, 0, size)
+	for _, group := range groups {
+		result = append(result, cloneRawOpaqueObservations(group)...)
+	}
+	sort.Slice(result, func(left, right int) bool {
+		if result[left].Path == result[right].Path {
+			return result[left].Source < result[right].Source
+		}
+		return result[left].Path < result[right].Path
+	})
+	return result
+}
+
+func cloneRawOpaqueObservations(
+	source []eebusraw.OpaqueObservationV1,
+) []eebusraw.OpaqueObservationV1 {
+	if source == nil {
+		return nil
+	}
+	result := make([]eebusraw.OpaqueObservationV1, len(source))
+	for index := range source {
+		result[index] = source[index].Clone()
+	}
+	return result
 }
 
 func rawCommandValue(command spinemodel.CmdType, requireNonEmpty bool) (eebusraw.TypedValueV1, error) {

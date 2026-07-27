@@ -1483,6 +1483,18 @@ func inspectStableContracts(root, modulePath string, fset *token.FileSet, packag
 	checkedPackages, typeViolations := typeCheckStablePackages(root, fset, packages, specs)
 	contracts := make([]manifestStableContract, 0, len(specs))
 	violations := append([]string(nil), typeViolations...)
+	allExpectedTypes := make(map[string]map[string]struct{})
+	for _, spec := range specs {
+		expected := allExpectedTypes[spec.importPath]
+		if expected == nil {
+			expected = make(map[string]struct{})
+			allExpectedTypes[spec.importPath] = expected
+		}
+		for _, stableType := range spec.types {
+			expected[stableType.Name] = struct{}{}
+		}
+	}
+	allExpectedTypes[modulePath]["RawFeatureRuntimeV1"] = struct{}{}
 	for _, spec := range specs {
 		if modulePath != canonicalModulePath {
 			inventory := packages[spec.importPath]
@@ -1519,21 +1531,13 @@ func inspectStableContracts(root, modulePath string, fset *token.FileSet, packag
 				violations = append(violations, fmt.Sprintf("%s: stable contract type %s: %v", declaration.rel, expected.Name, err))
 				continue
 			}
-			if !reflect.DeepEqual(actual, expected) {
+			if !stableContractTypeMatches(actual, expected) {
 				violations = append(violations, fmt.Sprintf("%s: stable contract type %s does not match exact field/type/tag manifest: got %s want %s", declaration.rel, expected.Name, stableTypeText(actual), stableTypeText(expected)))
 			}
 		}
 		for name := range inventory.types {
 			if ast.IsExported(name) && strings.HasSuffix(name, "V1") {
-				if _, ok := expectedTypes[name]; !ok {
-					if spec.importPath == modulePath && name == "RawFeatureRuntimeV1" {
-						continue
-					}
-					if spec.importPath == modulePath+"/eebusraw" {
-						if _, allowed := msp0625RawStableTypes[name]; allowed {
-							continue
-						}
-					}
+				if _, ok := allExpectedTypes[spec.importPath][name]; !ok {
 					violations = append(violations, fmt.Sprintf("%s: unexpected stable contract type %s", spec.importPath, name))
 				}
 			}
@@ -1729,6 +1733,9 @@ func inspectStableType(declaration typeDeclaration) (manifestStableType, error) 
 			if len(field.Names) != 1 {
 				return manifestStableType{}, errors.New("stable struct fields must have exactly one explicit name")
 			}
+			if !ast.IsExported(field.Names[0].Name) {
+				continue
+			}
 			typeName, err := canonicalType(field.Type, declaration.imports)
 			if err != nil {
 				return manifestStableType{}, err
@@ -1804,6 +1811,10 @@ func stableTypeText(value manifestStableType) string {
 	return string(data)
 }
 
+func stableContractTypeMatches(actual, expected manifestStableType) bool {
+	return reflect.DeepEqual(actual, expected)
+}
+
 func stableContractSpecs(modulePath string) []stableContractSpec {
 	rawPath := modulePath + "/eebusraw"
 	evidencePath := modulePath + "/eebusevidence"
@@ -1811,6 +1822,9 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 		return manifestStableField{Name: name, Type: typeName, JSONTag: jsonTag}
 	}
 	stableType := func(name, underlying string, fields ...manifestStableField) manifestStableType {
+		if underlying == "struct" && fields == nil {
+			fields = []manifestStableField{}
+		}
 		return manifestStableType{Name: name, Underlying: underlying, Fields: fields}
 	}
 	enumValue := func(name, value string) manifestStableEnumValue {
@@ -2095,6 +2109,202 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 					enumValue("UnknownPathLocal", "/local/unknown"),
 					enumValue("UnknownPathRemote", "/remote/unknown"),
 					enumValue("UnknownPathSession", "/session/unknown"),
+				}},
+			},
+		},
+		{
+			importPath: rawPath,
+			root:       "ReadAuthorizationV1",
+			types: []manifestStableType{
+				stableType("ToolV1", "string"),
+				stableType("AuthScopeV1", "string"),
+				stableType("FeatureRoleV1", "string"),
+				stableType("OperationV1", "string"),
+				stableType("ObservationSourceV1", "string"),
+				stableType("ChangeabilityV1", "string"),
+				stableType("ConstraintStatusV1", "string"),
+				stableType("ErrorCodeV1", "string"),
+				stableType("SourceLayerV1", "string"),
+				stableType("HashV1", "string"),
+				stableType("TypedValueV1", "struct"),
+				stableType("ReadAuthorizationV1", "struct",
+					field("PrincipalClass", "string", `json:"principal_class"`),
+					field("Scope", "AuthScopeV1", `json:"scope"`),
+					field("Tool", "ToolV1", `json:"tool"`),
+					field("MaskTier", "MaskTier", `json:"mask_tier"`),
+				),
+				stableType("RuntimeBindingV1", "struct",
+					field("RuntimeEpoch", "uint64", `json:"runtime_epoch"`),
+					field("ConnectionGeneration", "uint64", `json:"connection_generation"`),
+				),
+				stableType("FeatureLocatorV1", "struct",
+					field("RemoteSKI", "string", `json:"remote_ski"`),
+					field("SHIPID", "string", `json:"ship_id"`),
+					field("DeviceAddress", "string", `json:"device_address"`),
+					field("EntityAddress", "[]uint64", `json:"entity_address"`),
+					field("FeatureAddress", "uint64", `json:"feature_address"`),
+					field("FeatureType", "string", `json:"feature_type"`),
+					field("FeatureRole", "FeatureRoleV1", `json:"feature_role"`),
+				),
+				stableType("FeatureTargetV1", "struct",
+					field("RemoteSKI", "string", `json:"remote_ski"`),
+					field("SHIPID", "string", `json:"ship_id"`),
+					field("DeviceAddress", "string", `json:"device_address"`),
+					field("EntityAddress", "[]uint64", `json:"entity_address"`),
+					field("FeatureAddress", "uint64", `json:"feature_address"`),
+					field("FeatureType", "string", `json:"feature_type"`),
+					field("FeatureRole", "FeatureRoleV1", `json:"feature_role"`),
+					field("Function", "string", `json:"function"`),
+					field("Operation", "OperationV1", `json:"operation"`),
+				),
+				stableType("FullOperationsV1", "struct",
+					field("Read", "bool", `json:"read"`),
+					field("Write", "bool", `json:"write"`),
+				),
+				stableType("ConstraintSetV1", "struct",
+					field("Status", "ConstraintStatusV1", `json:"status"`),
+					field("EnumValues", "[]TypedValueV1", `json:"enum_values,omitempty"`),
+					field("Minimum", "*TypedValueV1", `json:"minimum,omitempty"`),
+					field("Maximum", "*TypedValueV1", `json:"maximum,omitempty"`),
+					field("Step", "*TypedValueV1", `json:"step,omitempty"`),
+					field("Unit", "string", `json:"unit,omitempty"`),
+					field("MinCardinality", "*uint64", `json:"min_cardinality,omitempty"`),
+					field("MaxCardinality", "*uint64", `json:"max_cardinality,omitempty"`),
+					field("CrossFieldRules", "[]string", `json:"cross_field_rules,omitempty"`),
+				),
+				stableType("FunctionDescriptorV1", "struct",
+					field("Function", "string", `json:"function"`),
+					field("Description", "string", `json:"description,omitempty"`),
+					field("PossibleOperations", "FullOperationsV1", `json:"possible_operations"`),
+					field("Changeable", "ChangeabilityV1", `json:"changeable"`),
+					field("Constraints", "ConstraintSetV1", `json:"constraints"`),
+				),
+				stableType("FeaturesGetRequestV1", "struct",
+					field("Target", "FeatureLocatorV1", `json:"target"`),
+				),
+				stableType("FeaturesGetDataV1", "struct",
+					field("Feature", "FeatureLocatorV1", `json:"feature"`),
+					field("Description", "string", `json:"description,omitempty"`),
+					field("Functions", "[]FunctionDescriptorV1", `json:"functions"`),
+					field("Runtime", "RuntimeBindingV1", `json:"runtime"`),
+					field("DataTimestamp", "time.Time", `json:"data_timestamp"`),
+					field("Source", "ObservationSourceV1", `json:"source"`),
+					field("DataHash", "HashV1", `json:"data_hash"`),
+				),
+				stableType("FeatureDataGetRequestV1", "struct",
+					field("Targets", "[]FeatureTargetV1", `json:"targets"`),
+					field("TimeoutMS", "uint64", `json:"timeout_ms,omitempty"`),
+				),
+				stableType("ProtocolMessageV1", "struct",
+					field("Classifier", "string", `json:"classifier"`),
+					field("CorrelationKey", "uint64", `json:"correlation_key"`),
+					field("Function", "string", `json:"function"`),
+					field("Data", "*TypedValueV1", `json:"data,omitempty"`),
+					field("ErrorNumber", "*uint64", `json:"error_number,omitempty"`),
+					field("Unknown", "[]OpaqueObservationV1", `json:"unknown,omitempty"`),
+				),
+				stableType("OpaqueObservationV1", "struct",
+					field("Path", "string", `json:"path"`),
+					field("Source", "string", `json:"source"`),
+					field("Value", "TypedValueV1", `json:"value"`),
+				),
+				stableType("ReadTokenV1", "struct",
+					field("ReadToken", "string", `json:"read_token"`),
+					field("Reusable", "bool", `json:"reusable"`),
+					field("ExpiresAt", "time.Time", `json:"expires_at"`),
+					field("BindingHash", "HashV1", `json:"binding_hash"`),
+				),
+				stableType("ReadObservationV1", "struct",
+					field("Target", "FeatureTargetV1", `json:"target"`),
+					field("Runtime", "RuntimeBindingV1", `json:"runtime"`),
+					field("RawRequest", "ProtocolMessageV1", `json:"raw_request"`),
+					field("RawResponse", "ProtocolMessageV1", `json:"raw_response"`),
+					field("Value", "TypedValueV1", `json:"value"`),
+					field("Unknown", "[]OpaqueObservationV1", `json:"unknown,omitempty"`),
+					field("RequestedAt", "time.Time", `json:"requested_at"`),
+					field("ReceivedAt", "time.Time", `json:"received_at"`),
+					field("DataTimestamp", "time.Time", `json:"data_timestamp"`),
+					field("Source", "ObservationSourceV1", `json:"source"`),
+					field("ReadToken", "ReadTokenV1", `json:"read_token"`),
+					field("DataHash", "HashV1", `json:"data_hash"`),
+				),
+				stableType("ErrorV1", "struct",
+					field("Code", "ErrorCodeV1", `json:"code"`),
+					field("Message", "string", `json:"message"`),
+					field("Retriable", "bool", `json:"retriable"`),
+					field("SourceLayer", "SourceLayerV1", `json:"source_layer"`),
+					field("Details", "*ErrorDetailsV1", `json:"details,omitempty"`),
+				),
+				stableType("ErrorDetailsV1", "struct",
+					field("TargetIndex", "*uint64", `json:"target_index,omitempty"`),
+					field("Classification", "string", `json:"classification,omitempty"`),
+				),
+				stableType("ReadFailureV1", "struct",
+					field("TargetIndex", "uint64", `json:"target_index"`),
+					field("Target", "FeatureTargetV1", `json:"target"`),
+					field("Error", "ErrorV1", `json:"error"`),
+				),
+				stableType("FeatureDataGetDataV1", "struct",
+					field("Results", "[]ReadObservationV1", `json:"results"`),
+					field("Failures", "[]ReadFailureV1", `json:"failures"`),
+					field("Complete", "bool", `json:"complete"`),
+				),
+			},
+			enums: []stableEnumSpec{
+				{exact: true, typeName: "ToolV1", values: []manifestStableEnumValue{
+					enumValue("ToolV1FeaturesGet", "eebus.v1.features.get"),
+					enumValue("ToolV1FeaturesDataGet", "eebus.v1.features.data.get"),
+				}},
+				{exact: true, typeName: "AuthScopeV1", values: []manifestStableEnumValue{
+					enumValue("AuthScopeV1RawRead", "eebus.raw.read"),
+				}},
+				{exact: true, typeName: "FeatureRoleV1", values: []manifestStableEnumValue{
+					enumValue("FeatureRoleV1Client", "client"),
+					enumValue("FeatureRoleV1Server", "server"),
+					enumValue("FeatureRoleV1Special", "special"),
+				}},
+				{exact: true, typeName: "OperationV1", values: []manifestStableEnumValue{
+					enumValue("OperationV1Read", "READ"),
+					enumValue("OperationV1Write", "WRITE"),
+				}},
+				{exact: true, typeName: "ObservationSourceV1", values: []manifestStableEnumValue{
+					enumValue("ObservationSourceV1Live", "live"),
+					enumValue("ObservationSourceV1Cache", "cache"),
+				}},
+				{exact: true, typeName: "ChangeabilityV1", values: []manifestStableEnumValue{
+					enumValue("ChangeabilityV1Unknown", "unknown"),
+					enumValue("ChangeabilityV1False", "false"),
+					enumValue("ChangeabilityV1True", "true"),
+				}},
+				{exact: true, typeName: "ConstraintStatusV1", values: []manifestStableEnumValue{
+					enumValue("ConstraintStatusV1Unknown", "unknown"),
+					enumValue("ConstraintStatusV1Known", "known"),
+				}},
+				{exact: true, typeName: "ErrorCodeV1", values: []manifestStableEnumValue{
+					enumValue("ErrorCodeV1PermissionDenied", "permission_denied"),
+					enumValue("ErrorCodeV1InvalidArgument", "invalid_argument"),
+					enumValue("ErrorCodeV1UnsupportedOperation", "unsupported_operation"),
+					enumValue("ErrorCodeV1PartialOperationForbidden", "partial_operation_forbidden"),
+					enumValue("ErrorCodeV1RuntimeEpochMismatch", "runtime_epoch_mismatch"),
+					enumValue("ErrorCodeV1ConnectionGenerationMismatch", "connection_generation_mismatch"),
+					enumValue("ErrorCodeV1Disconnected", "disconnected"),
+					enumValue("ErrorCodeV1Timeout", "timeout"),
+					enumValue("ErrorCodeV1Cancelled", "cancelled"),
+					enumValue("ErrorCodeV1RemoteError", "remote_error"),
+					enumValue("ErrorCodeV1DecodeError", "decode_error"),
+					enumValue("ErrorCodeV1PartialResult", "partial_result"),
+					enumValue("ErrorCodeV1NotFound", "not_found"),
+					enumValue("ErrorCodeV1SecretDetected", "secret_detected"),
+					enumValue("ErrorCodeV1Internal", "internal"),
+				}},
+				{exact: true, typeName: "SourceLayerV1", values: []manifestStableEnumValue{
+					enumValue("SourceLayerV1Authorization", "eebusreg-runtime"),
+					enumValue("SourceLayerV1Validation", "eebusreg-runtime"),
+					enumValue("SourceLayerV1Runtime", "eebusreg-runtime"),
+					enumValue("SourceLayerV1Executor", "eebus-go-executor"),
+					enumValue("SourceLayerV1SpineRoundTrip", "spine-go-round-trip"),
+					enumValue("SourceLayerV1Decode", "eebusreg-runtime"),
+					enumValue("SourceLayerV1Remote", "remote"),
 				}},
 			},
 		},

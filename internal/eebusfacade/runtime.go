@@ -283,7 +283,7 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if err != nil {
 		return nil, errors.Join(err, closeFirstTrust())
 	}
-	rawRuntimeEpoch, err := newRawRuntimeEpoch()
+	rawRuntimeEpoch, err := rawRuntimeEpochForIdentity(material.localSKI)
 	if err != nil {
 		return nil, errors.Join(err, closeFirstTrust())
 	}
@@ -817,7 +817,11 @@ func (handler *runtimeServiceHandler) refreshRawFeatureRemote(ski string) {
 	if isNilRawRuntimeValue(remote) || remote.Address() == nil {
 		return
 	}
-	if err := bridge.admitRemote(ski, observation.ShipID, observation.SessionIndex, remote); err != nil {
+	err := bridge.refreshRemote(ski, observation.ShipID, observation.SessionIndex, remote)
+	if errors.Is(err, errRawRemoteNotAdmitted) {
+		err = bridge.admitRemote(ski, observation.ShipID, observation.SessionIndex, remote)
+	}
+	if err != nil {
 		handler.report(err)
 	}
 }

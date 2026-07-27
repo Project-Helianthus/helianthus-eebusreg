@@ -164,11 +164,19 @@ func canonicalTypedValueV1WithDepth(value any, depth int, maximumDepth int) (any
 		return canonicalTypedValueV1WithDepth(typed.value, depth, maximumDepth)
 	}
 	if number, ok := value.(json.Number); ok {
-		integer, err := strconv.ParseInt(string(number), 10, 64)
-		if err != nil {
-			return nil, errors.New("typed numbers must be safe integers or exact strings")
+		encoded := string(number)
+		if !json.Valid([]byte(encoded)) || encoded == "-0" {
+			return nil, errors.New("typed number is not canonical")
 		}
-		return canonicalTypedValueV1WithDepth(integer, depth, maximumDepth)
+		if strings.ContainsAny(encoded, ".eE") {
+			return canonicalTypedStringV1(encoded)
+		}
+		integer, err := strconv.ParseInt(encoded, 10, 64)
+		if err != nil || integer < -typedValueMaximumSafeInteger ||
+			integer > typedValueMaximumSafeInteger {
+			return canonicalTypedStringV1(encoded)
+		}
+		return integer, nil
 	}
 	if value == nil {
 		return nil, nil
@@ -191,13 +199,13 @@ func canonicalTypedValueV1WithDepth(value any, depth int, maximumDepth int) (any
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		integer := reflected.Int()
 		if integer < -typedValueMaximumSafeInteger || integer > typedValueMaximumSafeInteger {
-			return nil, errors.New("typed integer exceeds the safe JSON range")
+			return strconv.FormatInt(integer, 10), nil
 		}
 		return integer, nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		integer := reflected.Uint()
 		if integer > uint64(typedValueMaximumSafeInteger) {
-			return nil, errors.New("typed integer exceeds the safe JSON range")
+			return strconv.FormatUint(integer, 10), nil
 		}
 		return int64(integer), nil
 	case reflect.Float32, reflect.Float64:
@@ -260,18 +268,8 @@ func canonicalTypedStringV1(value string) (string, error) {
 	}
 	normalized := strings.TrimSpace(norm.NFKC.String(value))
 	upper := strings.ToUpper(normalized)
-	for _, boundary := range []string{
-		"-----BEGIN PRIVATE KEY-----",
-		"-----BEGIN RSA PRIVATE KEY-----",
-		"-----BEGIN EC PRIVATE KEY-----",
-		"-----BEGIN ENCRYPTED PRIVATE KEY-----",
-		"-----BEGIN OPENSSH PRIVATE KEY-----",
-		"-----BEGIN DSA PRIVATE KEY-----",
-		"-----BEGIN PGP PRIVATE KEY BLOCK-----",
-	} {
-		if strings.Contains(upper, boundary) {
-			return "", ErrSecretDetected
-		}
+	if rawFeaturePrivateKeyBoundaryV1(upper) {
+		return "", ErrSecretDetected
 	}
 	fields := strings.Fields(normalized)
 	if len(fields) > 1 && strings.EqualFold(fields[0], "bearer") &&
@@ -279,6 +277,29 @@ func canonicalTypedStringV1(value string) (string, error) {
 		return "", ErrSecretDetected
 	}
 	return value, nil
+}
+
+func rawFeaturePrivateKeyBoundaryV1(value string) bool {
+	if strings.Contains(value, "-----BEGIN PGP PRIVATE KEY BLOCK-----") {
+		return true
+	}
+	for offset := 0; offset < len(value); {
+		begin := strings.Index(value[offset:], "-----BEGIN ")
+		if begin < 0 {
+			return false
+		}
+		begin += offset + len("-----BEGIN ")
+		end := strings.Index(value[begin:], "-----")
+		if end < 0 {
+			return false
+		}
+		label := strings.TrimSpace(value[begin : begin+end])
+		if label == "PRIVATE KEY" || strings.HasSuffix(label, " PRIVATE KEY") {
+			return true
+		}
+		offset = begin + end + len("-----")
+	}
+	return false
 }
 
 func rawFeatureSecretNameV1(value string) bool {
@@ -447,6 +468,9 @@ func decodeTypedJSONV1WithDepth(data []byte, maximumDepth int) (any, error) {
 	if len(data) > typedValueMaximumJCSBytes {
 		return nil, errors.New("typed JSON exceeds the byte limit")
 	}
+	if !utf8.Valid(data) || !validTypedJSONSurrogatesV1(data) {
+		return nil, errors.New("typed JSON contains invalid Unicode")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	value, err := decodeTypedJSONTokenV1(decoder, 1, maximumDepth)
@@ -457,6 +481,66 @@ func decodeTypedJSONV1WithDepth(data []byte, maximumDepth int) (any, error) {
 		return nil, errors.New("typed JSON contains trailing data")
 	}
 	return value, nil
+}
+
+func validTypedJSONSurrogatesV1(data []byte) bool {
+	inString := false
+	for index := 0; index < len(data); index++ {
+		switch data[index] {
+		case '"':
+			inString = !inString
+		case '\\':
+			if !inString || index+1 >= len(data) {
+				continue
+			}
+			if data[index+1] != 'u' {
+				index++
+				continue
+			}
+			first, ok := typedJSONHexQuadV1(data, index+2)
+			if !ok {
+				return false
+			}
+			switch {
+			case first >= 0xd800 && first <= 0xdbff:
+				if index+12 > len(data) || data[index+6] != '\\' ||
+					data[index+7] != 'u' {
+					return false
+				}
+				second, secondOK := typedJSONHexQuadV1(data, index+8)
+				if !secondOK || second < 0xdc00 || second > 0xdfff {
+					return false
+				}
+				index += 11
+			case first >= 0xdc00 && first <= 0xdfff:
+				return false
+			default:
+				index += 5
+			}
+		}
+	}
+	return true
+}
+
+func typedJSONHexQuadV1(data []byte, offset int) (uint16, bool) {
+	if offset+4 > len(data) {
+		return 0, false
+	}
+	var value uint16
+	for _, current := range data[offset : offset+4] {
+		value <<= 4
+		switch {
+		case current >= '0' && current <= '9':
+			value |= uint16(current - '0')
+		case current >= 'a' && current <= 'f':
+			value |= uint16(current-'a') + 10
+		case current >= 'A' && current <= 'F':
+			value |= uint16(current-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return value, true
 }
 
 func decodeTypedJSONTokenV1(decoder *json.Decoder, depth int, maximumDepth int) (any, error) {
