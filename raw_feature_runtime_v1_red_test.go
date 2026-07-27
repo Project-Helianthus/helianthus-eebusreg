@@ -196,7 +196,7 @@ func TestIssue83RuntimeFeaturesGetUsesClosedReadTool(t *testing.T) {
 			Source:        eebusraw.ObservationSourceV1Cache,
 			DataTimestamp: time.Unix(300, 0).UTC(),
 			Runtime:       eebusraw.RuntimeBindingV1{RuntimeEpoch: 8, ConnectionGeneration: 3},
-			DataHash:      "sha256:" + strings.Repeat("4", 64),
+			DataHash:      eebusraw.HashV1("sha256:" + strings.Repeat("4", 64)),
 		},
 	}
 	instance, err := newRuntime(validRuntimeConfig(t.TempDir()), func(context.Context, Config) (runtimeBackend, error) {

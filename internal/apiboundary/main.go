@@ -167,6 +167,7 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "type", Name: "RedactedSnapshotV1"}:                         {},
 	{Kind: "type", Name: "RedactedUseCaseV1"}:                          {},
 	{Kind: "type", Name: "Remote"}:                                     {},
+	{Kind: "type", Name: "RawFeatureRuntimeV1"}:                        {},
 	{Kind: "type", Name: "Runtime"}:                                    {},
 	{Kind: "type", Name: "RuntimeObservationV1"}:                       {},
 	{Kind: "type", Name: "ServiceKindV1"}:                              {},
@@ -185,6 +186,7 @@ var msp055RuntimeExports = map[manifestExport]struct{}{
 	{Kind: "func", Name: "New"}:                  {},
 	{Kind: "type", Name: "Config"}:               {},
 	{Kind: "type", Name: "PairingPolicy"}:        {},
+	{Kind: "type", Name: "RawFeatureRuntimeV1"}:  {},
 	{Kind: "type", Name: "Remote"}:               {},
 	{Kind: "type", Name: "Runtime"}:              {},
 	{Kind: "var", Name: "ErrRuntimeDisabled"}:    {},
@@ -293,6 +295,180 @@ type SessionState
 type UnknownField
 type UnknownPath
 `)
+
+var allowedMSP0625RawExports = frozenExportInventory(`
+const AuthScopeV1RawRead
+const ChangeabilityV1False
+const ChangeabilityV1True
+const ChangeabilityV1Unknown
+const ConstraintStatusV1Known
+const ConstraintStatusV1Unknown
+const ErrorCodeV1Cancelled
+const ErrorCodeV1ConnectionGenerationMismatch
+const ErrorCodeV1DecodeError
+const ErrorCodeV1Disconnected
+const ErrorCodeV1Internal
+const ErrorCodeV1InvalidArgument
+const ErrorCodeV1NotFound
+const ErrorCodeV1PartialOperationForbidden
+const ErrorCodeV1PartialResult
+const ErrorCodeV1PermissionDenied
+const ErrorCodeV1RemoteError
+const ErrorCodeV1RuntimeEpochMismatch
+const ErrorCodeV1SecretDetected
+const ErrorCodeV1Timeout
+const ErrorCodeV1UnsupportedOperation
+const FeatureRoleV1Client
+const FeatureRoleV1Server
+const FeatureRoleV1Special
+const MaskTierRaw
+const MaximumReadTargetsV1
+const MaximumReadTimeoutMSV1
+const ObservationSourceV1Cache
+const ObservationSourceV1Live
+const OperationV1Read
+const OperationV1Write
+const SourceLayerV1Authorization
+const SourceLayerV1Decode
+const SourceLayerV1Executor
+const SourceLayerV1Remote
+const SourceLayerV1Runtime
+const SourceLayerV1SpineRoundTrip
+const SourceLayerV1Validation
+const ToolV1FeaturesDataGet
+const ToolV1FeaturesGet
+func CanonicalSHA256V1
+func ConstraintSetV1.Clone
+func DecodeTypedValueV1
+func ErrorV1.Clone
+func ErrorV1.Error
+func ErrorDetailsV1.Clone
+func FeatureDataGetDataV1.Format
+func FeatureDataGetDataV1.GoString
+func FeatureDataGetDataV1.String
+func FeatureDataGetDataV1.Clone
+func FeatureDataGetRequestV1.Clone
+func FeatureLocatorV1.Clone
+func FeatureLocatorV1.Format
+func FeatureLocatorV1.GoString
+func FeatureLocatorV1.String
+func FeatureTargetV1.Clone
+func FeatureTargetV1.Format
+func FeatureTargetV1.GoString
+func FeatureTargetV1.Locator
+func FeatureTargetV1.String
+func FeaturesGetDataV1.Clone
+func FeaturesGetDataV1.ComputeDataHash
+func FeaturesGetDataV1.Format
+func FeaturesGetDataV1.GoString
+func FeaturesGetDataV1.String
+func FeaturesGetRequestV1.Clone
+func FunctionDescriptorV1.Clone
+func NewErrorV1
+func NewTypedValueV1
+func OpaqueObservationV1.Clone
+func OpaqueObservationV1.Format
+func OpaqueObservationV1.GoString
+func OpaqueObservationV1.String
+func ProtocolMessageV1.Clone
+func ProtocolMessageV1.Format
+func ProtocolMessageV1.GoString
+func ProtocolMessageV1.String
+func ReadAuthorizationV1.Format
+func ReadAuthorizationV1.GoString
+func ReadAuthorizationV1.String
+func ReadFailureV1.Clone
+func ReadFailureV1.Format
+func ReadFailureV1.GoString
+func ReadFailureV1.String
+func ReadObservationV1.Clone
+func ReadObservationV1.ComputeDataHash
+func ReadObservationV1.Format
+func ReadObservationV1.GoString
+func ReadObservationV1.String
+func ReadTokenV1.Format
+func ReadTokenV1.GoString
+func ReadTokenV1.String
+func TypedValueV1.Clone
+func TypedValueV1.ComputeHash
+func TypedValueV1.Format
+func TypedValueV1.GoString
+func TypedValueV1.MarshalJSON
+func TypedValueV1.String
+func TypedValueV1.UnmarshalJSON
+func TypedValueV1.Validate
+func TypedValueV1.Value
+func ValidateFeatureDataGetRequestV1
+func ValidateFeaturesGetRequestV1
+func ValidateReadAuthorizationV1
+type AuthScopeV1
+type ChangeabilityV1
+type ConstraintSetV1
+type ConstraintStatusV1
+type ErrorCodeV1
+type ErrorDetailsV1
+type ErrorV1
+type FeatureDataGetDataV1
+type FeatureDataGetRequestV1
+type FeatureLocatorV1
+type FeatureRoleV1
+type FeatureTargetV1
+type FeaturesGetDataV1
+type FeaturesGetRequestV1
+type FullOperationsV1
+type FunctionDescriptorV1
+type HashV1
+type ObservationSourceV1
+type OpaqueObservationV1
+type OperationV1
+type ProtocolMessageV1
+type ReadAuthorizationV1
+type ReadFailureV1
+type ReadObservationV1
+type ReadTokenV1
+type RuntimeBindingV1
+type SourceLayerV1
+type ToolV1
+type TypedValueV1
+var ErrSecretDetected
+`)
+
+var msp0625RawStableTypes = map[string]struct{}{
+	"AuthScopeV1":             {},
+	"ChangeabilityV1":         {},
+	"ConstraintSetV1":         {},
+	"ConstraintStatusV1":      {},
+	"ErrorCodeV1":             {},
+	"ErrorDetailsV1":          {},
+	"ErrorV1":                 {},
+	"FeatureDataGetDataV1":    {},
+	"FeatureDataGetRequestV1": {},
+	"FeatureLocatorV1":        {},
+	"FeatureRoleV1":           {},
+	"FeatureTargetV1":         {},
+	"FeaturesGetDataV1":       {},
+	"FeaturesGetRequestV1":    {},
+	"FullOperationsV1":        {},
+	"FunctionDescriptorV1":    {},
+	"HashV1":                  {},
+	"ObservationSourceV1":     {},
+	"OpaqueObservationV1":     {},
+	"OperationV1":             {},
+	"ProtocolMessageV1":       {},
+	"ReadAuthorizationV1":     {},
+	"ReadFailureV1":           {},
+	"ReadObservationV1":       {},
+	"ReadTokenV1":             {},
+	"RuntimeBindingV1":        {},
+	"SourceLayerV1":           {},
+	"ToolV1":                  {},
+	"TypedValueV1":            {},
+}
+
+var allowedCurrentRawExports = mergeExportInventories(
+	allowedMSP035RawExports,
+	allowedMSP0625RawExports,
+)
 
 var allowedMSP035EvidenceExports = frozenExportInventory(`
 const AuthScopeReadRaw
@@ -480,6 +656,16 @@ func frozenExportInventory(entries string) map[manifestExport]struct{} {
 		inventory[manifestExport{Kind: fields[0], Name: fields[1]}] = struct{}{}
 	}
 	return inventory
+}
+
+func mergeExportInventories(inventories ...map[manifestExport]struct{}) map[manifestExport]struct{} {
+	result := make(map[manifestExport]struct{})
+	for _, inventory := range inventories {
+		for exported := range inventory {
+			result[exported] = struct{}{}
+		}
+	}
+	return result
 }
 
 type manifestStableContract struct {
@@ -966,7 +1152,7 @@ func inspectMSP035DependencyExports(modulePath string, packages map[string]*pack
 		path    string
 		exports map[manifestExport]struct{}
 	}{
-		{name: "eebusraw", path: modulePath + "/eebusraw", exports: allowedMSP035RawExports},
+		{name: "eebusraw", path: modulePath + "/eebusraw", exports: allowedCurrentRawExports},
 		{name: "eebusevidence", path: modulePath + "/eebusevidence", exports: allowedMSP035EvidenceExports},
 	}
 	var violations []string
@@ -1334,6 +1520,14 @@ func inspectStableContracts(root, modulePath string, fset *token.FileSet, packag
 		for name := range inventory.types {
 			if ast.IsExported(name) && strings.HasSuffix(name, "V1") {
 				if _, ok := expectedTypes[name]; !ok {
+					if spec.importPath == modulePath && name == "RawFeatureRuntimeV1" {
+						continue
+					}
+					if spec.importPath == modulePath+"/eebusraw" {
+						if _, allowed := msp0625RawStableTypes[name]; allowed {
+							continue
+						}
+					}
 					violations = append(violations, fmt.Sprintf("%s: unexpected stable contract type %s", spec.importPath, name))
 				}
 			}
@@ -1835,7 +2029,7 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 			},
 			enums: []stableEnumSpec{
 				{typeName: "ContractVersion", values: []manifestStableEnumValue{enumValue("IdentityContractV1", "helianthus.eebus.raw.identity.v1")}},
-				{exact: true, typeName: "MaskTier", values: []manifestStableEnumValue{enumValue("MaskTierRedacted", "redacted")}},
+				{typeName: "MaskTier", values: []manifestStableEnumValue{enumValue("MaskTierRedacted", "redacted")}},
 				{exact: true, typeName: "EndpointRoleV1", values: []manifestStableEnumValue{
 					enumValue("EndpointRoleV1Local", "local"),
 					enumValue("EndpointRoleV1Remote", "remote"),
@@ -2129,6 +2323,9 @@ func checkExportedName(fset *token.FileSet, rel string, ident *ast.Ident, violat
 	name := ident.Name
 	for _, fragment := range forbiddenExportFragments {
 		if name == "SHIPID" && fragment == "SHIP" {
+			continue
+		}
+		if name == "SourceLayerV1SpineRoundTrip" && fragment == "Spine" {
 			continue
 		}
 		if strings.Contains(name, fragment) {

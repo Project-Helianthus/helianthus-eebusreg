@@ -150,9 +150,9 @@ func TestIssue83RawFeatureDTOCloneDetachesNestedState(t *testing.T) {
 			ReadToken:   "read1:opaque",
 			Reusable:    false,
 			ExpiresAt:   time.Unix(161, 0).UTC(),
-			BindingHash: "sha256:" + strings.Repeat("1", 64),
+			BindingHash: eebusraw.HashV1("sha256:" + strings.Repeat("1", 64)),
 		},
-		DataHash: "sha256:" + strings.Repeat("2", 64),
+		DataHash: eebusraw.HashV1("sha256:" + strings.Repeat("2", 64)),
 	}
 	data := eebusraw.FeatureDataGetDataV1{
 		Results:  []eebusraw.ReadObservationV1{observation},
@@ -183,12 +183,47 @@ func TestIssue83ReadTokenFormattingIsOpaque(t *testing.T) {
 		ReadToken:   "read1:purpose-bound-reference",
 		Reusable:    false,
 		ExpiresAt:   time.Unix(161, 0).UTC(),
-		BindingHash: "sha256:" + strings.Repeat("3", 64),
+		BindingHash: eebusraw.HashV1("sha256:" + strings.Repeat("3", 64)),
 	}
 	formatted := fmt.Sprintf("%v %#v %s %q", token, token, token, token)
 	for _, forbidden := range []string{"purpose-bound-reference", strings.Repeat("3", 64)} {
 		if strings.Contains(formatted, forbidden) {
 			t.Fatalf("formatter disclosed token material %q: %q", forbidden, formatted)
+		}
+	}
+}
+
+func TestIssue83RawResultFormattingDoesNotDiscloseOperatorData(t *testing.T) {
+	value, err := eebusraw.NewTypedValueV1(map[string]any{"value": "operator-raw-value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := issue83Target()
+	data := eebusraw.FeatureDataGetDataV1{
+		Results: []eebusraw.ReadObservationV1{{
+			Target: target,
+			RawResponse: eebusraw.ProtocolMessageV1{
+				Classifier: "REPLY",
+				Function:   target.Function,
+				Data:       &value,
+			},
+			Value: value,
+			ReadToken: eebusraw.ReadTokenV1{
+				ReadToken: "read1:operator-token",
+			},
+		}},
+		Complete: true,
+	}
+	formatted := fmt.Sprintf("%v %#v %+v", data, data, data)
+	for _, forbidden := range []string{
+		"operator-raw-value",
+		"operator-token",
+		target.RemoteSKI,
+		target.SHIPID,
+		target.DeviceAddress,
+	} {
+		if strings.Contains(formatted, forbidden) {
+			t.Fatalf("formatter disclosed operator data %q: %q", forbidden, formatted)
 		}
 	}
 }

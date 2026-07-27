@@ -22,6 +22,7 @@ var (
 var errRuntimeSnapshotUnavailable = errors.New("eebus runtime snapshot is unavailable")
 
 type Runtime interface {
+	RawFeatureRuntimeV1
 	Start(context.Context) error
 	Shutdown() error
 	Snapshot() (SnapshotV1, error)

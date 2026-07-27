@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -291,6 +292,55 @@ func TestIssue83ExactRuntimeRejectsReplacementAndSenderSubstitutionWithoutSend(t
 			t.Fatalf("substitution sent frames: old=%d new=%d", fixture.sender.calls.Load(), replacementSender.calls.Load())
 		}
 	})
+
+	t.Run("stale connection generation", func(t *testing.T) {
+		fixture := newIssue83RawBridgeFixture(t)
+		target := issue83TargetFromLocator(fixture.locators[0])
+		binding, request, err := fixture.bridge.exactBindingAndRequest(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fixture.bridge.admitRemote(
+			fixture.remoteSKI,
+			fixture.shipID,
+			5,
+			fixture.remote,
+		); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = fixture.bridge.RoundTripIfCurrent(context.Background(), binding, request)
+		var bindingError *executor.ExactRemoteBindingError
+		if !errors.As(err, &bindingError) ||
+			bindingError.Failure != executor.ExactRemoteBindingGenerationMismatch {
+			t.Fatalf("binding error = %#v", bindingError)
+		}
+		if fixture.sender.calls.Load() != 0 {
+			t.Fatalf("stale generation sent %d frames", fixture.sender.calls.Load())
+		}
+	})
+
+	t.Run("stale runtime epoch", func(t *testing.T) {
+		fixture := newIssue83RawBridgeFixture(t)
+		var epoch atomic.Uint64
+		epoch.Store(9)
+		fixture.bridge.runtimeEpoch = epoch.Load
+		target := issue83TargetFromLocator(fixture.locators[0])
+		binding, request, err := fixture.bridge.exactBindingAndRequest(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		epoch.Store(10)
+
+		_, err = fixture.bridge.RoundTripIfCurrent(context.Background(), binding, request)
+		if !errors.Is(err, errRawRuntimeEpochMismatch) ||
+			!errors.Is(err, executor.ErrExactRemoteBindingMismatch) {
+			t.Fatalf("RoundTripIfCurrent() error = %v", err)
+		}
+		if fixture.sender.calls.Load() != 0 {
+			t.Fatalf("stale epoch sent %d frames", fixture.sender.calls.Load())
+		}
+	})
 }
 
 func TestIssue83ReadTokenIsDeterministicAndPurposeBound(t *testing.T) {
@@ -428,6 +478,7 @@ func TestIssue83ReadTokenIsDeterministicAndPurposeBound(t *testing.T) {
 		string(first.BindingHash),
 		first.String(),
 		first.GoString(),
+		fmt.Sprintf("%v %#v %x", issuer, issuer, issuer),
 	} {
 		if strings.Contains(value, string(key)) || strings.Contains(value, hex.EncodeToString(key)) {
 			t.Fatalf("token DTO disclosed signing key through %q", value)
@@ -502,7 +553,10 @@ func newIssue83RawBridgeFixture(t *testing.T) issue83RawBridgeFixture {
 	features := make([]*spine.FeatureRemote, 0, 2)
 	for _, entity := range base.Entities() {
 		for _, feature := range entity.Features() {
-			features = append(features, feature.(*spine.FeatureRemote))
+			if feature.Address() != nil && feature.Address().Feature != nil &&
+				(*feature.Address().Feature == 11 || *feature.Address().Feature == 12) {
+				features = append(features, feature.(*spine.FeatureRemote))
+			}
 		}
 	}
 	issuer, err := newRawReadTokenIssuer(bytes.Repeat([]byte{0x6b}, 32))
