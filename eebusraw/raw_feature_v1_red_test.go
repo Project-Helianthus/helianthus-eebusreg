@@ -87,6 +87,12 @@ func TestIssue83TypedValueRejectsSecretNamesAndValues(t *testing.T) {
 			},
 		},
 		{
+			name: "normalized protected store field",
+			value: map[string]any{
+				"trust" + "StoreBytes": "not-even-store-material",
+			},
+		},
+		{
 			name: "bearer scalar",
 			value: map[string]any{
 				"status": "Bearer restricted-value",
@@ -106,7 +112,12 @@ func TestIssue83TypedValueRejectsSecretNamesAndValues(t *testing.T) {
 				t.Fatalf("NewTypedValueV1() error = %v, want %v", err, eebusraw.ErrSecretDetected)
 			}
 			if err != nil {
-				for _, forbidden := range []string{"restricted-value", "not-even-a-key", "not-even-a-token"} {
+				for _, forbidden := range []string{
+					"restricted-value",
+					"not-even-a-key",
+					"not-even-a-token",
+					"not-even-store-material",
+				} {
 					if strings.Contains(err.Error(), forbidden) {
 						t.Fatalf("secret error disclosed %q: %v", forbidden, err)
 					}

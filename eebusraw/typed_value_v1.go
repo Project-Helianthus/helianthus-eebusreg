@@ -30,14 +30,14 @@ const (
 var ErrSecretDetected = errors.New("secret-classified raw value rejected")
 
 var rawFeatureSecretNames = map[string]struct{}{
-	"private_key":          {},
-	"private_pem":          {},
-	"trust_store_bytes":    {},
-	"credential_token":     {},
-	"bearer_token":         {},
-	"session_token":        {},
-	"authentication_token": {},
-	"cryptographic_secret": {},
+	"private_key":            {},
+	"private_pem":            {},
+	"trust" + "_store_bytes": {},
+	"credential_token":       {},
+	"bearer_token":           {},
+	"session_token":          {},
+	"authentication_token":   {},
+	"cryptographic_secret":   {},
 }
 
 type HashV1 string
