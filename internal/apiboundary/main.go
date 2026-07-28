@@ -169,6 +169,7 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "type", Name: "RedactedUseCaseV1"}:                          {},
 	{Kind: "type", Name: "Remote"}:                                     {},
 	{Kind: "type", Name: "RawFeatureRuntimeV1"}:                        {},
+	{Kind: "type", Name: "RawMutationRuntimeV1"}:                       {},
 	{Kind: "type", Name: "Runtime"}:                                    {},
 	{Kind: "type", Name: "RuntimeObservationV1"}:                       {},
 	{Kind: "type", Name: "ServiceKindV1"}:                              {},
@@ -188,6 +189,7 @@ var msp055RuntimeExports = map[manifestExport]struct{}{
 	{Kind: "type", Name: "Config"}:               {},
 	{Kind: "type", Name: "PairingPolicy"}:        {},
 	{Kind: "type", Name: "RawFeatureRuntimeV1"}:  {},
+	{Kind: "type", Name: "RawMutationRuntimeV1"}: {},
 	{Kind: "type", Name: "Remote"}:               {},
 	{Kind: "type", Name: "Runtime"}:              {},
 	{Kind: "var", Name: "ErrRuntimeDisabled"}:    {},
@@ -434,9 +436,69 @@ type TypedValueV1
 var ErrSecretDetected
 `)
 
+var allowedMSP0625MutationRawExports = frozenExportInventory(`
+const AuthScopeV1RawWrite
+const ErrorCodeV1CASMismatch
+const ErrorCodeV1Conflict
+const ErrorCodeV1ConstraintFailure
+const ErrorCodeV1ConstraintsUnknown
+const ErrorCodeV1IdempotencyConflict
+const ErrorCodeV1NoEffect
+const ErrorCodeV1OutcomeUnknown
+const ErrorCodeV1RollbackFailed
+const ErrorCodeV1StaleReadToken
+const ErrorCodeV1WriterBusy
+const ModeV1Apply
+const ModeV1Probe
+const MutationStateV1Applied
+const MutationStateV1Conflict
+const MutationStateV1DispatchIntent
+const MutationStateV1FailedNoContact
+const MutationStateV1NoEffect
+const MutationStateV1OutcomeUnknown
+const MutationStateV1Prepared
+const MutationStateV1ProbeActive
+const MutationStateV1Rejected
+const MutationStateV1ReplyObserved
+const MutationStateV1RollbackDispatchIntent
+const MutationStateV1RollbackIntent
+const MutationStateV1RollbackReplyObserved
+const MutationStateV1RollbackVerifyPending
+const MutationStateV1RolledBack
+const MutationStateV1VerifyPending
+const ToolV1FeaturesDataSet
+const ToolV1MutationsGet
+const ToolV1MutationsRollback
+func ValidateWriteAuthorizationV1
+type ApplyVerificationV1
+type AuditTransitionV1
+type ConflictEvidenceV1
+type ConstraintOverrideV1
+type FeatureDataSetRequestV1
+func FeatureDataSetRequestV1.Format
+func FeatureDataSetRequestV1.GoString
+func FeatureDataSetRequestV1.String
+type ModeV1
+type MutationGetRequestV1
+type MutationRollbackRequestV1
+func MutationRollbackRequestV1.Format
+func MutationRollbackRequestV1.GoString
+func MutationRollbackRequestV1.String
+type MutationStateV1
+type MutationV1
+type NoContactEvidenceV1
+type NoEffectVerificationV1
+type OutcomeEvidenceV1
+type RejectionVerificationV1
+type RollbackV1
+type RollbackVerificationV1
+type WriteAuthorizationV1
+`)
+
 var allowedCurrentRawExports = mergeExportInventories(
 	allowedMSP035RawExports,
 	allowedMSP0625RawExports,
+	allowedMSP0625MutationRawExports,
 )
 
 var allowedMSP035EvidenceExports = frozenExportInventory(`
@@ -1463,6 +1525,7 @@ func inspectStableContracts(root, modulePath string, fset *token.FileSet, packag
 		}
 	}
 	allExpectedTypes[modulePath]["RawFeatureRuntimeV1"] = struct{}{}
+	allExpectedTypes[modulePath]["RawMutationRuntimeV1"] = struct{}{}
 	for _, spec := range specs {
 		if modulePath != canonicalModulePath {
 			inventory := packages[spec.importPath]
@@ -2101,6 +2164,119 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 					field("Tool", "ToolV1", `json:"tool"`),
 					field("MaskTier", "MaskTier", `json:"mask_tier"`),
 				),
+				stableType("WriteAuthorizationV1", "struct",
+					field("PrincipalClass", "string", `json:"principal_class"`),
+					field("Scope", "AuthScopeV1", `json:"scope"`),
+					field("Tool", "ToolV1", `json:"tool"`),
+					field("MaskTier", "MaskTier", `json:"mask_tier"`),
+				),
+				stableType("ModeV1", "string"),
+				stableType("MutationStateV1", "string"),
+				stableType("ConstraintOverrideV1", "struct",
+					field("ProfileID", "string", `json:"profile_id"`),
+					field("Justification", "string", `json:"justification"`),
+					field("ExpiresAt", "time.Time", `json:"expires_at"`),
+				),
+				stableType("FeatureDataSetRequestV1", "struct",
+					field("Target", "FeatureTargetV1", `json:"target"`),
+					field("Value", "TypedValueV1", `json:"value"`),
+					field("ReadToken", "string", `json:"read_token"`),
+					field("ExpectedCurrent", "*TypedValueV1", `json:"expected_current,omitempty"`),
+					field("IdempotencyKey", "string", `json:"idempotency_key"`),
+					field("Mode", "ModeV1", `json:"mode"`),
+					field("ProbeTTLSeconds", "uint64", `json:"probe_ttl_seconds,omitempty"`),
+					field("ConstraintsOverride", "*ConstraintOverrideV1", `json:"constraints_override,omitempty"`),
+				),
+				stableType("MutationGetRequestV1", "struct",
+					field("MutationRef", "string", `json:"mutation_ref"`),
+				),
+				stableType("MutationRollbackRequestV1", "struct",
+					field("MutationRef", "string", `json:"mutation_ref"`),
+					field("IdempotencyKey", "string", `json:"idempotency_key"`),
+				),
+				stableType("AuditTransitionV1", "struct",
+					field("Sequence", "uint64", `json:"sequence"`),
+					field("State", "MutationStateV1", `json:"state"`),
+					field("TransitionedAt", "time.Time", `json:"transitioned_at"`),
+					field("Classification", "string", `json:"classification,omitempty"`),
+					field("PreviousHash", "*HashV1", `json:"previous_hash"`),
+					field("TransitionHash", "HashV1", `json:"transition_hash"`),
+				),
+				stableType("ApplyVerificationV1", "struct",
+					field("Relation", "string", `json:"relation"`),
+					field("Verified", "bool", `json:"verified"`),
+					field("EqualValueHash", "HashV1", `json:"equal_value_hash"`),
+					field("VerifiedAt", "time.Time", `json:"verified_at"`),
+				),
+				stableType("RollbackVerificationV1", "struct",
+					field("Relation", "string", `json:"relation"`),
+					field("Verified", "bool", `json:"verified"`),
+					field("EqualValueHash", "HashV1", `json:"equal_value_hash"`),
+					field("VerifiedAt", "time.Time", `json:"verified_at"`),
+				),
+				stableType("ConflictEvidenceV1", "struct",
+					field("Relation", "string", `json:"relation"`),
+					field("Verified", "bool", `json:"verified"`),
+					field("BeforeHash", "HashV1", `json:"before_hash"`),
+					field("RequestedHash", "HashV1", `json:"requested_hash"`),
+					field("ObservedAfterHash", "HashV1", `json:"observed_after_hash"`),
+					field("VerifiedAt", "time.Time", `json:"verified_at"`),
+				),
+				stableType("NoContactEvidenceV1", "struct",
+					field("RemoteFramesSent", "uint64", `json:"remote_frames_sent"`),
+					field("LastCompletedPhase", "string", `json:"last_completed_phase"`),
+					field("VerifiedAt", "time.Time", `json:"verified_at"`),
+				),
+				stableType("RejectionVerificationV1", "struct",
+					field("Relation", "string", `json:"relation"`),
+					field("Verified", "bool", `json:"verified"`),
+					field("CorrelatedRejection", "bool", `json:"correlated_rejection"`),
+					field("EqualValueHash", "HashV1", `json:"equal_value_hash"`),
+					field("VerifiedAt", "time.Time", `json:"verified_at"`),
+				),
+				stableType("NoEffectVerificationV1", "struct",
+					field("Relation", "string", `json:"relation"`),
+					field("Verified", "bool", `json:"verified"`),
+					field("EqualValueHash", "HashV1", `json:"equal_value_hash"`),
+					field("VerifiedAt", "time.Time", `json:"verified_at"`),
+				),
+				stableType("OutcomeEvidenceV1", "struct",
+					field("PossibleSideEffect", "bool", `json:"possible_side_effect"`),
+					field("BlindRetryForbidden", "bool", `json:"blind_retry_forbidden"`),
+					field("LastDurableState", "MutationStateV1", `json:"last_durable_state"`),
+					field("RecordedAt", "time.Time", `json:"recorded_at"`),
+				),
+				stableType("RollbackV1", "struct",
+					field("State", "MutationStateV1", `json:"state"`),
+					field("Before", "TypedValueV1", `json:"before"`),
+					field("ProtocolAccepted", "*bool", `json:"protocol_accepted"`),
+					field("ObservedAfter", "*TypedValueV1", `json:"observed_after"`),
+					field("Error", "*ErrorV1", `json:"error,omitempty"`),
+					field("Verification", "*RollbackVerificationV1", `json:"verification,omitempty"`),
+				),
+				stableType("MutationV1", "struct",
+					field("MutationRef", "string", `json:"mutation_ref"`),
+					field("State", "MutationStateV1", `json:"state"`),
+					field("Mode", "ModeV1", `json:"mode"`),
+					field("Target", "FeatureTargetV1", `json:"target"`),
+					field("Runtime", "RuntimeBindingV1", `json:"runtime"`),
+					field("Before", "TypedValueV1", `json:"before"`),
+					field("Requested", "TypedValueV1", `json:"requested"`),
+					field("ProtocolAccepted", "*bool", `json:"protocol_accepted"`),
+					field("ObservedAfter", "*TypedValueV1", `json:"observed_after"`),
+					field("Rollback", "*RollbackV1", `json:"rollback,omitempty"`),
+					field("ProbeDeadline", "*time.Time", `json:"probe_deadline,omitempty"`),
+					field("CreatedAt", "time.Time", `json:"created_at"`),
+					field("UpdatedAt", "time.Time", `json:"updated_at"`),
+					field("Error", "*ErrorV1", `json:"error,omitempty"`),
+					field("ApplyVerification", "*ApplyVerificationV1", `json:"apply_verification,omitempty"`),
+					field("ConflictEvidence", "*ConflictEvidenceV1", `json:"conflict_evidence,omitempty"`),
+					field("NoContactEvidence", "*NoContactEvidenceV1", `json:"no_contact_evidence,omitempty"`),
+					field("RejectionVerification", "*RejectionVerificationV1", `json:"rejection_verification,omitempty"`),
+					field("NoEffectVerification", "*NoEffectVerificationV1", `json:"no_effect_verification,omitempty"`),
+					field("OutcomeEvidence", "*OutcomeEvidenceV1", `json:"outcome_evidence,omitempty"`),
+					field("Audit", "[]AuditTransitionV1", `json:"audit"`),
+				),
 				stableType("RuntimeBindingV1", "struct",
 					field("RuntimeEpoch", "uint64", `json:"runtime_epoch"`),
 					field("ConnectionGeneration", "uint64", `json:"connection_generation"`),
@@ -2223,9 +2399,35 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 				{exact: true, typeName: "ToolV1", values: []manifestStableEnumValue{
 					enumValue("ToolV1FeaturesGet", "eebus.v1.features.get"),
 					enumValue("ToolV1FeaturesDataGet", "eebus.v1.features.data.get"),
+					enumValue("ToolV1FeaturesDataSet", "eebus.v1.features.data.set"),
+					enumValue("ToolV1MutationsGet", "eebus.v1.mutations.get"),
+					enumValue("ToolV1MutationsRollback", "eebus.v1.mutations.rollback"),
 				}},
 				{exact: true, typeName: "AuthScopeV1", values: []manifestStableEnumValue{
 					enumValue("AuthScopeV1RawRead", "eebus.raw.read"),
+					enumValue("AuthScopeV1RawWrite", "eebus.raw.write"),
+				}},
+				{exact: true, typeName: "ModeV1", values: []manifestStableEnumValue{
+					enumValue("ModeV1Apply", "apply"),
+					enumValue("ModeV1Probe", "probe"),
+				}},
+				{exact: true, typeName: "MutationStateV1", values: []manifestStableEnumValue{
+					enumValue("MutationStateV1Prepared", "prepared"),
+					enumValue("MutationStateV1DispatchIntent", "dispatch_intent"),
+					enumValue("MutationStateV1ReplyObserved", "reply_observed"),
+					enumValue("MutationStateV1VerifyPending", "verify_pending"),
+					enumValue("MutationStateV1Applied", "applied"),
+					enumValue("MutationStateV1ProbeActive", "probe_active"),
+					enumValue("MutationStateV1RollbackIntent", "rollback_intent"),
+					enumValue("MutationStateV1RollbackDispatchIntent", "rollback_dispatch_intent"),
+					enumValue("MutationStateV1RollbackReplyObserved", "rollback_reply_observed"),
+					enumValue("MutationStateV1RollbackVerifyPending", "rollback_verify_pending"),
+					enumValue("MutationStateV1RolledBack", "rolled_back"),
+					enumValue("MutationStateV1OutcomeUnknown", "outcome_unknown"),
+					enumValue("MutationStateV1Conflict", "conflict"),
+					enumValue("MutationStateV1FailedNoContact", "failed_no_contact"),
+					enumValue("MutationStateV1Rejected", "rejected"),
+					enumValue("MutationStateV1NoEffect", "no_effect"),
 				}},
 				{exact: true, typeName: "FeatureRoleV1", values: []manifestStableEnumValue{
 					enumValue("FeatureRoleV1Client", "client"),
@@ -2254,14 +2456,24 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 					enumValue("ErrorCodeV1InvalidArgument", "invalid_argument"),
 					enumValue("ErrorCodeV1UnsupportedOperation", "unsupported_operation"),
 					enumValue("ErrorCodeV1PartialOperationForbidden", "partial_operation_forbidden"),
+					enumValue("ErrorCodeV1ConstraintsUnknown", "constraints_unknown"),
+					enumValue("ErrorCodeV1ConstraintFailure", "constraint_failure"),
+					enumValue("ErrorCodeV1StaleReadToken", "stale_read_token"),
+					enumValue("ErrorCodeV1CASMismatch", "cas_mismatch"),
 					enumValue("ErrorCodeV1RuntimeEpochMismatch", "runtime_epoch_mismatch"),
 					enumValue("ErrorCodeV1ConnectionGenerationMismatch", "connection_generation_mismatch"),
+					enumValue("ErrorCodeV1IdempotencyConflict", "idempotency_conflict"),
+					enumValue("ErrorCodeV1WriterBusy", "writer_busy"),
 					enumValue("ErrorCodeV1Disconnected", "disconnected"),
 					enumValue("ErrorCodeV1Timeout", "timeout"),
 					enumValue("ErrorCodeV1Cancelled", "cancelled"),
 					enumValue("ErrorCodeV1RemoteError", "remote_error"),
 					enumValue("ErrorCodeV1DecodeError", "decode_error"),
 					enumValue("ErrorCodeV1PartialResult", "partial_result"),
+					enumValue("ErrorCodeV1OutcomeUnknown", "outcome_unknown"),
+					enumValue("ErrorCodeV1Conflict", "conflict"),
+					enumValue("ErrorCodeV1RollbackFailed", "rollback_failed"),
+					enumValue("ErrorCodeV1NoEffect", "no_effect"),
 					enumValue("ErrorCodeV1NotFound", "not_found"),
 					enumValue("ErrorCodeV1SecretDetected", "secret_detected"),
 					enumValue("ErrorCodeV1Internal", "internal"),

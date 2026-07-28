@@ -76,6 +76,15 @@ type issue85Harness struct {
 
 type issue85HarnessOption func(*issue85Harness)
 
+func (harness *issue85Harness) CurrentRuntimeBinding(
+	_ eebusraw.FeatureTargetV1,
+) (eebusraw.RuntimeBindingV1, *eebusraw.ErrorV1) {
+	return eebusraw.RuntimeBindingV1{
+		RuntimeEpoch:         harness.epoch,
+		ConnectionGeneration: harness.generation,
+	}, nil
+}
+
 func newIssue85Harness(t *testing.T, options ...issue85HarnessOption) *issue85Harness {
 	t.Helper()
 	harness := issue85HarnessDraft(t)
@@ -199,15 +208,22 @@ func issue85HarnessDraft(t *testing.T) *issue85Harness {
 		ReferenceKey:     []byte("0123456789abcdef0123456789abcdef"),
 	}
 	harness.deps = rawMutationCoordinatorDependencies{
-		Executor:      harness.executor,
-		TokenVerifier: harness.tokens,
-		Policy:        harness.policy,
-		Scheduler:     harness.scheduler,
-		Persistence:   harness.persistence,
+		Executor:         harness.executor,
+		BindingAuthority: harness,
+		TokenVerifier:    harness.tokens,
+		Policy:           harness.policy,
+		Scheduler:        harness.scheduler,
+		Persistence:      harness.persistence,
 		CrashAfterDurable: func(state eebusraw.MutationStateV1) error {
 			harness.events.add("durable-state:" + string(state))
 			return nil
 		},
+	}
+	harness.executor.currentBinding = func() eebusraw.RuntimeBindingV1 {
+		return eebusraw.RuntimeBindingV1{
+			RuntimeEpoch:         harness.epoch,
+			ConnectionGeneration: harness.generation,
+		}
 	}
 	harness.executor.setSteps(
 		[]issue85ReadStep{
@@ -787,24 +803,30 @@ type issue85WriteStep struct {
 }
 
 type issue85Executor struct {
-	mu          sync.Mutex
-	t           testing.TB
-	events      *issue85EventLog
-	reads       []issue85ReadStep
-	writes      []issue85WriteStep
-	readCalls   int
-	writeCalls  int
-	active      int
-	maxActive   int
-	exhausted   int
-	hardFailure func()
+	mu             sync.Mutex
+	t              testing.TB
+	events         *issue85EventLog
+	reads          []issue85ReadStep
+	writes         []issue85WriteStep
+	readCalls      int
+	writeCalls     int
+	active         int
+	maxActive      int
+	exhausted      int
+	hardFailure    func()
+	currentBinding func() eebusraw.RuntimeBindingV1
 }
 
-func (executor *issue85Executor) FullRead(
+func (executor *issue85Executor) FullReadIfCurrent(
 	ctx context.Context,
 	target eebusraw.FeatureTargetV1,
+	expected eebusraw.RuntimeBindingV1,
 ) (rawMutationReadResult, *eebusraw.ErrorV1) {
 	executor.mu.Lock()
+	if executor.currentBinding != nil && executor.currentBinding() != expected {
+		executor.mu.Unlock()
+		return rawMutationReadResult{}, issue85Error(eebusraw.ErrorCodeV1ConnectionGenerationMismatch)
+	}
 	index := executor.readCalls
 	executor.readCalls++
 	executor.active++
@@ -841,12 +863,17 @@ func (executor *issue85Executor) FullRead(
 	return cloneIssue85ReadResult(step.result), nil
 }
 
-func (executor *issue85Executor) FullWrite(
+func (executor *issue85Executor) FullWriteIfCurrent(
 	ctx context.Context,
 	target eebusraw.FeatureTargetV1,
 	value eebusraw.TypedValueV1,
+	expected eebusraw.RuntimeBindingV1,
 ) (rawMutationWriteResult, *eebusraw.ErrorV1) {
 	executor.mu.Lock()
+	if executor.currentBinding != nil && executor.currentBinding() != expected {
+		executor.mu.Unlock()
+		return rawMutationWriteResult{}, issue85Error(eebusraw.ErrorCodeV1ConnectionGenerationMismatch)
+	}
 	index := executor.writeCalls
 	executor.writeCalls++
 	executor.active++

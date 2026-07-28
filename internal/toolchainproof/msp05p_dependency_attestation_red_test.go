@@ -32,21 +32,58 @@ func TestMSP05PToolchainScriptDeclaresReviewedRuntimeClosure(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := string(payload)
-	for _, required := range []string{
-		"github.com/Project-Helianthus/helianthus-eebus-go",
-		"v0.7.1-helianthus.11",
-		"github.com/Project-Helianthus/helianthus-ship-go",
-		"v0.6.1-helianthus.9",
-		"github.com/Project-Helianthus/helianthus-spine-go",
-		"v0.7.1-helianthus.6",
+	for _, required := range []struct {
+		name    string
+		path    string
+		version string
+	}{
+		{
+			name:    "eebus",
+			path:    "github.com/Project-Helianthus/helianthus-eebus-go",
+			version: "v0.7.1-helianthus.11",
+		},
+		{
+			name:    "ship",
+			path:    "github.com/Project-Helianthus/helianthus-ship-go",
+			version: "v0.6.1-helianthus.9",
+		},
+		{
+			name:    "spine",
+			path:    "github.com/Project-Helianthus/helianthus-spine-go",
+			version: "v0.7.1-helianthus.7",
+		},
 	} {
-		if !strings.Contains(source, required) {
-			t.Errorf("toolchain boundary proof omits current dependency token %q", required)
+		for _, assignment := range []string{
+			required.name + `_module_path="` + required.path + `"`,
+			required.name + `_module_version="` + required.version + `"`,
+		} {
+			if !strings.Contains(source, assignment) {
+				t.Errorf("toolchain boundary proof omits current dependency assignment %q", assignment)
+			}
 		}
 	}
-	for _, stale := range []string{"v0.7.1-helianthus.1", "v0.7.1-helianthus.2", "v0.7.1-helianthus.3", "v0.7.1-helianthus.7", "v0.7.1-helianthus.8", "v0.6.1-helianthus.2", "v0.6.1-helianthus.4", "v0.6.1-helianthus.5", "v0.6.1-helianthus.7", "v0.6.1-helianthus.8"} {
-		if strings.Contains(source, stale+`"`) {
-			t.Errorf("toolchain boundary proof retains stale current pin %q", stale)
+	for _, stale := range []struct {
+		name     string
+		versions []string
+	}{
+		{
+			name:     "eebus",
+			versions: []string{"v0.7.1-helianthus.1", "v0.7.1-helianthus.2", "v0.7.1-helianthus.3", "v0.7.1-helianthus.7", "v0.7.1-helianthus.8"},
+		},
+		{
+			name:     "ship",
+			versions: []string{"v0.6.1-helianthus.2", "v0.6.1-helianthus.4", "v0.6.1-helianthus.5", "v0.6.1-helianthus.7", "v0.6.1-helianthus.8"},
+		},
+		{
+			name:     "spine",
+			versions: []string{"v0.7.1-helianthus.1", "v0.7.1-helianthus.2", "v0.7.1-helianthus.3", "v0.7.1-helianthus.6"},
+		},
+	} {
+		for _, version := range stale.versions {
+			assignment := stale.name + `_module_version="` + version + `"`
+			if strings.Contains(source, assignment) {
+				t.Errorf("toolchain boundary proof retains stale current dependency assignment %q", assignment)
+			}
 		}
 	}
 }

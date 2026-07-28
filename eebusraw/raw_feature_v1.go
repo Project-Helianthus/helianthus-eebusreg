@@ -17,13 +17,19 @@ const (
 type ToolV1 string
 
 const (
-	ToolV1FeaturesGet     ToolV1 = "eebus.v1.features.get"
-	ToolV1FeaturesDataGet ToolV1 = "eebus.v1.features.data.get"
+	ToolV1FeaturesGet       ToolV1 = "eebus.v1.features.get"
+	ToolV1FeaturesDataGet   ToolV1 = "eebus.v1.features.data.get"
+	ToolV1FeaturesDataSet   ToolV1 = "eebus.v1.features.data.set"
+	ToolV1MutationsGet      ToolV1 = "eebus.v1.mutations.get"
+	ToolV1MutationsRollback ToolV1 = "eebus.v1.mutations.rollback"
 )
 
 type AuthScopeV1 string
 
-const AuthScopeV1RawRead AuthScopeV1 = "eebus.raw.read"
+const (
+	AuthScopeV1RawRead  AuthScopeV1 = "eebus.raw.read"
+	AuthScopeV1RawWrite AuthScopeV1 = "eebus.raw.write"
+)
 
 const MaskTierRaw MaskTier = "raw"
 
@@ -71,14 +77,24 @@ const (
 	ErrorCodeV1InvalidArgument              ErrorCodeV1 = "invalid_argument"
 	ErrorCodeV1UnsupportedOperation         ErrorCodeV1 = "unsupported_operation"
 	ErrorCodeV1PartialOperationForbidden    ErrorCodeV1 = "partial_operation_forbidden"
+	ErrorCodeV1ConstraintsUnknown           ErrorCodeV1 = "constraints_unknown"
+	ErrorCodeV1ConstraintFailure            ErrorCodeV1 = "constraint_failure"
+	ErrorCodeV1StaleReadToken               ErrorCodeV1 = "stale_read_token"
+	ErrorCodeV1CASMismatch                  ErrorCodeV1 = "cas_mismatch"
 	ErrorCodeV1RuntimeEpochMismatch         ErrorCodeV1 = "runtime_epoch_mismatch"
 	ErrorCodeV1ConnectionGenerationMismatch ErrorCodeV1 = "connection_generation_mismatch"
+	ErrorCodeV1IdempotencyConflict          ErrorCodeV1 = "idempotency_conflict"
+	ErrorCodeV1WriterBusy                   ErrorCodeV1 = "writer_busy"
 	ErrorCodeV1Disconnected                 ErrorCodeV1 = "disconnected"
 	ErrorCodeV1Timeout                      ErrorCodeV1 = "timeout"
 	ErrorCodeV1Cancelled                    ErrorCodeV1 = "cancelled"
 	ErrorCodeV1RemoteError                  ErrorCodeV1 = "remote_error"
 	ErrorCodeV1DecodeError                  ErrorCodeV1 = "decode_error"
 	ErrorCodeV1PartialResult                ErrorCodeV1 = "partial_result"
+	ErrorCodeV1OutcomeUnknown               ErrorCodeV1 = "outcome_unknown"
+	ErrorCodeV1Conflict                     ErrorCodeV1 = "conflict"
+	ErrorCodeV1RollbackFailed               ErrorCodeV1 = "rollback_failed"
+	ErrorCodeV1NoEffect                     ErrorCodeV1 = "no_effect"
 	ErrorCodeV1NotFound                     ErrorCodeV1 = "not_found"
 	ErrorCodeV1SecretDetected               ErrorCodeV1 = "secret_detected"
 	ErrorCodeV1Internal                     ErrorCodeV1 = "internal"
@@ -529,7 +545,10 @@ func ValidateReadAuthorizationV1(auth ReadAuthorizationV1, tool ToolV1) *ErrorV1
 		utf8.RuneCountInString(auth.PrincipalClass) > 128 ||
 		auth.Scope != AuthScopeV1RawRead ||
 		auth.Tool != tool ||
-		auth.MaskTier != MaskTierRaw {
+		auth.MaskTier != MaskTierRaw ||
+		(tool != ToolV1FeaturesGet &&
+			tool != ToolV1FeaturesDataGet &&
+			tool != ToolV1MutationsGet) {
 		return NewErrorV1(
 			ErrorCodeV1PermissionDenied,
 			"raw READ authorization does not match the required purpose",
