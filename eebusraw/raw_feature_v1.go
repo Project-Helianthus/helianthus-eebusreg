@@ -447,12 +447,20 @@ func (value ErrorV1) Error() string {
 }
 
 type ErrorDetailsV1 struct {
-	TargetIndex    *uint64 `json:"target_index,omitempty"`
-	Classification string  `json:"classification,omitempty"`
+	TargetIndex    *uint64               `json:"target_index,omitempty"`
+	Classification string                `json:"classification,omitempty"`
+	Unknown        []OpaqueObservationV1 `json:"unknown,omitempty"`
 }
 
 func (details ErrorDetailsV1) Clone() ErrorDetailsV1 {
 	details.TargetIndex = cloneUint64PointerV1(details.TargetIndex)
+	if details.Unknown != nil {
+		unknown := make([]OpaqueObservationV1, len(details.Unknown))
+		for index := range details.Unknown {
+			unknown[index] = details.Unknown[index].Clone()
+		}
+		details.Unknown = unknown
+	}
 	return details
 }
 

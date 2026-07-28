@@ -77,7 +77,7 @@ func TestIssue72RefreshesTopologyFromDetailedDiscoveryAndStopsBeforeShutdown(t *
 		now: clock.Now,
 	}
 	backend, err := acquireRuntime(context.Background(), RuntimeConfig{
-		StateRoot:  "/tmp/helianthus-eebus-issue72",
+		StateRoot:  runtimeTestStateRoot(t),
 		Interface:  "fixture-interface",
 		ListenPort: 4711,
 		Remotes:    []RuntimeRemote{{SKI: remoteSKI}},

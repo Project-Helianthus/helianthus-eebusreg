@@ -434,38 +434,6 @@ type TypedValueV1
 var ErrSecretDetected
 `)
 
-var msp0625RawStableTypes = map[string]struct{}{
-	"AuthScopeV1":             {},
-	"ChangeabilityV1":         {},
-	"ConstraintSetV1":         {},
-	"ConstraintStatusV1":      {},
-	"ErrorCodeV1":             {},
-	"ErrorDetailsV1":          {},
-	"ErrorV1":                 {},
-	"FeatureDataGetDataV1":    {},
-	"FeatureDataGetRequestV1": {},
-	"FeatureLocatorV1":        {},
-	"FeatureRoleV1":           {},
-	"FeatureTargetV1":         {},
-	"FeaturesGetDataV1":       {},
-	"FeaturesGetRequestV1":    {},
-	"FullOperationsV1":        {},
-	"FunctionDescriptorV1":    {},
-	"HashV1":                  {},
-	"ObservationSourceV1":     {},
-	"OpaqueObservationV1":     {},
-	"OperationV1":             {},
-	"ProtocolMessageV1":       {},
-	"ReadAuthorizationV1":     {},
-	"ReadFailureV1":           {},
-	"ReadObservationV1":       {},
-	"ReadTokenV1":             {},
-	"RuntimeBindingV1":        {},
-	"SourceLayerV1":           {},
-	"ToolV1":                  {},
-	"TypedValueV1":            {},
-}
-
 var allowedCurrentRawExports = mergeExportInventories(
 	allowedMSP035RawExports,
 	allowedMSP0625RawExports,
@@ -2238,6 +2206,7 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 				stableType("ErrorDetailsV1", "struct",
 					field("TargetIndex", "*uint64", `json:"target_index,omitempty"`),
 					field("Classification", "string", `json:"classification,omitempty"`),
+					field("Unknown", "[]OpaqueObservationV1", `json:"unknown,omitempty"`),
 				),
 				stableType("ReadFailureV1", "struct",
 					field("TargetIndex", "uint64", `json:"target_index"`),

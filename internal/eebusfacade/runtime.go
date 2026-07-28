@@ -665,13 +665,16 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		handler.report(err)
 		return
 	}
-	var generation uint64
+	generation, allocationErr := handler.allocateRawFeatureConnectionGeneration(ski)
+	if generation == 0 {
+		handler.report(errors.New("runtime connection generation is exhausted"))
+		return
+	}
 	handler.updateRemote(ski, true, func(observation *runtimeGraphObservation) {
 		if len(observation.ServiceIDs) == 0 {
 			observation.ServiceIDs = []string{"service:" + ski}
 		}
-		observation.SessionIndex++
-		generation = observation.SessionIndex
+		observation.SessionIndex = generation
 		observation.ShipID = ""
 		observation.SessionID = runtimeSessionIdentity(*observation)
 		observation.SessionState = "connected"
@@ -684,20 +687,30 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		}
 		observation.Devices = merged
 	})
-	handler.beginRawFeatureConnectionGeneration(ski, generation)
+	if allocationErr != nil {
+		handler.report(allocationErr)
+		return
+	}
 	handler.refreshRawFeatureRemote(ski)
 }
 
-func (handler *runtimeServiceHandler) beginRawFeatureConnectionGeneration(ski string, generation uint64) {
+func (handler *runtimeServiceHandler) allocateRawFeatureConnectionGeneration(ski string) (uint64, error) {
 	handler.mu.Lock()
 	bridge := handler.rawFeatures
+	observation := handler.observations[ski]
 	handler.mu.Unlock()
-	if bridge == nil || generation == 0 {
-		return
+	if observation.SessionIndex == ^uint64(0) {
+		return 0, errors.New("runtime connection generation is exhausted")
 	}
-	if err := bridge.beginConnectionGeneration(ski, generation); err != nil {
-		handler.report(err)
+	candidate := observation.SessionIndex + 1
+	if bridge == nil {
+		return candidate, nil
 	}
+	generation, err := bridge.allocateConnectionGeneration(ski, candidate)
+	if err != nil {
+		return candidate, err
+	}
+	return generation, nil
 }
 
 func (handler *runtimeServiceHandler) RemoteSKIDisconnected(_ eebusapi.ServiceInterface, ski string) {

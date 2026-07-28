@@ -200,17 +200,6 @@ type rawRemoteLease struct {
 	inFlight     map[uint64]context.CancelFunc
 }
 
-type rawResponseMetadataKey struct {
-	address     spinemodel.AddressDeviceType
-	generation  executor.ExactConnectionGeneration
-	correlation spinemodel.MsgCounterType
-}
-
-type rawProtocolMetadata struct {
-	request  []eebusraw.OpaqueObservationV1
-	response []eebusraw.OpaqueObservationV1
-}
-
 type rawFeatureRuntimeBridge struct {
 	mu sync.Mutex
 
@@ -225,7 +214,6 @@ type rawFeatureRuntimeBridge struct {
 	generationStore     rawConnectionGenerationStore
 	inventory           map[string]eebusraw.FeaturesGetDataV1
 	nextDispatch        uint64
-	responseMetadata    map[rawResponseMetadataKey]rawProtocolMetadata
 }
 
 var _ executor.ExactRemoteRuntime = (*rawFeatureRuntimeBridge)(nil)
@@ -257,7 +245,6 @@ func newRawFeatureRuntimeBridgeWithGenerationStore(
 		pendingGeneration:   make(map[string]uint64),
 		generationStore:     generationStore,
 		inventory:           make(map[string]eebusraw.FeaturesGetDataV1),
-		responseMetadata:    make(map[rawResponseMetadataKey]rawProtocolMetadata),
 	}
 }
 
@@ -275,11 +262,10 @@ func (bridge *rawFeatureRuntimeBridge) admitRemote(
 	bridge.mu.Lock()
 	defer bridge.mu.Unlock()
 	pending := bridge.pendingGeneration[lease.ski]
-	if generation <= bridge.generationHighWater[lease.ski] || (pending != 0 && pending != generation) {
+	if generation <= bridge.generationHighWater[lease.ski] ||
+		(pending != 0 && pending != generation) ||
+		(bridge.generationStore != nil && pending != generation) {
 		return errors.New("exact remote connection generation is not new")
-	}
-	if bridge.generationStore != nil && bridge.generationStore.advance(lease.runtimeEpoch, lease.ski, generation) != nil {
-		return errors.New("exact remote connection generation cannot be persisted")
 	}
 	if prior := bridge.leasesBySKI[lease.ski]; prior != nil {
 		bridge.retireLeaseLocked(prior, false)
@@ -296,20 +282,48 @@ func (bridge *rawFeatureRuntimeBridge) admitRemote(
 }
 
 func (bridge *rawFeatureRuntimeBridge) beginConnectionGeneration(ski string, generation uint64) error {
+	_, err := bridge.allocateConnectionGeneration(ski, generation)
+	return err
+}
+
+func (bridge *rawFeatureRuntimeBridge) allocateConnectionGeneration(
+	ski string,
+	candidate uint64,
+) (uint64, error) {
 	ski = strings.ToLower(strings.TrimSpace(ski))
-	if !validRuntimeSKI(ski) || generation == 0 {
-		return errors.New("exact remote connection generation is invalid")
+	if !validRuntimeSKI(ski) || candidate == 0 {
+		return 0, errors.New("exact remote connection generation is invalid")
+	}
+	runtimeEpoch := bridge.currentRuntimeEpoch()
+	if runtimeEpoch == 0 {
+		return 0, errors.New("exact remote runtime epoch is unavailable")
 	}
 	bridge.mu.Lock()
 	defer bridge.mu.Unlock()
-	if generation <= bridge.generationHighWater[ski] || generation <= bridge.pendingGeneration[ski] {
-		return errors.New("exact remote connection generation is not new")
-	}
 	if prior := bridge.leasesBySKI[ski]; prior != nil {
 		bridge.retireLeaseLocked(prior, true)
 	}
+	delete(bridge.pendingGeneration, ski)
+	generation := candidate
+	if bridge.generationStore != nil {
+		if allocator, ok := bridge.generationStore.(rawConnectionGenerationAllocator); ok {
+			allocated, err := allocator.allocateNext(runtimeEpoch, ski)
+			if err != nil {
+				return 0, errors.New("exact remote connection generation cannot be allocated")
+			}
+			generation = allocated
+		} else if err := bridge.generationStore.advance(runtimeEpoch, ski, candidate); err != nil {
+			return 0, errors.New("exact remote connection generation cannot be persisted")
+		}
+	}
+	if bridge.currentRuntimeEpoch() != runtimeEpoch {
+		return 0, errors.New("exact remote runtime epoch changed during generation allocation")
+	}
+	if generation <= bridge.generationHighWater[ski] || generation <= bridge.pendingGeneration[ski] {
+		return 0, errors.New("exact remote connection generation is not new")
+	}
 	bridge.pendingGeneration[ski] = generation
-	return nil
+	return generation, nil
 }
 
 func (bridge *rawFeatureRuntimeBridge) refreshRemote(
@@ -526,9 +540,6 @@ func (bridge *rawFeatureRuntimeBridge) RoundTripIfCurrent(
 		bridge.leasesBySKI[lease.ski] == lease &&
 		bridge.leasesByAddr[lease.address] == lease &&
 		bridge.currentRuntimeEpoch() == lease.runtimeEpoch
-	if current && roundTripErr == nil {
-		bridge.storeResponseMetadataLocked(lease, request, response)
-	}
 	bridge.mu.Unlock()
 	if !current {
 		return failure(executor.ExactRemoteBindingGenerationMismatch)
@@ -661,16 +672,11 @@ func (bridge *rawFeatureRuntimeBridge) readTarget(
 	}
 	result, err := executor.NewExactFeatureExecutor(bridge.local, bridge).Execute(ctx, exactRequest)
 	exactUnknown, unknownErr := rawExactUnknownObservations(result.UnknownFields)
-	protocolMetadata := bridge.takeResponseMetadata(
-		*exactRequest.Target.Address.Device,
-		exactRequest.Target.ConnectionGeneration,
-		result.CorrelationKey,
-	)
 	if unknownErr != nil {
 		return eebusraw.ReadObservationV1{}, translateRawExecutorError(unknownErr)
 	}
 	if err != nil {
-		return eebusraw.ReadObservationV1{}, translateRawExecutorError(err)
+		return eebusraw.ReadObservationV1{}, rawExecutorErrorWithUnknown(err, exactUnknown)
 	}
 	requestValue, err := rawCommandValue(result.Request, false)
 	if err != nil {
@@ -685,14 +691,13 @@ func (bridge *rawFeatureRuntimeBridge) readTarget(
 		CorrelationKey: uint64(result.CorrelationKey),
 		Function:       target.Function,
 		Data:           &requestValue,
-		Unknown:        cloneRawOpaqueObservations(protocolMetadata.request),
 	}
 	responseMessage := eebusraw.ProtocolMessageV1{
 		Classifier:     strings.ToUpper(string(spinemodel.CmdClassifierTypeReply)),
 		CorrelationKey: uint64(result.CorrelationKey),
 		Function:       target.Function,
 		Data:           &responseValue,
-		Unknown:        mergeRawOpaqueObservations(protocolMetadata.response, exactUnknown),
+		Unknown:        cloneRawOpaqueObservations(exactUnknown),
 	}
 	requestHash, err := eebusraw.CanonicalSHA256V1(requestMessage)
 	if err != nil {
@@ -715,16 +720,12 @@ func (bridge *rawFeatureRuntimeBridge) readTarget(
 		return eebusraw.ReadObservationV1{}, rawInternalError()
 	}
 	observation := eebusraw.ReadObservationV1{
-		Target:      target.Clone(),
-		Runtime:     runtime,
-		RawRequest:  requestMessage,
-		RawResponse: responseMessage,
-		Value:       responseValue,
-		Unknown: mergeRawOpaqueObservations(
-			protocolMetadata.request,
-			protocolMetadata.response,
-			exactUnknown,
-		),
+		Target:        target.Clone(),
+		Runtime:       runtime,
+		RawRequest:    requestMessage,
+		RawResponse:   responseMessage,
+		Value:         responseValue,
+		Unknown:       cloneRawOpaqueObservations(exactUnknown),
 		RequestedAt:   result.RequestedAt.UTC(),
 		ReceivedAt:    receivedAt,
 		DataTimestamp: receivedAt,
@@ -1066,109 +1067,6 @@ func exactRawSourceAddress(
 	return candidates[0], true
 }
 
-func (bridge *rawFeatureRuntimeBridge) storeResponseMetadataLocked(
-	lease *rawRemoteLease,
-	request spineapi.CorrelatedRequest,
-	response spineapi.CorrelatedResponse,
-) {
-	metadata := rawProtocolMetadata{
-		request:  rawRequestObservations(request),
-		response: rawResponseHeaderObservations(response.Header),
-	}
-	if len(metadata.request) == 0 && len(metadata.response) == 0 {
-		return
-	}
-	key := rawResponseMetadataKey{
-		address:     lease.address,
-		generation:  lease.generation,
-		correlation: response.CorrelationKey,
-	}
-	if _, exists := bridge.responseMetadata[key]; !exists &&
-		len(bridge.responseMetadata) >= rawMetadataMaximumEntriesV1 {
-		return
-	}
-	bridge.responseMetadata[key] = cloneRawProtocolMetadata(metadata)
-}
-
-func (bridge *rawFeatureRuntimeBridge) takeResponseMetadata(
-	address spinemodel.AddressDeviceType,
-	generation executor.ExactConnectionGeneration,
-	correlation spinemodel.MsgCounterType,
-) rawProtocolMetadata {
-	bridge.mu.Lock()
-	defer bridge.mu.Unlock()
-	key := rawResponseMetadataKey{
-		address:     address,
-		generation:  generation,
-		correlation: correlation,
-	}
-	result := cloneRawProtocolMetadata(bridge.responseMetadata[key])
-	delete(bridge.responseMetadata, key)
-	return result
-}
-
-func rawRequestObservations(
-	request spineapi.CorrelatedRequest,
-) []eebusraw.OpaqueObservationV1 {
-	const source = "spine-go/api.CorrelatedRequest"
-	return rawOpaqueObservations([]struct {
-		path  string
-		value any
-	}{
-		{path: "/request/ackRequest", value: request.AckRequest},
-		{path: "/request/addressDestination", value: request.Destination},
-		{path: "/request/addressSource", value: request.Source},
-	}, source)
-}
-
-func rawResponseHeaderObservations(
-	header spinemodel.HeaderType,
-) []eebusraw.OpaqueObservationV1 {
-	const source = "spine-go/api.CorrelatedResponse.Header"
-	return rawOpaqueObservations([]struct {
-		path  string
-		value any
-	}{
-		{path: "/header/ackRequest", value: header.AckRequest},
-		{path: "/header/addressDestination", value: header.AddressDestination},
-		{path: "/header/addressOriginator", value: header.AddressOriginator},
-		{path: "/header/addressSource", value: header.AddressSource},
-		{path: "/header/msgCounter", value: header.MsgCounter},
-		{path: "/header/msgCounterReference", value: header.MsgCounterReference},
-		{path: "/header/specificationVersion", value: header.SpecificationVersion},
-		{path: "/header/timestamp", value: header.Timestamp},
-	}, source)
-}
-
-func rawOpaqueObservations(
-	values []struct {
-		path  string
-		value any
-	},
-	source string,
-) []eebusraw.OpaqueObservationV1 {
-	result := make([]eebusraw.OpaqueObservationV1, 0, len(values))
-	for _, item := range values {
-		if isNilRawRuntimeValue(item.value) {
-			continue
-		}
-		encoded, err := json.Marshal(item.value)
-		if err != nil {
-			continue
-		}
-		value, err := eebusraw.DecodeTypedValueV1(encoded)
-		if err != nil {
-			continue
-		}
-		result = append(result, eebusraw.OpaqueObservationV1{
-			Path:   item.path,
-			Source: source,
-			Value:  value,
-		})
-	}
-	return result
-}
-
 func rawExactUnknownObservations(
 	fields []spineapi.CorrelatedUnknownField,
 ) ([]eebusraw.OpaqueObservationV1, error) {
@@ -1192,33 +1090,6 @@ func rawExactUnknownObservations(
 		return result[left].Path < result[right].Path
 	})
 	return cloneRawOpaqueObservations(result), nil
-}
-
-func cloneRawProtocolMetadata(source rawProtocolMetadata) rawProtocolMetadata {
-	return rawProtocolMetadata{
-		request:  cloneRawOpaqueObservations(source.request),
-		response: cloneRawOpaqueObservations(source.response),
-	}
-}
-
-func mergeRawOpaqueObservations(
-	groups ...[]eebusraw.OpaqueObservationV1,
-) []eebusraw.OpaqueObservationV1 {
-	size := 0
-	for _, group := range groups {
-		size += len(group)
-	}
-	result := make([]eebusraw.OpaqueObservationV1, 0, size)
-	for _, group := range groups {
-		result = append(result, cloneRawOpaqueObservations(group)...)
-	}
-	sort.Slice(result, func(left, right int) bool {
-		if result[left].Path == result[right].Path {
-			return result[left].Source < result[right].Source
-		}
-		return result[left].Path < result[right].Path
-	})
-	return result
 }
 
 func cloneRawOpaqueObservations(
@@ -1266,6 +1137,21 @@ func rawTypedValueEmpty(value any) bool {
 	default:
 		return false
 	}
+}
+
+func rawExecutorErrorWithUnknown(
+	err error,
+	unknown []eebusraw.OpaqueObservationV1,
+) *eebusraw.ErrorV1 {
+	terminal := translateRawExecutorError(err)
+	if terminal == nil || len(unknown) == 0 {
+		return terminal
+	}
+	if terminal.Details == nil {
+		terminal.Details = &eebusraw.ErrorDetailsV1{}
+	}
+	terminal.Details.Unknown = cloneRawOpaqueObservations(unknown)
+	return terminal
 }
 
 func translateRawExecutorError(err error) *eebusraw.ErrorV1 {

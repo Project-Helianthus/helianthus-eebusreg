@@ -78,8 +78,15 @@ func TestIssue84ProductionAllocationFailureFailsClosedBeforeRawAdmission(t *test
 		func() uint64 { return 9 },
 		time.Now,
 		fixture.bridge.tokenIssuer,
-		store,
+		nil,
 	)
+	if err := bridge.admitRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+		t.Fatal(err)
+	}
+	bridge.mu.Lock()
+	prior := bridge.leasesBySKI[fixture.remoteSKI]
+	bridge.generationStore = store
+	bridge.mu.Unlock()
 	handler, _ := newIssue84ProductionHandler(t, fixture, bridge)
 	defer func() {
 		handler.deactivateSPINEEvents()
@@ -92,8 +99,8 @@ func TestIssue84ProductionAllocationFailureFailsClosedBeforeRawAdmission(t *test
 	pending := bridge.pendingGeneration[fixture.remoteSKI]
 	lease := bridge.leasesBySKI[fixture.remoteSKI]
 	bridge.mu.Unlock()
-	if pending != 0 || lease != nil {
-		t.Fatalf("failed durable allocation left pending=%d lease=%+v", pending, lease)
+	if pending != 0 || lease != nil || prior == nil || !prior.retired {
+		t.Fatalf("failed durable allocation left pending=%d lease=%+v prior=%+v", pending, lease, prior)
 	}
 	if fixture.sender.calls.Load() != 0 {
 		t.Fatal("failed persistence left a contact-capable remote lease")
@@ -220,7 +227,7 @@ func TestIssue84GenerationStoreRejectsUnsafePathsAndObjects(t *testing.T) {
 		}
 	})
 	t.Run("symlinked parent", func(t *testing.T) {
-		parent := t.TempDir()
+		parent := issue84PrivateRoot(t)
 		realParent := filepath.Join(parent, "real")
 		if err := os.Mkdir(realParent, 0o700); err != nil {
 			t.Fatal(err)
@@ -242,7 +249,11 @@ func TestIssue84GenerationStoreRejectsUnsafePathsAndObjects(t *testing.T) {
 		}
 	})
 	t.Run("symlinked state", func(t *testing.T) {
-		root := issue84PrivateRoot(t)
+		stateRoot := issue84PrivateRoot(t)
+		root := rawConnectionGenerationStoreRoot(stateRoot)
+		if err := os.Mkdir(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
 		target := filepath.Join(t.TempDir(), "target.json")
 		payload := []byte(`{"runtime_epoch":9,"generations":{}}`)
 		if err := os.WriteFile(target, payload, 0o600); err != nil {
@@ -251,7 +262,7 @@ func TestIssue84GenerationStoreRejectsUnsafePathsAndObjects(t *testing.T) {
 		if err := os.Symlink(target, filepath.Join(root, rawConnectionGenerationStateFilename)); err != nil {
 			t.Fatal(err)
 		}
-		store, err := newRawConnectionGenerationStore(root)
+		store, err := newRawConnectionGenerationStore(stateRoot)
 		if err == nil {
 			err = store.advance(9, strings.Repeat("a", 40), 1)
 		}
@@ -260,7 +271,7 @@ func TestIssue84GenerationStoreRejectsUnsafePathsAndObjects(t *testing.T) {
 		}
 	})
 	t.Run("broad root mode", func(t *testing.T) {
-		root := t.TempDir()
+		root := issue84PrivateRoot(t)
 		if err := os.Chmod(root, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -283,9 +294,10 @@ func TestIssue84GenerationStorePersistsPrivateLockAndState(t *testing.T) {
 	if err := store.advance(9, strings.Repeat("a", 40), 1); err != nil {
 		t.Fatal(err)
 	}
-	assertIssue84Mode(t, root, os.ModeDir|0o700)
-	assertIssue84Mode(t, filepath.Join(root, rawConnectionGenerationStateFilename), 0o600)
-	assertIssue84Mode(t, filepath.Join(root, "raw-connection-generations-v1.lock"), 0o600)
+	storeRoot := rawConnectionGenerationStoreRoot(root)
+	assertIssue84Mode(t, storeRoot, os.ModeDir|0o700)
+	assertIssue84Mode(t, filepath.Join(storeRoot, rawConnectionGenerationStateFilename), 0o600)
+	assertIssue84Mode(t, filepath.Join(storeRoot, "raw-connection-generations-v1.lock"), 0o600)
 }
 
 func TestIssue84NewGenerationRetiresStaleSHIPIDBeforeUpdateWithoutContact(t *testing.T) {
@@ -398,7 +410,7 @@ func TestIssue84TypedExecutorErrorPreservesBoundedUnknownFields(t *testing.T) {
 				t.Fatalf("typed executor error unknowns are not deterministic: %+v", typed.Details.Unknown)
 			}
 			if strings.Contains(string(encoded), `"Xz"`) {
-				t.Fatal("typed executor error unknown details alias upstream bytes")
+				t.Fatal("typed executor error unknown details share upstream byte storage")
 			}
 		})
 	}
@@ -570,5 +582,9 @@ func issue84PrivateRoot(t *testing.T) string {
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	return root
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
 }
