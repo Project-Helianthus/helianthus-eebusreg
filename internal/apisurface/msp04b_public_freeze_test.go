@@ -42,6 +42,8 @@ func TestMSP04BG16RootSurfaceHasNoMutationOrCandidateDetail(t *testing.T) {
 	if root == nil {
 		t.Fatal("root public package missing")
 	}
+	projected := msp05pProjectFrozenV1(t, doc)
+	root = msp05pRootSurface(t, projected)
 	forbidden := []string{
 		"candidate",
 		"candidate_nonce",

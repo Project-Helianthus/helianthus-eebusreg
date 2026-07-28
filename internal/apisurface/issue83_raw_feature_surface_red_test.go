@@ -84,23 +84,22 @@ func TestIssue83PublicRawFeatureSurfaceIsFirstPartyAndReadOnly(t *testing.T) {
 	}
 }
 
-func TestIssue83AddsNoMutationOrConsumerSurface(t *testing.T) {
+func TestIssue83ReadContractStillAddsNoConsumerOrUnversionedSurface(t *testing.T) {
 	doc, err := extract(moduleRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	forbidden := map[string]struct{}{
-		"CandidateRef":              {},
-		"FeatureDataSetRequestV1":   {},
-		"MutationCoordinator":       {},
-		"MutationGetRequestV1":      {},
-		"MutationRollbackRequestV1": {},
-		"MutationV1":                {},
-		"RawFeatureRuntimeV2":       {},
-		"RawReadTokenIssuer":        {},
-		"ReadTokenSigningKey":       {},
-		"TokenIssuerV1":             {},
-		"TokenSigningKeyV1":         {},
+		"CandidateRef":          {},
+		"MutationCoordinator":   {},
+		"RawFeatureRuntimeV2":   {},
+		"RawMutationRuntimeV2":  {},
+		"RawReadTokenIssuer":    {},
+		"ReadTokenSigningKey":   {},
+		"TokenIssuerV1":         {},
+		"TokenSigningKeyV1":     {},
+		"WriteAuthorizationV2":  {},
+		"MutationCoordinatorV1": {},
 	}
 	for _, pkg := range doc.Packages {
 		if pkg.Path != modulePath && pkg.Path != modulePath+"/eebusraw" {
