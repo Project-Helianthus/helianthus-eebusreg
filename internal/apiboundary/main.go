@@ -402,7 +402,9 @@ func TypedValueV1.UnmarshalJSON
 func TypedValueV1.Validate
 func TypedValueV1.Value
 func ValidateFeatureDataGetRequestV1
+func ValidateFeatureDataGetDataV1
 func ValidateFeaturesGetRequestV1
+func ValidateFeaturesGetDataV1
 func ValidateReadAuthorizationV1
 type AuthScopeV1
 type ChangeabilityV1
@@ -470,6 +472,10 @@ const ToolV1FeaturesDataSet
 const ToolV1MutationsGet
 const ToolV1MutationsRollback
 func ValidateWriteAuthorizationV1
+func ValidateFeatureDataSetRequestV1
+func ValidateMutationGetRequestV1
+func ValidateMutationRollbackRequestV1
+func ValidateMutationV1
 type ApplyVerificationV1
 type AuditTransitionV1
 type ConflictEvidenceV1

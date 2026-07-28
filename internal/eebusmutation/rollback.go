@@ -20,9 +20,8 @@ func (coordinator *rawMutationCoordinator) MutationsRollback(
 	if terminal := eebusraw.ValidateWriteAuthorizationV1(auth, eebusraw.ToolV1MutationsRollback); terminal != nil {
 		return eebusraw.MutationV1{}, terminal
 	}
-	if !boundedPurposeValue(request.MutationRef) ||
-		!boundedPurposeValue(request.IdempotencyKey) {
-		return eebusraw.MutationV1{}, mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
+	if terminal := eebusraw.ValidateMutationRollbackRequestV1(request); terminal != nil {
+		return eebusraw.MutationV1{}, terminal
 	}
 	epoch := coordinator.config.RuntimeEpoch()
 	identityHash, err := rawMutationIdentityHash(

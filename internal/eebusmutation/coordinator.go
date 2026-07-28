@@ -114,6 +114,9 @@ func (coordinator *rawMutationCoordinator) restore(records []rawMutationJournalR
 		if record.Mutation.Runtime.RuntimeEpoch != record.RuntimeEpoch {
 			return errors.New("mutation runtime epoch is not journal-bound")
 		}
+		if terminal := eebusraw.ValidateMutationV1(record.Mutation); terminal != nil {
+			return errors.New("mutation journal contains an invalid contract record")
+		}
 		if record.RuntimeEpoch != currentEpoch {
 			continue
 		}
@@ -317,8 +320,8 @@ func (coordinator *rawMutationCoordinator) MutationsGet(
 	if terminal := eebusraw.ValidateReadAuthorizationV1(auth, eebusraw.ToolV1MutationsGet); terminal != nil {
 		return eebusraw.MutationV1{}, terminal
 	}
-	if !boundedPurposeValue(request.MutationRef) {
-		return eebusraw.MutationV1{}, mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
+	if terminal := eebusraw.ValidateMutationGetRequestV1(request); terminal != nil {
+		return eebusraw.MutationV1{}, terminal
 	}
 	principalHash, err := rawMutationPrincipalHash(auth.PrincipalClass)
 	if err != nil {
