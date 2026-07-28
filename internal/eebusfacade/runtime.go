@@ -666,6 +666,10 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		return
 	}
 	generation, allocationErr := handler.allocateRawFeatureConnectionGeneration(ski)
+	if allocationErr != nil {
+		handler.report(allocationErr)
+		return
+	}
 	if generation == 0 {
 		handler.report(errors.New("runtime connection generation is exhausted"))
 		return
@@ -687,10 +691,6 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		}
 		observation.Devices = merged
 	})
-	if allocationErr != nil {
-		handler.report(allocationErr)
-		return
-	}
 	handler.refreshRawFeatureRemote(ski)
 }
 
@@ -708,7 +708,7 @@ func (handler *runtimeServiceHandler) allocateRawFeatureConnectionGeneration(ski
 	}
 	generation, err := bridge.allocateConnectionGeneration(ski, candidate)
 	if err != nil {
-		return candidate, err
+		return 0, err
 	}
 	return generation, nil
 }

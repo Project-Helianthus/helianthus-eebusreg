@@ -1070,13 +1070,23 @@ func exactRawSourceAddress(
 func rawExactUnknownObservations(
 	fields []spineapi.CorrelatedUnknownField,
 ) ([]eebusraw.OpaqueObservationV1, error) {
-	const source = "eebus-go/executor.ExactFeatureResult.UnknownFields"
-	if len(fields) > rawMetadataMaximumEntriesV1 {
-		return nil, errors.New("exact unknown field count exceeds the size limit")
+	const (
+		source                   = "eebus-go/executor.ExactFeatureResult.UnknownFields"
+		functionDataPathPrefixV1 = "/datagram/payload/cmd/0/"
+	)
+	capacity := len(fields)
+	if capacity > rawMetadataMaximumEntriesV1 {
+		capacity = rawMetadataMaximumEntriesV1
 	}
-	result := make([]eebusraw.OpaqueObservationV1, 0, len(fields))
+	result := make([]eebusraw.OpaqueObservationV1, 0, capacity)
 	for _, field := range fields {
 		path := strings.TrimSpace(field.Path)
+		if !strings.HasPrefix(path, functionDataPathPrefixV1) {
+			continue
+		}
+		if len(result) == rawMetadataMaximumEntriesV1 {
+			return nil, errors.New("exact unknown field count exceeds the size limit")
+		}
 		if path == "" || len(path) > 1024 || len(field.Value) > 64*1024 {
 			return nil, errors.New("exact unknown field is outside the bounded contract")
 		}

@@ -143,7 +143,9 @@ func TestIssue84AllocationFailurePreservesPriorSessionProjectionWithoutPublishin
 	handler.publish = func([]byte) {
 		published++
 	}
+	priorProjection := cloneRuntimeGraphObservation(handler.observations[fixture.remoteSKI])
 	handler.mu.Unlock()
+	priorGraph := handler.reducer.Snapshot()
 
 	handler.RemoteSKIConnected(eebusServiceWithFeatureGraph(t, fixture.remoteSKI), fixture.remoteSKI)
 
@@ -151,8 +153,8 @@ func TestIssue84AllocationFailurePreservesPriorSessionProjectionWithoutPublishin
 	got := cloneRuntimeGraphObservation(handler.observations[fixture.remoteSKI])
 	revision := handler.runtimeRevision
 	handler.mu.Unlock()
-	if !reflect.DeepEqual(got, prior) {
-		t.Fatalf("allocation failure changed prior session projection:\n got: %+v\nwant: %+v", got, prior)
+	if !reflect.DeepEqual(got, priorProjection) {
+		t.Fatalf("allocation failure changed prior session projection:\n got: %+v\nwant: %+v", got, priorProjection)
 	}
 	if revision != 7 {
 		t.Fatalf("allocation failure advanced runtime revision to %d, want 7", revision)
@@ -161,8 +163,8 @@ func TestIssue84AllocationFailurePreservesPriorSessionProjectionWithoutPublishin
 		t.Fatalf("allocation failure published %d connected/session projections, want zero", published)
 	}
 	graph := handler.reducer.Snapshot()
-	if len(graph) != 1 || !reflect.DeepEqual(graph[0], prior) {
-		t.Fatalf("allocation failure changed reducer projection: %+v", graph)
+	if !reflect.DeepEqual(graph, priorGraph) {
+		t.Fatalf("allocation failure changed reducer projection:\n got: %+v\nwant: %+v", graph, priorGraph)
 	}
 	select {
 	case err := <-handler.errors:
