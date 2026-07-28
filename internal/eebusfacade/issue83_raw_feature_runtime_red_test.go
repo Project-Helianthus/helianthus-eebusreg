@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -721,8 +720,10 @@ func TestIssue83AllFailedReadsReturnOrdinaryTerminalErrorWithoutPartialData(t *t
 	}
 }
 
-func TestIssue83TypedResponseHeaderMetadataIsBoundedOpaqueObservation(t *testing.T) {
+func TestIssue83TypedFunctionDataExcludesProtocolHeadersButKeepsTargetAddress(t *testing.T) {
 	fixture := newIssue83RawBridgeFixture(t)
+	target := issue83TargetFromLocator(fixture.locators[0])
+	unknownPath := "/datagram/payload/cmd/0/future"
 	fixture.sender.roundTrip = func(
 		_ context.Context,
 		request spineapi.CorrelatedRequest,
@@ -732,36 +733,56 @@ func TestIssue83TypedResponseHeaderMetadataIsBoundedOpaqueObservation(t *testing
 		originator := cloneRawFeatureAddress(request.Destination)
 		response.Header.AckRequest = &ack
 		response.Header.AddressOriginator = &originator
+		response.UnknownFields = []spineapi.CorrelatedUnknownField{{
+			Path:  unknownPath,
+			Value: spineapi.CorrelatedUnknownValue(`{"future":true}`),
+		}}
 		return response, nil
 	}
 	data, terminal := fixture.bridge.featuresDataGet(
 		context.Background(),
 		issue83FacadeAuthorization(eebusraw.ToolV1FeaturesDataGet),
 		eebusraw.FeatureDataGetRequestV1{
-			Targets:   []eebusraw.FeatureTargetV1{issue83TargetFromLocator(fixture.locators[0])},
+			Targets:   []eebusraw.FeatureTargetV1{target},
 			TimeoutMS: 1000,
 		},
 	)
 	if terminal != nil {
 		t.Fatalf("featuresDataGet() error = %+v", terminal)
 	}
-	if len(data.Results) != 1 ||
-		len(data.Results[0].RawRequest.Unknown) == 0 ||
-		len(data.Results[0].RawResponse.Unknown) == 0 ||
-		len(data.Results[0].Unknown) == 0 {
-		t.Fatalf("typed header metadata was discarded: %+v", data)
+	if len(data.Results) != 1 {
+		t.Fatalf("featuresDataGet() results = %+v", data.Results)
 	}
-	paths := make([]string, 0, len(data.Results[0].RawResponse.Unknown))
-	for _, observation := range data.Results[0].RawResponse.Unknown {
-		paths = append(paths, observation.Path)
-		if observation.Source != "spine-go/api.CorrelatedResponse.Header" {
-			t.Fatalf("opaque source = %q", observation.Source)
+	observation := data.Results[0]
+	if !reflect.DeepEqual(observation.Target, target) ||
+		observation.Target.DeviceAddress != fixture.remoteAddress ||
+		!reflect.DeepEqual(observation.Target.EntityAddress, []uint64{1}) ||
+		observation.Target.FeatureAddress != fixture.locators[0].FeatureAddress ||
+		observation.Target.Function != string(spinemodel.FunctionTypeMeasurementListData) ||
+		observation.RawRequest.Function != observation.Target.Function ||
+		observation.RawResponse.Function != observation.Target.Function {
+		t.Fatalf("typed target/function address was not retained: %+v", observation)
+	}
+	groups := [][]eebusraw.OpaqueObservationV1{
+		observation.RawRequest.Unknown,
+		observation.RawResponse.Unknown,
+		observation.Unknown,
+	}
+	for _, group := range groups {
+		for _, opaque := range group {
+			if strings.HasPrefix(opaque.Path, "/request/") ||
+				strings.HasPrefix(opaque.Path, "/header/") {
+				t.Fatalf("protocol header/transcript escaped as opaque observation: %+v", opaque)
+			}
 		}
 	}
-	if !sort.StringsAreSorted(paths) ||
-		!containsIssue83String(paths, "/header/ackRequest") ||
-		!containsIssue83String(paths, "/header/addressOriginator") {
-		t.Fatalf("opaque response paths = %v", paths)
+	if len(observation.RawRequest.Unknown) != 0 ||
+		len(observation.RawResponse.Unknown) != 1 ||
+		observation.RawResponse.Unknown[0].Path != unknownPath ||
+		len(observation.Unknown) != 1 ||
+		observation.Unknown[0].Path != unknownPath {
+		t.Fatalf("typed function-data unknowns = request:%+v response:%+v observation:%+v",
+			observation.RawRequest.Unknown, observation.RawResponse.Unknown, observation.Unknown)
 	}
 }
 
