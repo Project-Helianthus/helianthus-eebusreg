@@ -247,7 +247,13 @@ func msp0625RawSymbol(symbol symbol) bool {
 		"NewErrorV1",
 		"NewTypedValueV1",
 		"ValidateFeatureDataGetRequestV1",
+		"ValidateFeatureDataGetDataV1",
+		"ValidateFeatureDataSetRequestV1",
 		"ValidateFeaturesGetRequestV1",
+		"ValidateFeaturesGetDataV1",
+		"ValidateMutationGetRequestV1",
+		"ValidateMutationRollbackRequestV1",
+		"ValidateMutationV1",
 		"ValidateReadAuthorizationV1",
 		"ValidateWriteAuthorizationV1",
 	} {

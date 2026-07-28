@@ -2,6 +2,8 @@ package eebusmutation
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -133,7 +135,7 @@ func issue85HarnessDraft(t *testing.T) *issue85Harness {
 	}
 	tokens := &issue85TokenVerifier{
 		bindings: map[string]rawMutationReadTokenBinding{
-			"read-token-issue85": {
+			issue85OpaqueReference("read-token-issue85"): {
 				Runtime:         eebusraw.RuntimeBindingV1{RuntimeEpoch: epoch, ConnectionGeneration: generation},
 				Target:          readTarget,
 				RequestHash:     readRequestHash,
@@ -193,7 +195,7 @@ func issue85HarnessDraft(t *testing.T) *issue85Harness {
 		request: eebusraw.FeatureDataSetRequestV1{
 			Target:         target.Clone(),
 			Value:          requested.Clone(),
-			ReadToken:      "read-token-issue85",
+			ReadToken:      issue85OpaqueReference("read-token-issue85"),
 			IdempotencyKey: "issue85-idempotency-key",
 			Mode:           eebusraw.ModeV1Apply,
 		},
@@ -455,6 +457,7 @@ func (harness *issue85Harness) requestForTargetAndPrincipal(
 	principal string,
 ) eebusraw.FeatureDataSetRequestV1 {
 	harness.t.Helper()
+	readToken = issue85OpaqueReference(readToken)
 	harness.bindReadTokenForPrincipal(readToken, target, harness.before, principal)
 	harness.policy.allow(target, harness.before, harness.requested)
 	request := harness.request
@@ -463,6 +466,11 @@ func (harness *issue85Harness) requestForTargetAndPrincipal(
 	request.ReadToken = readToken
 	request.IdempotencyKey = idempotencyKey
 	return request
+}
+
+func issue85OpaqueReference(label string) string {
+	digest := sha256.Sum256([]byte(label))
+	return base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
 func (harness *issue85Harness) bindReadToken(
@@ -1178,6 +1186,15 @@ func issue85AssertState(t testing.TB, mutation eebusraw.MutationV1, state eebusr
 	t.Helper()
 	if mutation.State != state {
 		t.Fatalf("mutation state = %q, want %q: %+v", mutation.State, state, mutation)
+	}
+	if terminal := eebusraw.ValidateMutationV1(mutation); terminal != nil {
+		payload, _ := json.Marshal(mutation)
+		t.Fatalf(
+			"mutation state %q failed canonical validation: %+v\nmutation: %s",
+			state,
+			terminal,
+			payload,
+		)
 	}
 }
 

@@ -1,6 +1,8 @@
 package eebusraw_test
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"strings"
 	"testing"
@@ -20,10 +22,10 @@ func TestIssue87RequestValidatorsEnforceClosedContract(t *testing.T) {
 		Mode:           eebusraw.ModeV1Apply,
 	}
 	validGet := eebusraw.MutationGetRequestV1{
-		MutationRef: strings.Repeat("B", 43),
+		MutationRef: issue87Reference(1),
 	}
 	validRollback := eebusraw.MutationRollbackRequestV1{
-		MutationRef:    strings.Repeat("C", 43),
+		MutationRef:    issue87Reference(2),
 		IdempotencyKey: "issue87-key-0002",
 	}
 
@@ -249,7 +251,7 @@ func TestIssue87MutationValidatorRejectsImpossibleStateEvidence(t *testing.T) {
 	}
 	transition.TransitionHash = issue87TransitionHash(t, transition)
 	valid := eebusraw.MutationV1{
-		MutationRef: strings.Repeat("D", 43),
+		MutationRef: issue87Reference(3),
 		State:       eebusraw.MutationStateV1Prepared,
 		Mode:        eebusraw.ModeV1Apply,
 		Target:      issue87Target(eebusraw.OperationV1Write),
@@ -273,7 +275,9 @@ func TestIssue87MutationValidatorRejectsImpossibleStateEvidence(t *testing.T) {
 		"broken audit hash": func() eebusraw.MutationV1 {
 			value := valid
 			value.Audit = append([]eebusraw.AuditTransitionV1(nil), valid.Audit...)
-			value.Audit[0].TransitionHash = "sha256:" + strings.Repeat("0", 64)
+			value.Audit[0].TransitionHash = eebusraw.HashV1(
+				"sha256:" + strings.Repeat("0", 64),
+			)
 			return value
 		}(),
 		"audit state mismatch": func() eebusraw.MutationV1 {
@@ -299,6 +303,10 @@ func TestIssue87MutationValidatorRejectsImpossibleStateEvidence(t *testing.T) {
 	}
 }
 
+func issue87Reference(fill byte) string {
+	return base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{fill}, sha256.Size))
+}
+
 func TestIssue87OpaqueReferenceShapeIsExactlyRawBase64URL256Bit(t *testing.T) {
 	for _, value := range []string{
 		strings.Repeat("A", 43),
@@ -309,6 +317,12 @@ func TestIssue87OpaqueReferenceShapeIsExactlyRawBase64URL256Bit(t *testing.T) {
 		); terminal != nil {
 			t.Fatalf("valid opaque reference %q rejected: %+v", value, terminal)
 		}
+	}
+	nonCanonical := strings.Repeat("A", 42) + "B"
+	if terminal := eebusraw.ValidateMutationGetRequestV1(
+		eebusraw.MutationGetRequestV1{MutationRef: nonCanonical},
+	); terminal == nil {
+		t.Fatalf("non-canonical base64url reference %q was accepted", nonCanonical)
 	}
 }
 
@@ -342,17 +356,17 @@ func issue87Observation(
 	observation := eebusraw.ReadObservationV1{
 		Target: target, Runtime: runtime,
 		RawRequest: eebusraw.ProtocolMessageV1{
-			Classifier: "read", CorrelationKey: 1, Function: target.Function,
+			Classifier: "READ", CorrelationKey: 1, Function: target.Function,
 		},
 		RawResponse: eebusraw.ProtocolMessageV1{
-			Classifier: "reply", CorrelationKey: 1, Function: target.Function,
+			Classifier: "REPLY", CorrelationKey: 1, Function: target.Function,
 			Data: &value,
 		},
 		Value: value, RequestedAt: now, ReceivedAt: now.Add(time.Millisecond),
 		DataTimestamp: now.Add(time.Millisecond), Source: eebusraw.ObservationSourceV1Live,
 		ReadToken: eebusraw.ReadTokenV1{
 			ReadToken: strings.Repeat("E", 43), ExpiresAt: now.Add(time.Minute),
-			BindingHash: "sha256:" + strings.Repeat("1", 64),
+			BindingHash: eebusraw.HashV1("sha256:" + strings.Repeat("1", 64)),
 		},
 	}
 	hash, err := observation.ComputeDataHash()

@@ -4,12 +4,11 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
-	"errors"
 	"reflect"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
@@ -66,43 +65,7 @@ func validateRawMutationConfiguration(
 }
 
 func validateRawMutationSetRequest(request eebusraw.FeatureDataSetRequestV1) *eebusraw.ErrorV1 {
-	if terminal := validateWriteTarget(request.Target); terminal != nil {
-		return terminal
-	}
-	if request.Value.Validate() != nil ||
-		!boundedPurposeValue(request.ReadToken) ||
-		!boundedPurposeValue(request.IdempotencyKey) {
-		return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
-	}
-	if request.ExpectedCurrent != nil && request.ExpectedCurrent.Validate() != nil {
-		return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
-	}
-	switch request.Mode {
-	case eebusraw.ModeV1Apply:
-		if request.ProbeTTLSeconds != 0 {
-			return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
-		}
-	case eebusraw.ModeV1Probe:
-		if request.ProbeTTLSeconds == 0 {
-			return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
-		}
-	default:
-		return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
-	}
-	if override := request.ConstraintsOverride; override != nil {
-		if !boundedPurposeValue(override.ProfileID) ||
-			strings.TrimSpace(override.Justification) == "" ||
-			override.ExpiresAt.IsZero() {
-			return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
-		}
-	}
-	if _, err := eebusraw.CanonicalSHA256V1(request); err != nil {
-		if errors.Is(err, eebusraw.ErrSecretDetected) {
-			return mutationError(eebusraw.ErrorCodeV1SecretDetected, false)
-		}
-		return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
-	}
-	return nil
+	return eebusraw.ValidateFeatureDataSetRequestV1(request)
 }
 
 func validateWriteTarget(target eebusraw.FeatureTargetV1) *eebusraw.ErrorV1 {
@@ -117,12 +80,6 @@ func validateWriteTarget(target eebusraw.FeatureTargetV1) *eebusraw.ErrorV1 {
 		return mutationError(terminal.Code, terminal.Retriable)
 	}
 	return nil
-}
-
-func boundedPurposeValue(value string) bool {
-	return strings.TrimSpace(value) != "" &&
-		utf8.ValidString(value) &&
-		utf8.RuneCountInString(value) <= 512
 }
 
 func verifyRawMutationReadToken(
@@ -313,7 +270,7 @@ func rawMutationReference(referenceKey []byte, identity eebusraw.HashV1) string 
 	mac := hmac.New(sha256.New, referenceKey)
 	_, _ = mac.Write([]byte("mutation-reference-v1\x00"))
 	_, _ = mac.Write([]byte(identity))
-	return "mutation:v1:" + hex.EncodeToString(mac.Sum(nil))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
 func rawMutationPrincipalHash(principal string) (eebusraw.HashV1, error) {

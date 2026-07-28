@@ -161,10 +161,10 @@ func TestIssue85TamperedValidHashHexNibbleFailsJCSCommitmentRecomputation(t *tes
 
 func TestIssue85ReferenceTokenAndIdempotencyCanariesNeverReachJournalAuditOrErrors(t *testing.T) {
 	const (
-		readTokenCanary   = "READ-TOKEN-CANARY-85"
 		idempotencyCanary = "IDEMPOTENCY-CANARY-85"
 		backendCanary     = "BACKEND-ERROR-CANARY-85"
 	)
+	readTokenCanary := "READ-TOKEN-CANARY-85" + strings.Repeat("A", 23)
 	referenceKeyCanary := []byte("REFERENCE-KEY-CANARY-85-0123456789ABCDEF")
 	harness := newIssue85Harness(t, issue85WithReferenceKey(referenceKeyCanary))
 	binding := harness.tokens.bindings[harness.request.ReadToken]

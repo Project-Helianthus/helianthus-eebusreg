@@ -560,6 +560,9 @@ func ValidateReadAuthorizationV1(auth ReadAuthorizationV1, tool ToolV1) *ErrorV1
 }
 
 func ValidateFeaturesGetRequestV1(request FeaturesGetRequestV1) *ErrorV1 {
+	if terminal := validateCanonicalDocumentV1(request); terminal != nil {
+		return terminal
+	}
 	if err := validateFeatureLocatorV1(request.Target); err != nil {
 		return NewErrorV1(ErrorCodeV1InvalidArgument, err.Error(), false, SourceLayerV1Validation)
 	}
@@ -567,6 +570,9 @@ func ValidateFeaturesGetRequestV1(request FeaturesGetRequestV1) *ErrorV1 {
 }
 
 func ValidateFeatureDataGetRequestV1(request FeatureDataGetRequestV1) *ErrorV1 {
+	if terminal := validateCanonicalDocumentV1(request); terminal != nil {
+		return terminal
+	}
 	if len(request.Targets) < 1 || len(request.Targets) > MaximumReadTargetsV1 {
 		return NewErrorV1(
 			ErrorCodeV1InvalidArgument,
