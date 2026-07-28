@@ -55,6 +55,7 @@ type serviceBackend struct {
 	mu               sync.Mutex
 	service          runtimeService
 	handler          *runtimeServiceHandler
+	rawFeatures      *rawFeatureRuntimeBridge
 	firstTrust       *runtimeFirstTrustResources
 	outgoingAttempts *firstTrustOutgoingAttemptBridge
 	unsubscribeSPINE func() error
@@ -198,6 +199,7 @@ type runtimeObservationReducer struct {
 }
 
 var _ Backend = (*serviceBackend)(nil)
+var _ RawFeatureBackend = (*serviceBackend)(nil)
 
 var defaultRuntimeDependencies = runtimeDependencies{
 	loadMaterial:          loadProtectedRuntimeMaterial,
@@ -277,6 +279,18 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		}
 		return firstTrust.Close()
 	}
+	rawTokenIssuer, err := newRuntimeRawReadTokenIssuer(material.nodeToken)
+	if err != nil {
+		return nil, errors.Join(err, closeFirstTrust())
+	}
+	rawRuntimeEpoch, err := rawRuntimeEpochForIdentity(material.localSKI)
+	if err != nil {
+		return nil, errors.Join(err, closeFirstTrust())
+	}
+	rawConnectionGenerations, err := newRawConnectionGenerationStore(stateRoot)
+	if err != nil {
+		return nil, errors.Join(err, closeFirstTrust())
+	}
 	outgoingAttemptBridge := newFirstTrustOutgoingAttemptBridge(firstTrust)
 	if outgoingAttemptBridge == nil {
 		return nil, errors.Join(errors.New("runtime outgoing-attempt gate is unavailable"), closeFirstTrust())
@@ -308,6 +322,14 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if err := service.Setup(); err != nil {
 		return nil, closeRuntime(fmt.Errorf("setup eebus runtime service: %w", err))
 	}
+	rawFeatures := newRawFeatureRuntimeBridgeWithGenerationStore(
+		service.LocalDevice(),
+		rawRuntimeEpochProvider(firstTrust, rawRuntimeEpoch),
+		dependencies.now,
+		rawTokenIssuer,
+		rawConnectionGenerations,
+	)
+	handler.bindRawFeatureRuntime(rawFeatures)
 	if dependencies.subscribeSPINEEvents == nil {
 		return nil, closeRuntime(errors.New("runtime SPINE event dependency is incomplete"))
 	}
@@ -335,7 +357,7 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	}
 	backend := &serviceBackend{
 		service: service, handler: handler, firstTrust: firstTrust, outgoingAttempts: outgoingAttemptBridge,
-		unsubscribeSPINE: unsubscribeSPINE,
+		rawFeatures: rawFeatures, unsubscribeSPINE: unsubscribeSPINE,
 	}
 	if scoped, ok := service.(runtimeScopedService); ok {
 		if !backend.runtimeStartAuthorized() {
@@ -413,6 +435,38 @@ func (backend *serviceBackend) Run(ctx context.Context, publish func([]byte)) er
 
 func (backend *serviceBackend) runtimeStartAuthorized() bool {
 	return backend.firstTrust == nil || backend.firstTrust.coordinator != nil && backend.firstTrust.coordinator.runtimeStartAuthorized()
+}
+
+func (backend *serviceBackend) FeaturesGet(
+	ctx context.Context,
+	auth eebusraw.ReadAuthorizationV1,
+	request eebusraw.FeaturesGetRequestV1,
+) (eebusraw.FeaturesGetDataV1, *eebusraw.ErrorV1) {
+	if backend == nil || backend.rawFeatures == nil {
+		return eebusraw.FeaturesGetDataV1{}, eebusraw.NewErrorV1(
+			eebusraw.ErrorCodeV1Disconnected,
+			"raw feature runtime is unavailable",
+			true,
+			eebusraw.SourceLayerV1Runtime,
+		)
+	}
+	return backend.rawFeatures.featuresGet(ctx, auth, request)
+}
+
+func (backend *serviceBackend) FeaturesDataGet(
+	ctx context.Context,
+	auth eebusraw.ReadAuthorizationV1,
+	request eebusraw.FeatureDataGetRequestV1,
+) (eebusraw.FeatureDataGetDataV1, *eebusraw.ErrorV1) {
+	if backend == nil || backend.rawFeatures == nil {
+		return eebusraw.FeatureDataGetDataV1{}, eebusraw.NewErrorV1(
+			eebusraw.ErrorCodeV1Disconnected,
+			"raw feature runtime is unavailable",
+			true,
+			eebusraw.SourceLayerV1Runtime,
+		)
+	}
+	return backend.rawFeatures.featuresDataGet(ctx, auth, request)
 }
 
 func (backend *serviceBackend) Close() error {
@@ -563,6 +617,7 @@ type runtimeServiceHandler struct {
 	spineCancel               context.CancelFunc
 	spineWake                 chan struct{}
 	spinePending              map[string]runtimeSPINERefresh
+	rawFeatures               *rawFeatureRuntimeBridge
 }
 
 func newRuntimeServiceHandler(config RuntimeConfig, localSKI string, now func() time.Time) (*runtimeServiceHandler, error) {
@@ -594,6 +649,12 @@ func (handler *runtimeServiceHandler) setPublisher(publish func([]byte)) {
 	handler.mu.Unlock()
 }
 
+func (handler *runtimeServiceHandler) bindRawFeatureRuntime(bridge *rawFeatureRuntimeBridge) {
+	handler.mu.Lock()
+	handler.rawFeatures = bridge
+	handler.mu.Unlock()
+}
+
 func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.ServiceInterface, ski string) {
 	ski = strings.ToLower(strings.TrimSpace(ski))
 	if !handler.remoteLivenessAllowed(ski) {
@@ -604,11 +665,21 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		handler.report(err)
 		return
 	}
+	generation, allocationErr := handler.allocateRawFeatureConnectionGeneration(ski)
+	if allocationErr != nil {
+		handler.report(allocationErr)
+		return
+	}
+	if generation == 0 {
+		handler.report(errors.New("runtime connection generation is exhausted"))
+		return
+	}
 	handler.updateRemote(ski, true, func(observation *runtimeGraphObservation) {
 		if len(observation.ServiceIDs) == 0 {
 			observation.ServiceIDs = []string{"service:" + ski}
 		}
-		observation.SessionIndex++
+		observation.SessionIndex = generation
+		observation.ShipID = ""
 		observation.SessionID = runtimeSessionIdentity(*observation)
 		observation.SessionState = "connected"
 		observation.Visible = true
@@ -620,6 +691,26 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		}
 		observation.Devices = merged
 	})
+	handler.refreshRawFeatureRemote(ski)
+}
+
+func (handler *runtimeServiceHandler) allocateRawFeatureConnectionGeneration(ski string) (uint64, error) {
+	handler.mu.Lock()
+	bridge := handler.rawFeatures
+	observation := handler.observations[ski]
+	handler.mu.Unlock()
+	if observation.SessionIndex == ^uint64(0) {
+		return 0, errors.New("runtime connection generation is exhausted")
+	}
+	candidate := observation.SessionIndex + 1
+	if bridge == nil {
+		return candidate, nil
+	}
+	generation, err := bridge.allocateConnectionGeneration(ski, candidate)
+	if err != nil {
+		return 0, err
+	}
+	return generation, nil
 }
 
 func (handler *runtimeServiceHandler) RemoteSKIDisconnected(_ eebusapi.ServiceInterface, ski string) {
@@ -634,6 +725,7 @@ func (handler *runtimeServiceHandler) RemoteSKIDisconnected(_ eebusapi.ServiceIn
 		observation.SessionState = "disconnected"
 		observation.Since = handler.timestamp()
 	})
+	handler.retireRawFeatureRemote(ski)
 }
 
 func (handler *runtimeServiceHandler) VisibleRemoteServicesUpdated(_ eebusapi.ServiceInterface, entries []shipapi.RemoteService) {
@@ -737,8 +829,48 @@ func (handler *runtimeServiceHandler) ServiceShipIDUpdate(ski string, shipID str
 	}
 	handler.updateRemote(ski, false, func(observation *runtimeGraphObservation) {
 		observation.ShipID = shipID
+		if observation.SessionIndex != 0 {
+			observation.SessionID = runtimeSessionIdentity(*observation)
+		}
 		observation.Since = handler.timestamp()
 	})
+	handler.refreshRawFeatureRemote(ski)
+}
+
+func (handler *runtimeServiceHandler) refreshRawFeatureRemote(ski string) {
+	handler.mu.Lock()
+	bridge := handler.rawFeatures
+	service := handler.spineService
+	observation, ok := handler.observations[ski]
+	handler.mu.Unlock()
+	if bridge == nil || service == nil || !ok ||
+		observation.SessionState != "connected" ||
+		observation.ShipID == "" ||
+		observation.SessionIndex == 0 ||
+		service.LocalDevice() == nil {
+		return
+	}
+	remote := service.LocalDevice().RemoteDeviceForSki(ski)
+	if isNilRawRuntimeValue(remote) || remote.Address() == nil {
+		return
+	}
+	err := bridge.refreshRemote(ski, observation.ShipID, observation.SessionIndex, remote)
+	if errors.Is(err, errRawRemoteNotAdmitted) {
+		err = bridge.admitRemote(ski, observation.ShipID, observation.SessionIndex, remote)
+	}
+	if err != nil {
+		handler.report(err)
+	}
+}
+
+func (handler *runtimeServiceHandler) retireRawFeatureRemote(ski string) {
+	handler.mu.Lock()
+	bridge := handler.rawFeatures
+	observation, ok := handler.observations[ski]
+	handler.mu.Unlock()
+	if bridge != nil && ok && observation.SessionIndex > 0 {
+		bridge.retireRemote(ski, observation.SessionIndex)
+	}
 }
 
 func runtimeSessionIdentity(observation runtimeGraphObservation) string {

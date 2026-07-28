@@ -77,7 +77,7 @@ func TestIssue72RefreshesTopologyFromDetailedDiscoveryAndStopsBeforeShutdown(t *
 		now: clock.Now,
 	}
 	backend, err := acquireRuntime(context.Background(), RuntimeConfig{
-		StateRoot:  "/tmp/helianthus-eebus-issue72",
+		StateRoot:  runtimeTestStateRoot(t),
 		Interface:  "fixture-interface",
 		ListenPort: 4711,
 		Remotes:    []RuntimeRemote{{SKI: remoteSKI}},
@@ -196,9 +196,10 @@ func TestIssue72CloseWaitsForInFlightSPINECallbackAfterUnsubscribe(t *testing.T)
 	var reader eebusapi.ServiceReaderInterface
 	var eventHandler spineapi.EventHandlerInterface
 	unsubscribed := make(chan struct{})
+	stateRoot := issue84PrivateRoot(t)
 
 	backend, err := acquireRuntime(context.Background(), RuntimeConfig{
-		StateRoot:  "/tmp/helianthus-eebus-issue72-close",
+		StateRoot:  stateRoot,
 		Interface:  "fixture-interface",
 		ListenPort: 4711,
 		Remotes:    []RuntimeRemote{{SKI: remoteSKI}},
@@ -249,7 +250,13 @@ func TestIssue72CloseWaitsForInFlightSPINECallbackAfterUnsubscribe(t *testing.T)
 			Device:     remoteDevice,
 		})
 	}()
-	<-callbackEntered
+	select {
+	case <-callbackEntered:
+	case runtimeErr := <-backend.(*serviceBackend).handler.errors:
+		t.Fatalf("in-flight callback setup failed: %v", runtimeErr)
+	case <-time.After(time.Second):
+		t.Fatal("in-flight callback did not enter")
+	}
 
 	closeDone := make(chan error, 1)
 	go func() {

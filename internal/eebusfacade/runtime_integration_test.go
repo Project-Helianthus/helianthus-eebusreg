@@ -37,6 +37,7 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	clock := &runtimeTestClock{value: time.Unix(1_700_000_000, 0).UTC()}
 	service := &fakeRuntimeService{started: make(chan struct{})}
 	var handler eebusapi.ServiceReaderInterface
+	stateRoot := runtimeTestStateRoot(t)
 	dependencies := runtimeDependencies{
 		loadMaterial: func(context.Context, string) (runtimeMaterial, error) {
 			return runtimeMaterial{
@@ -54,7 +55,7 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 		now:                  clock.Now,
 	}
 	config := RuntimeConfig{
-		StateRoot:  "/tmp/helianthus-eebus-runtime-test",
+		StateRoot:  stateRoot,
 		Interface:  "fixture-interface",
 		ListenPort: 4711,
 		Remotes:    []RuntimeRemote{{SKI: remoteSKI}},
@@ -111,6 +112,8 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	clock.Advance(time.Second)
 	handler.RemoteSKIConnected(remoteService, remoteSKI)
 	connected := decodeRuntimePayload(t, waitRuntimePayload(t, updates))
+	handler.ServiceShipIDUpdate(remoteSKI, "fixture-ship-id")
+	connected = decodeRuntimePayload(t, waitRuntimePayload(t, updates))
 	if connected.Status.State != "ready" || len(connected.Sessions) != 1 || connected.Sessions[0].State != "connected" {
 		t.Fatalf("connected status=%+v sessions=%+v", connected.Status, connected.Sessions)
 	}
@@ -575,6 +578,19 @@ func (service *fakeRuntimeService) LocalDevice() spineapi.DeviceLocalInterface {
 type runtimeTestClock struct {
 	mu    sync.Mutex
 	value time.Time
+}
+
+func runtimeTestStateRoot(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
 }
 
 func (clock *runtimeTestClock) Now() time.Time {

@@ -9,9 +9,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
 
 type exactRuntimeContract interface {
+	RawFeatureRuntimeV1
 	Start(context.Context) error
 	Shutdown() error
 	Snapshot() (SnapshotV1, error)
@@ -30,6 +33,16 @@ var (
 func TestRuntimePublicLifecycleContractIsExact(t *testing.T) {
 	runtimeType := reflect.TypeOf((*Runtime)(nil)).Elem()
 	want := map[string]reflect.Type{
+		"FeaturesGet": reflect.TypeOf((func(
+			context.Context,
+			eebusraw.ReadAuthorizationV1,
+			eebusraw.FeaturesGetRequestV1,
+		) (eebusraw.FeaturesGetDataV1, *eebusraw.ErrorV1))(nil)),
+		"FeaturesDataGet": reflect.TypeOf((func(
+			context.Context,
+			eebusraw.ReadAuthorizationV1,
+			eebusraw.FeatureDataGetRequestV1,
+		) (eebusraw.FeatureDataGetDataV1, *eebusraw.ErrorV1))(nil)),
 		"Start":        reflect.TypeOf((func(context.Context) error)(nil)),
 		"Shutdown":     reflect.TypeOf((func() error)(nil)),
 		"Snapshot":     reflect.TypeOf((func() (SnapshotV1, error))(nil)),

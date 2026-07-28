@@ -126,6 +126,9 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 	}
 	symbols := root.Symbols[:0]
 	for _, symbol := range root.Symbols {
+		if symbol.Name == "RawFeatureRuntimeV1" {
+			continue
+		}
 		if symbol.Name == "PairingPolicy" || symbol.Name == "PairingPolicyClosed" {
 			continue
 		}
@@ -148,6 +151,10 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 		if symbol.Name == "Remote" {
 			symbol.Type = "struct{ SKI string }"
 			symbol.Signature = "type Remote struct{ SKI string }"
+		}
+		if symbol.Name == "Runtime" {
+			symbol.Type = "interface{ PairingState() ([]PairingObservationV1, error); Shutdown() error; Snapshot() (SnapshotV1, error); Start(context.Context) error }"
+			symbol.Signature = "type Runtime " + symbol.Type
 		}
 		if symbol.Name == "SnapshotMetaV1" {
 			symbol.Type = `struct{ Contract string "json:\"contract\""; Runtime eebusraw.RedactedID "json:\"runtime\""; LocalSKI eebusraw.RedactedID "json:\"local_ski\""; MaskTier eebusraw.MaskTier "json:\"mask_tier\""; CapturedAt time.Time "json:\"captured_at\""; DataTimestamp time.Time "json:\"data_timestamp\""; DataHash string "json:\"data_hash,omitempty\"" }`
@@ -185,7 +192,66 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 			imports[right].Qualifier+"\x00"+imports[right].Path
 	})
 	root.Imports = imports
+	for index := range projected.Packages {
+		if projected.Packages[index].Path != modulePath+"/eebusraw" {
+			continue
+		}
+		rawSymbols := projected.Packages[index].Symbols[:0]
+		for _, symbol := range projected.Packages[index].Symbols {
+			if msp0625RawSymbol(symbol) {
+				continue
+			}
+			rawSymbols = append(rawSymbols, symbol)
+		}
+		projected.Packages[index].Symbols = rawSymbols
+	}
 	return projected
+}
+
+func msp0625RawSymbol(symbol symbol) bool {
+	types := map[string]struct{}{
+		"AuthScopeV1": {}, "ChangeabilityV1": {}, "ConstraintSetV1": {},
+		"ConstraintStatusV1": {}, "ErrorCodeV1": {}, "ErrorDetailsV1": {}, "ErrorV1": {},
+		"FeatureDataGetDataV1": {}, "FeatureDataGetRequestV1": {},
+		"FeatureLocatorV1": {}, "FeatureRoleV1": {}, "FeatureTargetV1": {},
+		"FeaturesGetDataV1": {}, "FeaturesGetRequestV1": {},
+		"FullOperationsV1": {}, "FunctionDescriptorV1": {}, "HashV1": {},
+		"ObservationSourceV1": {}, "OpaqueObservationV1": {}, "OperationV1": {},
+		"ProtocolMessageV1": {}, "ReadAuthorizationV1": {}, "ReadFailureV1": {},
+		"ReadObservationV1": {}, "ReadTokenV1": {}, "RuntimeBindingV1": {},
+		"SourceLayerV1": {}, "ToolV1": {}, "TypedValueV1": {},
+	}
+	if _, ok := types[symbol.Name]; ok {
+		return true
+	}
+	if symbol.Receiver != nil {
+		if _, ok := types[symbol.Receiver.Base]; ok {
+			return true
+		}
+	}
+	for _, name := range []string{
+		"CanonicalSHA256V1",
+		"DecodeTypedValueV1",
+		"ErrSecretDetected",
+		"MaskTierRaw",
+		"MaximumReadTargetsV1",
+		"MaximumReadTimeoutMSV1",
+		"NewErrorV1",
+		"NewTypedValueV1",
+		"ValidateFeatureDataGetRequestV1",
+		"ValidateFeaturesGetRequestV1",
+		"ValidateReadAuthorizationV1",
+	} {
+		if symbol.Name == name {
+			return true
+		}
+	}
+	for typeName := range types {
+		if symbol.Type == typeName {
+			return true
+		}
+	}
+	return false
 }
 
 // This is the pre-issue77 raw snapshot surface. The issue77 contract is tested

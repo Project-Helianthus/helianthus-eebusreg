@@ -48,7 +48,11 @@ func (handler *runtimeServiceHandler) deactivateSPINEEvents() {
 	cancel := handler.spineCancel
 	handler.spineCancel = nil
 	handler.spinePending = nil
+	rawFeatures := handler.rawFeatures
 	handler.mu.Unlock()
+	if rawFeatures != nil {
+		rawFeatures.retireAll()
+	}
 	if cancel != nil {
 		cancel()
 	}
@@ -230,4 +234,5 @@ func (handler *runtimeServiceHandler) updateRemoteFromSPINEEvent(
 	handler.runtimeRevision++
 	handler.mu.Unlock()
 	handler.publishOrReport()
+	handler.refreshRawFeatureRemote(ski)
 }

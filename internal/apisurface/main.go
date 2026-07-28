@@ -867,11 +867,11 @@ func identifier(s string) bool {
 	if s == "" {
 		return false
 	}
-	if !((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= 'a' && s[0] <= 'z') || s[0] == '_') {
+	if (s[0] < 'A' || s[0] > 'Z') && (s[0] < 'a' || s[0] > 'z') && s[0] != '_' {
 		return false
 	}
 	for _, c := range s[1:] {
-		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
 			return false
 		}
 	}

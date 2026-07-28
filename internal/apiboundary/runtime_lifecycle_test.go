@@ -135,6 +135,7 @@ type OpaqueScalarV1
 type OpaqueValueV1
 type PairingObservationV1
 type PairingPolicy
+type RawFeatureRuntimeV1
 type RedactedDeviceV1
 type RedactedEntityV1
 type RedactedFeatureV1

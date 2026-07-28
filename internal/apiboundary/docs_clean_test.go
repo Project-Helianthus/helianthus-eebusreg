@@ -920,7 +920,14 @@ func writeStableContractFixture(t *testing.T, root, rawSource, evidenceSource st
 
 func writeMSP035DependencyFixture(t *testing.T, root string) {
 	t.Helper()
-	writeFile(t, root, "go.mod", "module github.com/Project-Helianthus/helianthus-eebusreg\n\ngo 1.22.0\n")
+	writeFile(t, root, "go.mod", "module github.com/Project-Helianthus/helianthus-eebusreg\n\ngo 1.22.0\n\nrequire golang.org/x/text v0.18.0\n")
+	writeFile(
+		t,
+		root,
+		"go.sum",
+		"golang.org/x/text v0.18.0 h1:XvMDiNzPAl0jr17s6W9lcaIhGUfUORdGCNsuLmPG224=\n"+
+			"golang.org/x/text v0.18.0/go.mod h1:BuEKDfySbSR4drPmRPG/7iBdf8hvFMuRexcpahXilzY=\n",
+	)
 	copyMSP035FixtureDirectory(t, root, "eebusraw")
 	copyMSP035FixtureDirectory(t, root, "eebusevidence")
 	for _, name := range []string{"raw_snapshot_v1.go", "raw_snapshot_value_v1.go", "redacted_snapshot_v1.go"} {
