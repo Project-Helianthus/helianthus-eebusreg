@@ -19,6 +19,7 @@ import (
 
 	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusmutation"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusservicebridge"
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 	shipcert "github.com/Project-Helianthus/helianthus-ship-go/cert"
@@ -56,6 +57,7 @@ type serviceBackend struct {
 	service          runtimeService
 	handler          *runtimeServiceHandler
 	rawFeatures      *rawFeatureRuntimeBridge
+	rawMutations     *eebusmutation.Coordinator
 	firstTrust       *runtimeFirstTrustResources
 	outgoingAttempts *firstTrustOutgoingAttemptBridge
 	unsubscribeSPINE func() error
@@ -64,6 +66,7 @@ type serviceBackend struct {
 	serviceStarted   bool
 	closed           bool
 	closeErr         error
+	closeDone        chan struct{}
 }
 
 type runtimeMaterial struct {
@@ -113,13 +116,19 @@ type runtimeServiceFactory func(RuntimeConfig, runtimeMaterial, eebusapi.Service
 
 type runtimeSPINEEventSubscriber func(spineapi.EventHandlerInterface) (func() error, error)
 
+type runtimeMutationCoordinatorFactory func(
+	eebusmutation.CoordinatorConfig,
+	eebusmutation.CoordinatorDependencies,
+) (*eebusmutation.Coordinator, *eebusraw.ErrorV1)
+
 type runtimeDependencies struct {
-	loadMaterial          runtimeMaterialLoader
-	newService            runtimeServiceFactory
-	subscribeSPINEEvents  runtimeSPINEEventSubscriber
-	now                   func() time.Time
-	openAssociationBridge runtimeAssociationBridgeFactory
-	startFirstTrustAdmin  runtimeFirstTrustAdminFactory
+	loadMaterial           runtimeMaterialLoader
+	newService             runtimeServiceFactory
+	subscribeSPINEEvents   runtimeSPINEEventSubscriber
+	now                    func() time.Time
+	openAssociationBridge  runtimeAssociationBridgeFactory
+	startFirstTrustAdmin   runtimeFirstTrustAdminFactory
+	newMutationCoordinator runtimeMutationCoordinatorFactory
 }
 
 type runtimeFeatureObservation struct {
@@ -200,14 +209,16 @@ type runtimeObservationReducer struct {
 
 var _ Backend = (*serviceBackend)(nil)
 var _ RawFeatureBackend = (*serviceBackend)(nil)
+var _ RawMutationBackend = (*serviceBackend)(nil)
 
 var defaultRuntimeDependencies = runtimeDependencies{
-	loadMaterial:          loadProtectedRuntimeMaterial,
-	newService:            newEEBusService,
-	subscribeSPINEEvents:  subscribeRuntimeSPINEEvents,
-	now:                   time.Now,
-	openAssociationBridge: openRuntimeAssociationBridge,
-	startFirstTrustAdmin:  startFirstTrustAdmin,
+	loadMaterial:           loadProtectedRuntimeMaterial,
+	newService:             newEEBusService,
+	subscribeSPINEEvents:   subscribeRuntimeSPINEEvents,
+	now:                    time.Now,
+	openAssociationBridge:  openRuntimeAssociationBridge,
+	startFirstTrustAdmin:   startFirstTrustAdmin,
+	newMutationCoordinator: eebusmutation.NewCoordinator,
 }
 
 func Acquire(ctx context.Context, config RuntimeConfig) (Backend, error) {
@@ -283,6 +294,7 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if err != nil {
 		return nil, errors.Join(err, closeFirstTrust())
 	}
+	rawTokenIssuer.now = dependencies.now
 	rawRuntimeEpoch, err := rawRuntimeEpochForIdentity(material.localSKI)
 	if err != nil {
 		return nil, errors.Join(err, closeFirstTrust())
@@ -322,9 +334,10 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if err := service.Setup(); err != nil {
 		return nil, closeRuntime(fmt.Errorf("setup eebus runtime service: %w", err))
 	}
+	runtimeEpoch := rawRuntimeEpochProvider(firstTrust, rawRuntimeEpoch)
 	rawFeatures := newRawFeatureRuntimeBridgeWithGenerationStore(
 		service.LocalDevice(),
-		rawRuntimeEpochProvider(firstTrust, rawRuntimeEpoch),
+		runtimeEpoch,
 		dependencies.now,
 		rawTokenIssuer,
 		rawConnectionGenerations,
@@ -355,19 +368,71 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		}
 		outgoingAttemptBridge.bindTLSLifecycle(firstTrust.facade)
 	}
+	var rawMutations *eebusmutation.Coordinator
+	if dependencies.newMutationCoordinator != nil {
+		mutationEpoch := runtimeEpoch()
+		if mutationEpoch == 0 {
+			return nil, closeRuntimeWithSPINE(errors.New("raw mutation runtime epoch is unavailable"))
+		}
+		mutationRuntimeEpoch := func() uint64 {
+			if runtimeEpoch() != mutationEpoch {
+				return 0
+			}
+			return mutationEpoch
+		}
+		mutationReferenceKey, err := loadRawMutationReferenceKey(stateRoot, mutationEpoch)
+		if err != nil {
+			return nil, closeRuntimeWithSPINE(fmt.Errorf(
+				"load raw mutation reference key: %w",
+				err,
+			))
+		}
+		var terminal *eebusraw.ErrorV1
+		rawMutations, terminal = dependencies.newMutationCoordinator(
+			eebusmutation.CoordinatorConfig{
+				StateRoot:        stateRoot,
+				RuntimeEpoch:     mutationRuntimeEpoch,
+				Now:              dependencies.now,
+				WriterWait:       50 * time.Millisecond,
+				RecoveryDeadline: 5 * time.Minute,
+				ReferenceKey:     mutationReferenceKey,
+			},
+			eebusmutation.CoordinatorDependencies{
+				Executor:         rawFeatures,
+				BindingAuthority: rawFeatures,
+				TokenVerifier:    rawTokenIssuer,
+				Policy:           rawFeatures,
+				CancelInFlight:   rawFeatures.cancelInFlight,
+			},
+		)
+		clear(mutationReferenceKey)
+		if terminal != nil {
+			return nil, closeRuntimeWithSPINE(errors.New("initialize raw mutation coordinator"))
+		}
+	}
 	backend := &serviceBackend{
 		service: service, handler: handler, firstTrust: firstTrust, outgoingAttempts: outgoingAttemptBridge,
-		rawFeatures: rawFeatures, unsubscribeSPINE: unsubscribeSPINE,
+		rawFeatures: rawFeatures, rawMutations: rawMutations, unsubscribeSPINE: unsubscribeSPINE,
+		closeDone: make(chan struct{}),
 	}
 	if scoped, ok := service.(runtimeScopedService); ok {
 		if !backend.runtimeStartAuthorized() {
+			if rawMutations != nil {
+				_ = rawMutations.Close()
+			}
 			return nil, closeRuntimeWithSPINE(errRuntimeTrustEffectsDenied)
 		}
 		if err := scoped.StartWithPolicy(); err != nil {
+			if rawMutations != nil {
+				_ = rawMutations.Close()
+			}
 			return nil, closeRuntimeWithSPINE(fmt.Errorf("start scoped eebus runtime service: %w", err))
 		}
 		terminal := scoped.ListenerTerminal()
 		if terminal == nil {
+			if rawMutations != nil {
+				_ = rawMutations.Close()
+			}
 			return nil, closeRuntimeWithSPINE(errors.New("scoped eebus runtime service omitted listener terminal signal"))
 		}
 		backend.listenerTerminal = terminal
@@ -469,13 +534,82 @@ func (backend *serviceBackend) FeaturesDataGet(
 	return backend.rawFeatures.featuresDataGet(ctx, auth, request)
 }
 
-func (backend *serviceBackend) Close() error {
+func (backend *serviceBackend) FeaturesDataSet(
+	ctx context.Context,
+	auth eebusraw.WriteAuthorizationV1,
+	request eebusraw.FeatureDataSetRequestV1,
+) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+	coordinator, terminal := backend.mutationCoordinator()
+	if terminal != nil {
+		return eebusraw.MutationV1{}, terminal
+	}
+	return coordinator.FeaturesDataSet(ctx, auth, request)
+}
+
+func (backend *serviceBackend) mutationCoordinator() (
+	*eebusmutation.Coordinator,
+	*eebusraw.ErrorV1,
+) {
+	if backend == nil {
+		return nil, rawMutationFacadeError(
+			eebusraw.ErrorCodeV1Disconnected,
+			true,
+		)
+	}
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
+	if backend.closed || backend.rawMutations == nil {
+		return nil, rawMutationFacadeError(eebusraw.ErrorCodeV1Disconnected, true)
+	}
+	return backend.rawMutations, nil
+}
+
+func (backend *serviceBackend) MutationsGet(
+	ctx context.Context,
+	auth eebusraw.ReadAuthorizationV1,
+	request eebusraw.MutationGetRequestV1,
+) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+	coordinator, terminal := backend.mutationCoordinator()
+	if terminal != nil {
+		return eebusraw.MutationV1{}, terminal
+	}
+	return coordinator.MutationsGet(ctx, auth, request)
+}
+
+func (backend *serviceBackend) MutationsRollback(
+	ctx context.Context,
+	auth eebusraw.WriteAuthorizationV1,
+	request eebusraw.MutationRollbackRequestV1,
+) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+	coordinator, terminal := backend.mutationCoordinator()
+	if terminal != nil {
+		return eebusraw.MutationV1{}, terminal
+	}
+	return coordinator.MutationsRollback(ctx, auth, request)
+}
+
+func (backend *serviceBackend) Close() error {
+	backend.mu.Lock()
 	if backend.closed {
-		return backend.closeErr
+		closeDone := backend.closeDone
+		backend.mu.Unlock()
+		if closeDone != nil {
+			<-closeDone
+		}
+		backend.mu.Lock()
+		closeErr := backend.closeErr
+		backend.mu.Unlock()
+		return closeErr
 	}
 	backend.closed = true
+	coordinator := backend.rawMutations
+	backend.mu.Unlock()
+	var mutationErr error
+	if coordinator != nil {
+		if terminal := coordinator.Close(); terminal != nil {
+			mutationErr = errors.New("close raw mutation coordinator")
+		}
+	}
 	if backend.handler != nil {
 		backend.handler.deactivateSPINEEvents()
 	}
@@ -497,8 +631,14 @@ func (backend *serviceBackend) Close() error {
 	if backend.firstTrust != nil {
 		trustErr = backend.firstTrust.Close()
 	}
-	backend.closeErr = errors.Join(eventErr, attemptErr, trustErr)
-	return backend.closeErr
+	backend.mu.Lock()
+	backend.closeErr = errors.Join(mutationErr, eventErr, attemptErr, trustErr)
+	closeErr := backend.closeErr
+	if backend.closeDone != nil {
+		close(backend.closeDone)
+	}
+	backend.mu.Unlock()
+	return closeErr
 }
 
 func loadProtectedRuntimeMaterial(ctx context.Context, stateRoot string) (runtimeMaterial, error) {

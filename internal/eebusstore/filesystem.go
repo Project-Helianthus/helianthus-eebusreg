@@ -95,6 +95,8 @@ var generationNamePattern = regexp.MustCompile(`^g-[0-9]{20}\.json$`)
 var generationTempPattern = regexp.MustCompile(`^\.tmp-generation-[a-z0-9]+$`)
 var manifestTempPattern = regexp.MustCompile(`^\.tmp-manifest-[a-z0-9]+$`)
 
+const mutationStateDirectory = "eebusmutation"
+
 func newNativeSyscallBackend(hook syscallHook) (*nativeSyscallBackend, error) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		return nil, newStoreError(outcomeFilesystemCapabilityUnavailable, "select_backend", errors.New("unsupported platform"))
@@ -244,6 +246,12 @@ func inspectBootstrapSubset(root *os.File) (bool, error) {
 			if len(generationNames) != 0 {
 				return false, nil
 			}
+		case mutationStateDirectory:
+			mutationState, _, err := openVerifiedAt(root, name, true, false)
+			if err != nil {
+				return false, err
+			}
+			_ = mutationState.Close()
 		default:
 			return false, nil
 		}

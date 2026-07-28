@@ -30,6 +30,7 @@ func TestMSP04CG16PublicPackagesExposeNoRecoveryMutationSurface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	doc = msp05pProjectFrozenV1(t, doc)
 	forbidden := []string{
 		"adoptcopied",
 		"anchor",

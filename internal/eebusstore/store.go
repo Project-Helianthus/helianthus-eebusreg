@@ -313,6 +313,13 @@ func (opened *store) verifyLayout() (layoutSnapshot, error) {
 		switch {
 		case name == "LOCK", name == "generations":
 			continue
+		case name == mutationStateDirectory:
+			directory, _, err := openVerifiedAt(opened.root, name, true, false)
+			if err != nil {
+				return snapshot, err
+			}
+			_ = directory.Close()
+			continue
 		case name == "MANIFEST.A", name == "MANIFEST.B":
 			payload, err := readVerifiedFile(opened.root, name, maxManifestEnvelopeBytes)
 			if err != nil {

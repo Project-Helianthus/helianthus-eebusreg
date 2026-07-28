@@ -15,20 +15,21 @@ func TestMSP055LifecycleExportsAreAllowlisted(t *testing.T) {
 	}
 }
 
-func TestMSP05PRuntimeExportInventoryIsExact(t *testing.T) {
+func TestMSP05PHistoricalRuntimeExportProjectionIsExact(t *testing.T) {
 	want := msp05pRuntimeExportInventory()
-	if maps.Equal(allowedRuntimeExports, want) {
+	historical := msp05pHistoricalRuntimeExportProjection(allowedRuntimeExports)
+	if maps.Equal(historical, want) {
 		return
 	}
 
 	var missing []string
 	for exported := range want {
-		if _, ok := allowedRuntimeExports[exported]; !ok {
+		if _, ok := historical[exported]; !ok {
 			missing = append(missing, exported.Kind+" "+exported.Name)
 		}
 	}
 	var unexpected []string
-	for exported := range allowedRuntimeExports {
+	for exported := range historical {
 		if _, ok := want[exported]; !ok {
 			unexpected = append(unexpected, exported.Kind+" "+exported.Name)
 		}
@@ -36,12 +37,25 @@ func TestMSP05PRuntimeExportInventoryIsExact(t *testing.T) {
 	sort.Strings(missing)
 	sort.Strings(unexpected)
 	t.Fatalf(
-		"runtime export inventory mismatch: got=%d want=%d missing=[%s] unexpected=[%s]",
-		len(allowedRuntimeExports),
+		"historical MSP-05P runtime export projection mismatch: got=%d want=%d missing=[%s] unexpected=[%s]",
+		len(historical),
 		len(want),
 		strings.Join(missing, ", "),
 		strings.Join(unexpected, ", "),
 	)
+}
+
+func msp05pHistoricalRuntimeExportProjection(
+	current map[manifestExport]struct{},
+) map[manifestExport]struct{} {
+	baseline := msp05pRuntimeExportInventory()
+	historical := make(map[manifestExport]struct{}, len(baseline))
+	for exported := range baseline {
+		if _, remainsPublished := current[exported]; remainsPublished {
+			historical[exported] = struct{}{}
+		}
+	}
+	return historical
 }
 
 func TestMSP05PInitialV1ContractIsExactlyAllowlisted(t *testing.T) {

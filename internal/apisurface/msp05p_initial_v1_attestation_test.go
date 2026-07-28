@@ -126,7 +126,7 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 	}
 	symbols := root.Symbols[:0]
 	for _, symbol := range root.Symbols {
-		if symbol.Name == "RawFeatureRuntimeV1" {
+		if symbol.Name == "RawFeatureRuntimeV1" || symbol.Name == "RawMutationRuntimeV1" {
 			continue
 		}
 		if symbol.Name == "PairingPolicy" || symbol.Name == "PairingPolicyClosed" {
@@ -220,6 +220,14 @@ func msp0625RawSymbol(symbol symbol) bool {
 		"ProtocolMessageV1": {}, "ReadAuthorizationV1": {}, "ReadFailureV1": {},
 		"ReadObservationV1": {}, "ReadTokenV1": {}, "RuntimeBindingV1": {},
 		"SourceLayerV1": {}, "ToolV1": {}, "TypedValueV1": {},
+		"WriteAuthorizationV1": {}, "ModeV1": {}, "MutationStateV1": {},
+		"ConstraintOverrideV1": {}, "FeatureDataSetRequestV1": {},
+		"MutationGetRequestV1": {}, "MutationRollbackRequestV1": {},
+		"AuditTransitionV1": {}, "ApplyVerificationV1": {},
+		"RollbackVerificationV1": {}, "ConflictEvidenceV1": {},
+		"NoContactEvidenceV1": {}, "RejectionVerificationV1": {},
+		"NoEffectVerificationV1": {}, "OutcomeEvidenceV1": {},
+		"RollbackV1": {}, "MutationV1": {},
 	}
 	if _, ok := types[symbol.Name]; ok {
 		return true
@@ -241,6 +249,7 @@ func msp0625RawSymbol(symbol symbol) bool {
 		"ValidateFeatureDataGetRequestV1",
 		"ValidateFeaturesGetRequestV1",
 		"ValidateReadAuthorizationV1",
+		"ValidateWriteAuthorizationV1",
 	} {
 		if symbol.Name == name {
 			return true

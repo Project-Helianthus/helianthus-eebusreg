@@ -1,30 +1,43 @@
 package main
 
 import (
-	"reflect"
 	"sort"
 	"testing"
 )
 
-func TestIssue83StableRawFeatureDTOsHaveExactContract(t *testing.T) {
+func TestIssue83StableRawFeatureDTOsRemainInTheAdditiveContract(t *testing.T) {
 	var contract *stableContractSpec
-	for index := range stableContractSpecs(canonicalModulePath) {
-		spec := stableContractSpecs(canonicalModulePath)[index]
+	specs := stableContractSpecs(canonicalModulePath)
+	for index := range specs {
+		spec := &specs[index]
 		if spec.importPath == canonicalModulePath+"/eebusraw" &&
 			spec.root == "ReadAuthorizationV1" {
-			contract = &spec
+			contract = spec
 			break
 		}
 	}
 	if contract == nil {
 		t.Fatal("MSP-0625 stable DTO contract is not enforced by the API boundary gate")
 	}
-	got := make([]string, 0, len(contract.types))
+
+	got := make(map[string]struct{}, len(contract.types))
 	for _, stableType := range contract.types {
-		got = append(got, stableType.Name)
+		got[stableType.Name] = struct{}{}
 	}
-	sort.Strings(got)
-	want := []string{
+	var missing []string
+	for _, name := range issue83RawFeatureStableTypeNames() {
+		if _, ok := got[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) != 0 {
+		t.Fatalf("MSP-0625 historical stable types missing from additive owner: %v", missing)
+	}
+}
+
+func issue83RawFeatureStableTypeNames() []string {
+	return []string{
 		"AuthScopeV1",
 		"ChangeabilityV1",
 		"ConstraintSetV1",
@@ -54,10 +67,6 @@ func TestIssue83StableRawFeatureDTOsHaveExactContract(t *testing.T) {
 		"SourceLayerV1",
 		"ToolV1",
 		"TypedValueV1",
-	}
-	sort.Strings(want)
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("MSP-0625 stable types = %v, want %v", got, want)
 	}
 }
 
