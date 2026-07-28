@@ -107,6 +107,73 @@ func TestIssue84ProductionAllocationFailureFailsClosedBeforeRawAdmission(t *test
 	}
 }
 
+func TestIssue84AllocationFailurePreservesPriorSessionProjectionWithoutPublishing(t *testing.T) {
+	store := rawConnectionGenerationStoreFunc(func(uint64, string, uint64) error {
+		return errors.New("injected persistence failure")
+	})
+	fixture := newIssue83RawBridgeFixture(t)
+	bridge := newRawFeatureRuntimeBridgeWithGenerationStore(
+		fixture.local,
+		func() uint64 { return 9 },
+		time.Now,
+		fixture.bridge.tokenIssuer,
+		store,
+	)
+	handler, _ := newIssue84ProductionHandler(t, fixture, bridge)
+	defer func() {
+		handler.deactivateSPINEEvents()
+		handler.waitForSPINEEvents()
+	}()
+
+	prior := handler.newRemoteObservation(fixture.remoteSKI)
+	prior.SessionID = "session:prior-valid:4"
+	prior.SessionState = "disconnected"
+	prior.SessionIndex = 4
+	prior.ShipID = "prior-valid"
+	prior.Visible = true
+	prior.ServiceIDs = []string{"service:" + fixture.remoteSKI}
+	if err := handler.reducer.Replace(prior); err != nil {
+		t.Fatal(err)
+	}
+	handler.mu.Lock()
+	handler.observations[fixture.remoteSKI] = cloneRuntimeGraphObservation(prior)
+	handler.runtimeRevision = 7
+	handler.publishedRuntimeRevision = 7
+	published := 0
+	handler.publish = func([]byte) {
+		published++
+	}
+	handler.mu.Unlock()
+
+	handler.RemoteSKIConnected(eebusServiceWithFeatureGraph(t, fixture.remoteSKI), fixture.remoteSKI)
+
+	handler.mu.Lock()
+	got := cloneRuntimeGraphObservation(handler.observations[fixture.remoteSKI])
+	revision := handler.runtimeRevision
+	handler.mu.Unlock()
+	if !reflect.DeepEqual(got, prior) {
+		t.Fatalf("allocation failure changed prior session projection:\n got: %+v\nwant: %+v", got, prior)
+	}
+	if revision != 7 {
+		t.Fatalf("allocation failure advanced runtime revision to %d, want 7", revision)
+	}
+	if published != 0 {
+		t.Fatalf("allocation failure published %d connected/session projections, want zero", published)
+	}
+	graph := handler.reducer.Snapshot()
+	if len(graph) != 1 || !reflect.DeepEqual(graph[0], prior) {
+		t.Fatalf("allocation failure changed reducer projection: %+v", graph)
+	}
+	select {
+	case err := <-handler.errors:
+		if err == nil {
+			t.Fatal("allocation failure reported a nil error")
+		}
+	default:
+		t.Fatal("allocation failure was not reported")
+	}
+}
+
 func TestIssue84IndependentGenerationStoresExcludeDuplicateAdvance(t *testing.T) {
 	root := issue84PrivateRoot(t)
 	first, err := newRawConnectionGenerationStore(root)
@@ -416,6 +483,144 @@ func TestIssue84TypedExecutorErrorPreservesBoundedUnknownFields(t *testing.T) {
 	}
 }
 
+func TestIssue84RawDTOsRetainOnlyFunctionDataUnknownFields(t *testing.T) {
+	const (
+		functionPath  = "/datagram/payload/cmd/0/measurementListData/futureValue"
+		functionValue = "function-data-marker"
+	)
+	fields := []spineapi.CorrelatedUnknownField{
+		{
+			Path:  "/rootExtension",
+			Value: spineapi.CorrelatedUnknownValue(`"root-transcript-marker"`),
+		},
+		{
+			Path:  "/datagram/frameExtension",
+			Value: spineapi.CorrelatedUnknownValue(`"frame-transcript-marker"`),
+		},
+		{
+			Path:  "/datagram/header/future",
+			Value: spineapi.CorrelatedUnknownValue(`"header-transcript-marker"`),
+		},
+		{
+			Path:  "/datagram/payload/futureEnvelope",
+			Value: spineapi.CorrelatedUnknownValue(`"payload-envelope-marker"`),
+		},
+		{
+			Path:  "/transport/transcript/0",
+			Value: spineapi.CorrelatedUnknownValue(`"transport-transcript-marker"`),
+		},
+		{
+			Path:  "/datagram/payload/cmd/1/futureValue",
+			Value: spineapi.CorrelatedUnknownValue(`"other-command-marker"`),
+		},
+		{
+			Path:  functionPath,
+			Value: spineapi.CorrelatedUnknownValue(`"` + functionValue + `"`),
+		},
+	}
+	for _, test := range []struct {
+		name         string
+		executorErr  error
+		wantTerminal eebusraw.ErrorCodeV1
+	}{
+		{name: "successful read"},
+		{
+			name:         "typed remote error",
+			executorErr:  &spineapi.CorrelatedRemoteError{ErrorNumber: 1},
+			wantTerminal: eebusraw.ErrorCodeV1RemoteError,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newIssue83RawBridgeFixture(t)
+			fixture.sender.roundTrip = func(
+				_ context.Context,
+				request spineapi.CorrelatedRequest,
+			) (spineapi.CorrelatedResponse, error) {
+				response := issue83MeasurementReply(request, 41, 11, 215)
+				response.UnknownFields = fields
+				return response, test.executorErr
+			}
+			target := issue83TargetFromLocator(fixture.locators[0])
+			data, terminal := fixture.bridge.featuresDataGet(
+				context.Background(),
+				issue83FacadeAuthorization(eebusraw.ToolV1FeaturesDataGet),
+				eebusraw.FeatureDataGetRequestV1{
+					Targets:   []eebusraw.FeatureTargetV1{target},
+					TimeoutMS: 1000,
+				},
+			)
+
+			if test.executorErr == nil {
+				if terminal != nil {
+					t.Fatal(terminal)
+				}
+				if len(data.Results) != 1 {
+					t.Fatalf("successful raw READ results = %+v, want one", data.Results)
+				}
+				observation := data.Results[0]
+				if !reflect.DeepEqual(observation.Target, target) {
+					t.Fatalf("unknown filtering changed exact target:\n got: %+v\nwant: %+v", observation.Target, target)
+				}
+				if observation.RawRequest.Function != target.Function ||
+					observation.RawResponse.Function != target.Function {
+					t.Fatalf(
+						"unknown filtering changed function metadata: request=%q response=%q target=%q",
+						observation.RawRequest.Function,
+						observation.RawResponse.Function,
+						target.Function,
+					)
+				}
+				assertIssue84FunctionDataUnknowns(t, "RawRequest", observation.RawRequest.Unknown, nil)
+				assertIssue84FunctionDataUnknowns(
+					t,
+					"RawResponse",
+					observation.RawResponse.Unknown,
+					[]string{functionPath},
+				)
+				assertIssue84FunctionDataUnknowns(
+					t,
+					"ReadObservation",
+					observation.Unknown,
+					[]string{functionPath},
+				)
+				encoded, err := json.Marshal(observation)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertIssue84NoTranscriptMarkers(t, encoded)
+				if !bytes.Contains(encoded, []byte(functionValue)) {
+					t.Fatalf("successful raw READ omitted bounded function-data unknown: %s", encoded)
+				}
+				return
+			}
+
+			if !reflect.DeepEqual(data, eebusraw.FeatureDataGetDataV1{}) {
+				t.Fatalf("typed error exposed successful raw data: %+v", data)
+			}
+			if terminal == nil || terminal.Code != test.wantTerminal {
+				t.Fatalf("typed error terminal = %+v, want %s", terminal, test.wantTerminal)
+			}
+			if terminal.Details == nil {
+				t.Fatal("typed error omitted bounded function-data unknown details")
+			}
+			assertIssue84FunctionDataUnknowns(
+				t,
+				"ErrorDetails",
+				terminal.Details.Unknown,
+				[]string{functionPath},
+			)
+			encoded, err := json.Marshal(terminal)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertIssue84NoTranscriptMarkers(t, encoded)
+			if !bytes.Contains(encoded, []byte(functionValue)) {
+				t.Fatalf("typed error omitted bounded function-data unknown: %s", encoded)
+			}
+		})
+	}
+}
+
 func TestIssue84SecretDecodeErrorUsesStableSecretCode(t *testing.T) {
 	terminal := translateRawExecutorError(fmt.Errorf("wrapped decode classification: %w", eebusraw.ErrSecretDetected))
 	if terminal == nil || terminal.Code != eebusraw.ErrorCodeV1SecretDetected {
@@ -478,6 +683,44 @@ func TestIssue84RemovedFeatureCannotEscapeAsLiveCache(t *testing.T) {
 	}
 	if data.Source == eebusraw.ObservationSourceV1Live {
 		t.Fatalf("removed feature escaped stale inventory as source=live: %+v", data)
+	}
+}
+
+func assertIssue84FunctionDataUnknowns(
+	t *testing.T,
+	label string,
+	observations []eebusraw.OpaqueObservationV1,
+	wantPaths []string,
+) {
+	t.Helper()
+	gotPaths := make([]string, len(observations))
+	for index, observation := range observations {
+		gotPaths[index] = observation.Path
+	}
+	if len(gotPaths) != len(wantPaths) {
+		t.Fatalf("%s unknown paths = %#v, want %#v", label, gotPaths, wantPaths)
+	}
+	for index := range gotPaths {
+		if gotPaths[index] == wantPaths[index] {
+			continue
+		}
+		t.Fatalf("%s unknown paths = %#v, want %#v", label, gotPaths, wantPaths)
+	}
+}
+
+func assertIssue84NoTranscriptMarkers(t *testing.T, encoded []byte) {
+	t.Helper()
+	for _, marker := range []string{
+		"root-transcript-marker",
+		"frame-transcript-marker",
+		"header-transcript-marker",
+		"payload-envelope-marker",
+		"transport-transcript-marker",
+		"other-command-marker",
+	} {
+		if bytes.Contains(encoded, []byte(marker)) {
+			t.Fatalf("raw DTO leaked %q: %s", marker, encoded)
+		}
 	}
 }
 
