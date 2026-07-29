@@ -3,6 +3,7 @@ package eebusfacade
 import (
 	"bytes"
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"sync"
@@ -197,6 +198,11 @@ func TestIssue89AcquireFailsClosedWithoutUsableLocalReadSource(t *testing.T) {
 
 			if err == nil {
 				t.Errorf("acquireRuntime() error = nil, want fail-closed source error")
+			} else {
+				var sourceError *runtimeLocalReadSourceError
+				if !errors.As(err, &sourceError) {
+					t.Errorf("acquireRuntime() error = %T %v, want typed local source error", err, err)
+				}
 			}
 			if backend != nil {
 				t.Errorf("acquireRuntime() backend = %T, want nil", backend)

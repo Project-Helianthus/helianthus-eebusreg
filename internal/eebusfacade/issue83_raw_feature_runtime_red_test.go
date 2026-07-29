@@ -981,14 +981,14 @@ func newIssue83RawBridgeFixture(t *testing.T) issue83RawBridgeFixture {
 	)
 	localEntity := spine.NewEntityLocal(
 		local,
-		spinemodel.EntityTypeTypeDeviceInformation,
+		spinemodel.EntityTypeTypeCEM,
 		[]spinemodel.AddressEntityType{1},
 		time.Second,
 	)
 	localFeature := spine.NewFeatureLocal(
 		1,
 		localEntity,
-		spinemodel.FeatureTypeTypeMeasurement,
+		spinemodel.FeatureTypeTypeGeneric,
 		spinemodel.RoleTypeClient,
 	)
 	localEntity.AddFeature(localFeature)

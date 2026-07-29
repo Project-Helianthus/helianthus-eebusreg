@@ -520,6 +520,7 @@ type msp04crService struct {
 	expectedSKI   string
 	ackDisconnect bool
 	reader        *runtimeServiceReader
+	localDevice   spineapi.DeviceLocalInterface
 }
 
 func newMSP04CRService() *msp04crService { return &msp04crService{ackDisconnect: true} }
@@ -529,12 +530,19 @@ func (service *msp04crService) Setup() error {
 	return nil
 }
 
-func (service *msp04crService) Start()                             { service.record("listener_start") }
-func (service *msp04crService) Shutdown()                          { service.record("shutdown") }
-func (service *msp04crService) SetAutoAccept(bool)                 {}
-func (service *msp04crService) SetPairingRegistration(bool) error  { return nil }
-func (*msp04crService) LocalService() *shipapi.ServiceDetails      { return nil }
-func (*msp04crService) LocalDevice() spineapi.DeviceLocalInterface { return nil }
+func (service *msp04crService) Start()                            { service.record("listener_start") }
+func (service *msp04crService) Shutdown()                         { service.record("shutdown") }
+func (service *msp04crService) SetAutoAccept(bool)                {}
+func (service *msp04crService) SetPairingRegistration(bool) error { return nil }
+func (*msp04crService) LocalService() *shipapi.ServiceDetails     { return nil }
+func (service *msp04crService) LocalDevice() spineapi.DeviceLocalInterface {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.localDevice == nil {
+		service.localDevice = runtimeTestLocalReadDevice()
+	}
+	return service.localDevice
+}
 
 func (service *msp04crService) RegisterRemoteSKI(ski string) {
 	service.recordExactSKI("register_remote", ski)

@@ -974,7 +974,7 @@ func (bridge *rawFeatureRuntimeBridge) inventoryForFeatureLocked(
 			DeviceAddress:  string(*feature.Address().Device),
 			EntityAddress:  entity,
 			FeatureAddress: uint64(*feature.Address().Feature),
-			FeatureType:    strings.ToLower(string(feature.Type())),
+			FeatureType:    string(feature.Type()),
 			FeatureRole:    eebusraw.FeatureRoleV1(feature.Role()),
 		},
 		Functions: functions,
@@ -1024,7 +1024,7 @@ func exactRawRemoteFeature(
 	address := rawModelFeatureAddress(locator.DeviceAddress, locator.EntityAddress, locator.FeatureAddress)
 	feature := lease.remote.FeatureByAddress(&address)
 	if isNilRawRuntimeValue(feature) ||
-		!strings.EqualFold(string(feature.Type()), locator.FeatureType) ||
+		string(feature.Type()) != locator.FeatureType ||
 		feature.Role() != spinemodel.RoleType(locator.FeatureRole) {
 		return nil, errors.New("exact remote feature does not match")
 	}
@@ -1106,38 +1106,38 @@ func exactRawSourceAddress(
 	local spineapi.DeviceLocalInterface,
 	target spineapi.FeatureRemoteInterface,
 ) (spinemodel.FeatureAddressType, bool) {
-	if isNilRawRuntimeValue(local) || local.Address() == nil {
+	if isNilRawRuntimeValue(local) || isNilRawRuntimeValue(target) ||
+		target.Role() != spinemodel.RoleTypeServer {
 		return spinemodel.FeatureAddressType{}, false
 	}
-	var candidates []spinemodel.FeatureAddressType
-	for _, entity := range local.Entities() {
-		if isNilRawRuntimeValue(entity) {
-			continue
-		}
-		for _, feature := range entity.Features() {
-			if isNilRawRuntimeValue(feature) || feature.Address() == nil {
-				continue
-			}
-			compatibleType := feature.Type() == target.Type() ||
-				feature.Type() == spinemodel.FeatureTypeTypeGeneric
-			compatibleRole := target.Role() == spinemodel.RoleTypeServer &&
-				feature.Role() == spinemodel.RoleTypeClient ||
-				target.Role() == spinemodel.RoleTypeClient &&
-					feature.Role() == spinemodel.RoleTypeServer ||
-				target.Role() == spinemodel.RoleTypeSpecial &&
-					feature.Role() == spinemodel.RoleTypeSpecial
-			if compatibleType && compatibleRole {
-				candidates = append(candidates, cloneRawFeatureAddress(*feature.Address()))
-			}
-		}
-	}
-	sort.Slice(candidates, func(left, right int) bool {
-		return candidates[left].String() < candidates[right].String()
-	})
-	if len(candidates) == 0 {
+	localAddress := local.Address()
+	if localAddress == nil || *localAddress == "" {
 		return spinemodel.FeatureAddressType{}, false
 	}
-	return candidates[0], true
+	cem := local.EntityForType(spinemodel.EntityTypeTypeCEM)
+	if isNilRawRuntimeValue(cem) || cem.EntityType() != spinemodel.EntityTypeTypeCEM {
+		return spinemodel.FeatureAddressType{}, false
+	}
+	cemAddress := cem.Address()
+	if cemAddress == nil || cemAddress.Device == nil ||
+		*cemAddress.Device != *localAddress || len(cemAddress.Entity) == 0 {
+		return spinemodel.FeatureAddressType{}, false
+	}
+	source := cem.FeatureOfTypeAndRole(
+		spinemodel.FeatureTypeTypeGeneric,
+		spinemodel.RoleTypeClient,
+	)
+	if isNilRawRuntimeValue(source) || source.Type() != spinemodel.FeatureTypeTypeGeneric ||
+		source.Role() != spinemodel.RoleTypeClient {
+		return spinemodel.FeatureAddressType{}, false
+	}
+	sourceAddress := source.Address()
+	if sourceAddress == nil || sourceAddress.Device == nil || sourceAddress.Feature == nil ||
+		*sourceAddress.Device != *localAddress ||
+		!runtimeEntityAddressEqual(sourceAddress.Entity, cemAddress.Entity) {
+		return spinemodel.FeatureAddressType{}, false
+	}
+	return cloneRawFeatureAddress(*sourceAddress), true
 }
 
 func rawExactUnknownObservations(

@@ -312,13 +312,14 @@ func TestIssue48CloseQuiescesServiceBeforeCancellingPendingPairing(t *testing.T)
 }
 
 type issue48ReentrantService struct {
-	mu         sync.Mutex
-	events     []string
-	cancelled  []string
-	cancels    int
-	registers  int
-	onCancel   func(string)
-	onRegister func(string)
+	mu          sync.Mutex
+	events      []string
+	cancelled   []string
+	cancels     int
+	registers   int
+	onCancel    func(string)
+	onRegister  func(string)
+	localDevice spineapi.DeviceLocalInterface
 }
 
 func (*issue48ReentrantService) SetAutoAccept(bool) {}
@@ -396,6 +397,11 @@ func (*issue48ReentrantService) Setup() error { return nil }
 func (*issue48ReentrantService) Start()       {}
 
 func (*issue48ReentrantService) LocalService() *shipapi.ServiceDetails { return nil }
-func (*issue48ReentrantService) LocalDevice() spineapi.DeviceLocalInterface {
-	return nil
+func (service *issue48ReentrantService) LocalDevice() spineapi.DeviceLocalInterface {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.localDevice == nil {
+		service.localDevice = runtimeTestLocalReadDevice()
+	}
+	return service.localDevice
 }

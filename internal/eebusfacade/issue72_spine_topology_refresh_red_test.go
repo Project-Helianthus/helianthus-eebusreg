@@ -192,7 +192,6 @@ func TestIssue72CloseWaitsForInFlightSPINECallbackAfterUnsubscribe(t *testing.T)
 	remoteDevice.EXPECT().FeatureSet().Return(nil)
 	remoteDevice.EXPECT().Entities().Return(nil)
 	remoteDevice.EXPECT().UseCases().Return(nil)
-	service.localDevice = localDevice
 	var reader eebusapi.ServiceReaderInterface
 	var eventHandler spineapi.EventHandlerInterface
 	unsubscribed := make(chan struct{})
@@ -228,6 +227,9 @@ func TestIssue72CloseWaitsForInFlightSPINECallbackAfterUnsubscribe(t *testing.T)
 	if err != nil {
 		t.Fatalf("acquire runtime: %v", err)
 	}
+	service.mu.Lock()
+	service.localDevice = localDevice
+	service.mu.Unlock()
 
 	connectedService := eebusmocks.NewServiceInterface(t)
 	connectedService.EXPECT().LocalDevice().Return(localDevice)
