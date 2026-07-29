@@ -46,7 +46,7 @@ func TestIssue93ProductionPolicyAttestsOneExactCurrentLabProfile(t *testing.T) {
 }
 
 func TestIssue93ProductionCompositionBindsIndependentProfileCopies(t *testing.T) {
-	var source eebusmutation.LabProfile
+	var source RuntimeLabProfile
 	var coordinatorProfiles []eebusmutation.LabProfile
 	var policyBridge *rawFeatureRuntimeBridge
 	harness := newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
@@ -71,7 +71,7 @@ func TestIssue93ProductionCompositionBindsIndependentProfileCopies(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		source = eebusmutation.LabProfile{
+		source = RuntimeLabProfile{
 			Contract:               eebusmutation.LabProfileContract,
 			ProfileID:              "issue93-composition-profile",
 			Target:                 target,
@@ -88,7 +88,7 @@ func TestIssue93ProductionCompositionBindsIndependentProfileCopies(t *testing.T)
 			ExpiresAt: time.Unix(1_900_000_000, 0).UTC(),
 		}
 		setup.configureRuntime = func(config *RuntimeConfig) {
-			config.LabProfiles = []eebusmutation.LabProfile{source}
+			config.LabProfiles = []RuntimeLabProfile{source}
 		}
 		setup.configureDependencies = func(dependencies *runtimeDependencies) {
 			productionFactory := dependencies.newMutationCoordinator

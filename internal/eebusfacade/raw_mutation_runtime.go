@@ -399,6 +399,29 @@ func cloneRuntimeMutationLabProfiles(
 	return cloned
 }
 
+func mutationLabProfilesForRuntime(
+	profiles []RuntimeLabProfile,
+) []eebusmutation.LabProfile {
+	if profiles == nil {
+		return nil
+	}
+	converted := make([]eebusmutation.LabProfile, len(profiles))
+	for index, profile := range profiles {
+		converted[index] = eebusmutation.LabProfile{
+			Contract:               profile.Contract,
+			ProfileID:              profile.ProfileID,
+			Target:                 profile.Target.Clone(),
+			AllowedValueHashes:     append([]eebusraw.HashV1(nil), profile.AllowedValueHashes...),
+			RollbackValueHash:      profile.RollbackValueHash,
+			MaximumProbeTTLSeconds: profile.MaximumProbeTTLSeconds,
+			SafetyPredicates:       append([]string(nil), profile.SafetyPredicates...),
+			EvidenceHashes:         append([]eebusraw.HashV1(nil), profile.EvidenceHashes...),
+			ExpiresAt:              profile.ExpiresAt,
+		}
+	}
+	return converted
+}
+
 func cloneRuntimeMutationLabProfile(
 	profile eebusmutation.LabProfile,
 ) eebusmutation.LabProfile {

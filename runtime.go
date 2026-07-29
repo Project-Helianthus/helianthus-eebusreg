@@ -13,7 +13,6 @@ import (
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
-	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusmutation"
 )
 
 var (
@@ -390,7 +389,7 @@ func newFacadeRuntimeBackend(ctx context.Context, config Config) (runtimeBackend
 			Allowlisted: true,
 		}
 	}
-	labProfiles := make([]eebusmutation.LabProfile, len(config.MutationLabProfiles))
+	labProfiles := make([]eebusfacade.RuntimeLabProfile, len(config.MutationLabProfiles))
 	for index, profile := range config.MutationLabProfiles {
 		labProfiles[index] = mutationLabProfileForFacade(profile)
 	}
@@ -601,8 +600,8 @@ func cloneRuntimeConfig(config Config) Config {
 
 func mutationLabProfileForFacade(
 	profile eebusraw.MutationLabProfileV1,
-) eebusmutation.LabProfile {
-	return eebusmutation.LabProfile{
+) eebusfacade.RuntimeLabProfile {
+	return eebusfacade.RuntimeLabProfile{
 		Contract:               profile.Contract,
 		ProfileID:              profile.ProfileID,
 		Target:                 profile.Target.Clone(),
