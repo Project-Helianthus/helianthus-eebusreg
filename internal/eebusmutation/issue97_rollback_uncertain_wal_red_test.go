@@ -91,3 +91,58 @@ func TestIssue97UncertainRollbackPersistsRestartValidQuarantine(t *testing.T) {
 		)
 	}
 }
+
+func TestIssue97ResolvedUncertainRollbackDoesNotRetainQuarantine(t *testing.T) {
+	harness := newIssue85Harness(t)
+	rollbackWrite := harness.writeStep(harness.before, rawMutationWriteResult{
+		FrameSent:  true,
+		Correlated: false,
+	})
+	rollbackWrite.terminal = issue85ErrorWith(
+		eebusraw.ErrorCodeV1Timeout,
+		"rollback reply unavailable",
+		true,
+	)
+	harness.executor.setSteps(
+		[]issue85ReadStep{
+			harness.readStep(harness.before),
+			harness.readStep(harness.requested),
+			harness.readStep(harness.requested),
+			harness.readStep(harness.before),
+		},
+		[]issue85WriteStep{
+			harness.writeStep(harness.requested, rawMutationWriteResult{
+				FrameSent:  true,
+				Correlated: true,
+				Accepted:   true,
+			}),
+			rollbackWrite,
+		},
+	)
+
+	applied, terminal := harness.set()
+	issue85AssertNoError(t, terminal)
+	rolledBack, terminal := harness.rollback(
+		applied.MutationRef,
+		"issue97-resolved-rollback",
+	)
+	issue85AssertNoError(t, terminal)
+	issue85AssertState(t, rolledBack, eebusraw.MutationStateV1RolledBack)
+	issue87AssertCanonicalMutation(t, rolledBack)
+
+	replayed, terminal := harness.rollback(
+		applied.MutationRef,
+		"issue97-resolved-rollback",
+	)
+	issue85AssertNoError(t, terminal)
+	issue85AssertState(t, replayed, eebusraw.MutationStateV1RolledBack)
+	reads, writes, _, exhausted := harness.executor.counts()
+	if reads != 4 || writes != 2 || exhausted != 0 {
+		t.Fatalf(
+			"idempotent replay contacted remote: reads:%d writes:%d exhausted:%d",
+			reads,
+			writes,
+			exhausted,
+		)
+	}
+}
