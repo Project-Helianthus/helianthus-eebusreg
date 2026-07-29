@@ -34,7 +34,7 @@ func TestIssue99ConcurrentEventCaptureAndConnectedPublicationConverge(t *testing
 		return nil
 	}
 	fixture.useCases = func() []spinemodel.UseCaseInformationDataType {
-		if fixture.entityCalls.Load() == 1 {
+		if fixture.useCaseCalls.Add(1) == 2 {
 			return fixture.detailedUseCases
 		}
 		return nil
@@ -68,6 +68,52 @@ func TestIssue99DisconnectRetiresUnconsumedPreSessionTopology(t *testing.T) {
 	fixture.waitForDetailedTopology(0)
 }
 
+func TestIssue99ConcurrentDisconnectInvalidatesInFlightPreSessionCapture(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	fixture := newIssue99TopologyFixture(t)
+	fixture.entities = func() []spineapi.EntityRemoteInterface {
+		close(entered)
+		<-release
+		return fixture.detailedEntities
+	}
+	fixture.useCases = func() []spinemodel.UseCaseInformationDataType {
+		return fixture.detailedUseCases
+	}
+
+	eventDone := make(chan struct{})
+	go func() {
+		defer close(eventDone)
+		fixture.handler.HandleEvent(fixture.event())
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight topology capture did not enter")
+	}
+	fixture.handler.RemoteSKIDisconnected(nil, fixture.remoteSKI)
+	close(release)
+	<-eventDone
+
+	fixture.entities = func() []spineapi.EntityRemoteInterface { return nil }
+	fixture.useCases = func() []spinemodel.UseCaseInformationDataType { return nil }
+	fixture.connect()
+	fixture.waitForDetailedTopology(0)
+}
+
+func TestIssue99RuntimeGenerationRetiresUnconsumedPreSessionTopology(t *testing.T) {
+	fixture := newIssue99TopologyFixture(t)
+	fixture.detailed.Store(true)
+	fixture.handler.HandleEvent(fixture.event())
+
+	fixture.handler.deactivateSPINEEvents()
+	fixture.handler.waitForSPINEEvents()
+	fixture.handler.activateSPINEEvents(fixture.service)
+	fixture.detailed.Store(false)
+	fixture.connect()
+	fixture.waitForDetailedTopology(0)
+}
+
 func TestIssue99ReplacedRemoteCannotPopulateConnectedSession(t *testing.T) {
 	fixture := newIssue99TopologyFixture(t)
 	fixture.detailed.Store(true)
@@ -89,6 +135,7 @@ type issue99TopologyFixture struct {
 	remote           spineapi.DeviceRemoteInterface
 	detailed         atomic.Bool
 	entityCalls      atomic.Uint64
+	useCaseCalls     atomic.Uint64
 	entities         func() []spineapi.EntityRemoteInterface
 	useCases         func() []spinemodel.UseCaseInformationDataType
 	detailedEntities []spineapi.EntityRemoteInterface

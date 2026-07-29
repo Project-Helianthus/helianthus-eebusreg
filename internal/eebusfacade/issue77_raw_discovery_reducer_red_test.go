@@ -27,7 +27,7 @@ func TestIssue77DiscoveryReducerRetainsMDNSAndDetailedSPINEFacts(t *testing.T) {
 	service := eebusmocks.NewServiceInterface(t)
 	local := spinemocks.NewDeviceLocalInterface(t)
 	remote := issue77DetailedVR940(t)
-	service.EXPECT().LocalDevice().Return(local).Twice()
+	service.EXPECT().LocalDevice().Return(local).Once()
 	local.EXPECT().RemoteDeviceForSki(issue77ReducerRemoteSKI).Return(remote)
 	handler.RemoteSKIConnected(service, issue77ReducerRemoteSKI)
 	_ = issue77WaitPayload(t, updates)

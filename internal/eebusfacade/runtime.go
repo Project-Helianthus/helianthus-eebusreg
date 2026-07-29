@@ -927,6 +927,8 @@ type runtimeServiceHandler struct {
 	spineCancel               context.CancelFunc
 	spineWake                 chan struct{}
 	spinePending              map[string]runtimeSPINERefresh
+	spineStaged               map[string]runtimeSPINEStaged
+	spineRemoteEpoch          map[string]uint64
 	rawFeatures               *rawFeatureRuntimeBridge
 }
 
@@ -968,9 +970,10 @@ func (handler *runtimeServiceHandler) bindRawFeatureRuntime(bridge *rawFeatureRu
 func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.ServiceInterface, ski string) {
 	ski = strings.ToLower(strings.TrimSpace(ski))
 	if !handler.remoteLivenessAllowed(ski) {
+		handler.retireStagedSPINERefresh(ski)
 		return
 	}
-	devices, err := runtimeDevicesForRemote(service, ski)
+	remote, devices, err := runtimeRemoteAndDevicesForService(service, ski)
 	if err != nil {
 		handler.report(err)
 		return
@@ -1001,6 +1004,7 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		}
 		observation.Devices = merged
 	})
+	handler.consumeStagedSPINERefresh(ski, remote, generation)
 	handler.refreshRawFeatureRemote(ski)
 }
 
@@ -1025,6 +1029,7 @@ func (handler *runtimeServiceHandler) allocateRawFeatureConnectionGeneration(ski
 
 func (handler *runtimeServiceHandler) RemoteSKIDisconnected(_ eebusapi.ServiceInterface, ski string) {
 	ski = strings.ToLower(strings.TrimSpace(ski))
+	handler.retireStagedSPINERefresh(ski)
 	if !handler.remoteLivenessAllowed(ski) {
 		return
 	}
@@ -1345,11 +1350,24 @@ func (handler *runtimeServiceHandler) timestamp() time.Time {
 }
 
 func runtimeDevicesForRemote(service runtimeDeviceProvider, ski string) ([]runtimeDeviceObservation, error) {
-	if service == nil || service.LocalDevice() == nil {
-		return nil, nil
+	_, devices, err := runtimeRemoteAndDevicesForService(service, ski)
+	return devices, err
+}
+
+func runtimeRemoteAndDevicesForService(
+	service runtimeDeviceProvider,
+	ski string,
+) (spineapi.DeviceRemoteInterface, []runtimeDeviceObservation, error) {
+	if service == nil {
+		return nil, nil, nil
 	}
-	remote := service.LocalDevice().RemoteDeviceForSki(ski)
-	return runtimeDevicesForRemoteDevice(remote, ski)
+	local := service.LocalDevice()
+	if local == nil {
+		return nil, nil, nil
+	}
+	remote := local.RemoteDeviceForSki(ski)
+	devices, err := runtimeDevicesForRemoteDevice(remote, ski)
+	return remote, devices, err
 }
 
 func runtimeDevicesForRemoteDevice(remote spineapi.DeviceRemoteInterface, ski string) ([]runtimeDeviceObservation, error) {

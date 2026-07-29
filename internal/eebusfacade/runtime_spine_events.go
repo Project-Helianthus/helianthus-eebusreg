@@ -17,6 +17,13 @@ type runtimeSPINERefresh struct {
 	sessionIndex uint64
 }
 
+type runtimeSPINEStaged struct {
+	devices     []runtimeDeviceObservation
+	generation  uint64
+	remoteEpoch uint64
+	remote      spineapi.DeviceRemoteInterface
+}
+
 func subscribeRuntimeSPINEEvents(handler spineapi.EventHandlerInterface) (func() error, error) {
 	if err := spine.Events.Subscribe(handler); err != nil {
 		return nil, err
@@ -35,6 +42,8 @@ func (handler *runtimeServiceHandler) activateSPINEEvents(service runtimeService
 	handler.spineCancel = cancel
 	handler.spineWake = make(chan struct{}, 1)
 	handler.spinePending = make(map[string]runtimeSPINERefresh)
+	handler.spineStaged = make(map[string]runtimeSPINEStaged)
+	handler.spineRemoteEpoch = make(map[string]uint64)
 	handler.spineWork.Add(1)
 	handler.mu.Unlock()
 	go handler.runSPINERefreshWorker(workerContext)
@@ -48,6 +57,8 @@ func (handler *runtimeServiceHandler) deactivateSPINEEvents() {
 	cancel := handler.spineCancel
 	handler.spineCancel = nil
 	handler.spinePending = nil
+	handler.spineStaged = nil
+	handler.spineRemoteEpoch = nil
 	rawFeatures := handler.rawFeatures
 	handler.mu.Unlock()
 	if rawFeatures != nil {
@@ -76,12 +87,7 @@ func (handler *runtimeServiceHandler) HandleEvent(payload spineapi.EventPayload)
 	}
 	service := handler.spineService
 	generation := handler.spineGeneration
-	observation, ok := handler.observations[ski]
-	if !ok || observation.SessionState != "connected" {
-		handler.mu.Unlock()
-		return
-	}
-	sessionIndex := observation.SessionIndex
+	remoteEpoch := handler.spineRemoteEpoch[ski]
 	handler.spineWG.Add(1)
 	handler.mu.Unlock()
 	defer handler.spineWG.Done()
@@ -101,9 +107,7 @@ func (handler *runtimeServiceHandler) HandleEvent(payload spineapi.EventPayload)
 	if len(devices) == 0 {
 		return
 	}
-	handler.enqueueSPINERefresh(ski, runtimeSPINERefresh{
-		devices: devices, generation: generation, sessionIndex: sessionIndex,
-	})
+	handler.stageOrEnqueueSPINERefresh(ski, remote, generation, remoteEpoch, devices)
 }
 
 func runtimeTopologyEvent(payload spineapi.EventPayload) bool {
@@ -130,6 +134,90 @@ func sameRuntimeRemoteDevice(expected, observed spineapi.DeviceRemoteInterface) 
 		return false
 	}
 	return expected == observed
+}
+
+func (handler *runtimeServiceHandler) stageOrEnqueueSPINERefresh(
+	ski string,
+	remote spineapi.DeviceRemoteInterface,
+	generation uint64,
+	remoteEpoch uint64,
+	devices []runtimeDeviceObservation,
+) {
+	handler.mu.Lock()
+	if !handler.spineEventsActive ||
+		handler.spineGeneration != generation ||
+		handler.spineRemoteEpoch[ski] != remoteEpoch ||
+		!handler.remoteLivenessAllowedLocked(ski) {
+		handler.mu.Unlock()
+		return
+	}
+	observation, connected := handler.observations[ski]
+	connected = connected && observation.SessionState == "connected"
+	if connected {
+		sessionIndex := observation.SessionIndex
+		handler.mu.Unlock()
+		handler.enqueueSPINERefresh(ski, runtimeSPINERefresh{
+			devices: devices, generation: generation, sessionIndex: sessionIndex,
+		})
+		return
+	}
+
+	staged := runtimeSPINEStaged{
+		devices: devices, generation: generation, remoteEpoch: remoteEpoch, remote: remote,
+	}
+	if prior, exists := handler.spineStaged[ski]; exists &&
+		prior.generation == generation &&
+		prior.remoteEpoch == remoteEpoch &&
+		sameRuntimeRemoteDevice(prior.remote, remote) {
+		merged, err := mergeRuntimeDeviceCollections(prior.devices, devices)
+		if err != nil {
+			handler.mu.Unlock()
+			handler.report(err)
+			return
+		}
+		staged.devices = merged
+	}
+	handler.spineStaged[ski] = staged
+	handler.mu.Unlock()
+}
+
+func (handler *runtimeServiceHandler) consumeStagedSPINERefresh(
+	ski string,
+	current spineapi.DeviceRemoteInterface,
+	sessionIndex uint64,
+) {
+	handler.mu.Lock()
+	staged, exists := handler.spineStaged[ski]
+	if exists {
+		delete(handler.spineStaged, ski)
+	}
+	observation, connected := handler.observations[ski]
+	valid := exists &&
+		handler.spineEventsActive &&
+		staged.generation == handler.spineGeneration &&
+		staged.remoteEpoch == handler.spineRemoteEpoch[ski] &&
+		connected &&
+		observation.SessionState == "connected" &&
+		observation.SessionIndex == sessionIndex &&
+		sameRuntimeRemoteDevice(staged.remote, current)
+	handler.mu.Unlock()
+	if !valid {
+		return
+	}
+	handler.enqueueSPINERefresh(ski, runtimeSPINERefresh{
+		devices: staged.devices, generation: staged.generation, sessionIndex: sessionIndex,
+	})
+}
+
+func (handler *runtimeServiceHandler) retireStagedSPINERefresh(ski string) {
+	handler.mu.Lock()
+	if handler.spineRemoteEpoch != nil {
+		handler.spineRemoteEpoch[ski]++
+	}
+	if handler.spineStaged != nil {
+		delete(handler.spineStaged, ski)
+	}
+	handler.mu.Unlock()
 }
 
 func (handler *runtimeServiceHandler) enqueueSPINERefresh(ski string, refresh runtimeSPINERefresh) {
