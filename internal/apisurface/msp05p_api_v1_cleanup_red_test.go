@@ -14,7 +14,7 @@ func TestMSP05PInitialV1ReplacesEveryUnreleasedV2Export(t *testing.T) {
 	root := msp05pRootSurface(t, doc)
 
 	want := map[string]string{
-		"Config":              "type Config struct{ Enabled bool; StateRoot string; Interface string; ListenAddress netip.AddrPort; DiscoveryEnabled bool; Remotes []Remote; PairingPolicy PairingPolicy }",
+		"Config":              "type Config struct{ Enabled bool; StateRoot string; Interface string; ListenAddress netip.AddrPort; DiscoveryEnabled bool; Remotes []Remote; PairingPolicy PairingPolicy; MutationLabProfiles []eebusraw.MutationLabProfileV1 }",
 		"New":                 "func New(Config) (Runtime, error)",
 		"PairingPolicy":       "type PairingPolicy string",
 		"PairingPolicyClosed": `const PairingPolicyClosed PairingPolicy = "closed"`,

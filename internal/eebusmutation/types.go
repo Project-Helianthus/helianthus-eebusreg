@@ -8,7 +8,7 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
 
-const rawMutationLabProfileContract = "helianthus.eebus.raw-mutation-lab-profile.v1"
+const rawMutationLabProfileContract = eebusraw.MutationLabProfileContractV1
 
 type rawMutationCoordinatorConfig struct {
 	StateRoot        string
@@ -63,8 +63,7 @@ type rawMutationReadTokenVerifier interface {
 type rawMutationPolicyProvider interface {
 	MutationPolicy(
 		context.Context,
-		eebusraw.FeatureTargetV1,
-		eebusraw.TypedValueV1,
+		eebusraw.FeatureDataSetRequestV1,
 		eebusraw.TypedValueV1,
 	) (rawMutationPolicyDecision, *eebusraw.ErrorV1)
 }
@@ -129,6 +128,9 @@ type rawMutationPolicyDecision struct {
 	RollbackRepresentable bool
 	ConstraintFailures    []string
 	SafetyFailures        []string
+	LabProfileID          string
+	EvidenceHashes        []eebusraw.HashV1
+	SafetyPredicates      []string
 }
 
 type rawMutationLabProfile struct {
@@ -139,6 +141,7 @@ type rawMutationLabProfile struct {
 	RollbackValueHash      eebusraw.HashV1
 	MaximumProbeTTLSeconds uint64
 	SafetyPredicates       []string
+	EvidenceHashes         []eebusraw.HashV1
 	ExpiresAt              time.Time
 }
 

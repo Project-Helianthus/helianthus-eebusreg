@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 )
 
@@ -30,13 +31,14 @@ type Runtime interface {
 }
 
 type Config struct {
-	Enabled          bool
-	StateRoot        string
-	Interface        string
-	ListenAddress    netip.AddrPort
-	DiscoveryEnabled bool
-	Remotes          []Remote
-	PairingPolicy    PairingPolicy
+	Enabled             bool
+	StateRoot           string
+	Interface           string
+	ListenAddress       netip.AddrPort
+	DiscoveryEnabled    bool
+	Remotes             []Remote
+	PairingPolicy       PairingPolicy
+	MutationLabProfiles []eebusraw.MutationLabProfileV1
 }
 
 type PairingPolicy string
@@ -387,6 +389,10 @@ func newFacadeRuntimeBackend(ctx context.Context, config Config) (runtimeBackend
 			Allowlisted: true,
 		}
 	}
+	labProfiles := make([]eebusfacade.RuntimeLabProfile, len(config.MutationLabProfiles))
+	for index, profile := range config.MutationLabProfiles {
+		labProfiles[index] = mutationLabProfileForFacade(profile)
+	}
 	backend, err := eebusfacade.Acquire(ctx, eebusfacade.RuntimeConfig{
 		StateRoot:        config.StateRoot,
 		Interface:        config.Interface,
@@ -394,6 +400,7 @@ func newFacadeRuntimeBackend(ctx context.Context, config Config) (runtimeBackend
 		ListenAddress:    config.ListenAddress,
 		DiscoveryEnabled: config.DiscoveryEnabled,
 		Remotes:          remotes,
+		LabProfiles:      labProfiles,
 	})
 	if err != nil {
 		return nil, err
@@ -450,7 +457,8 @@ func normalizeRuntimeConfig(config Config) (Config, error) {
 	if !config.Enabled {
 		if config.StateRoot != "" || config.Interface != "" ||
 			config.ListenAddress != (netip.AddrPort{}) || config.DiscoveryEnabled ||
-			config.Remotes != nil || config.PairingPolicy != "" {
+			config.Remotes != nil || config.PairingPolicy != "" ||
+			config.MutationLabProfiles != nil {
 			return Config{}, errors.New("disabled runtime configuration must be empty")
 		}
 		return Config{}, nil
@@ -495,6 +503,50 @@ func normalizeRuntimeConfig(config Config) (Config, error) {
 		}
 		config.Remotes = remotes
 	}
+	if config.MutationLabProfiles != nil {
+		if len(config.MutationLabProfiles) > 16 {
+			return Config{}, errors.New("runtime mutation lab profile count exceeds the limit")
+		}
+		profiles := make([]eebusraw.MutationLabProfileV1, len(config.MutationLabProfiles))
+		seenIDs := make(map[string]struct{}, len(config.MutationLabProfiles))
+		seenProfiles := make(map[eebusraw.HashV1]struct{}, len(config.MutationLabProfiles))
+		remotes := make(map[string]struct{}, len(config.Remotes))
+		for _, remote := range config.Remotes {
+			remotes[remote.SKI] = struct{}{}
+		}
+		for index, source := range config.MutationLabProfiles {
+			profile := source.Clone()
+			if terminal := eebusraw.ValidateMutationLabProfileV1(profile); terminal != nil {
+				return Config{}, fmt.Errorf("runtime mutation lab profile %d is invalid", index)
+			}
+			if _, admitted := remotes[profile.Target.RemoteSKI]; !admitted {
+				return Config{}, fmt.Errorf(
+					"runtime mutation lab profile %d targets an unadmitted remote",
+					index,
+				)
+			}
+			if _, duplicate := seenIDs[profile.ProfileID]; duplicate {
+				return Config{}, fmt.Errorf(
+					"runtime mutation lab profile %d duplicates profile id",
+					index,
+				)
+			}
+			commitment, err := eebusraw.CanonicalSHA256V1(profile)
+			if err != nil {
+				return Config{}, fmt.Errorf("runtime mutation lab profile %d is invalid", index)
+			}
+			if _, duplicate := seenProfiles[commitment]; duplicate {
+				return Config{}, fmt.Errorf(
+					"runtime mutation lab profile %d duplicates an exact profile",
+					index,
+				)
+			}
+			seenIDs[profile.ProfileID] = struct{}{}
+			seenProfiles[commitment] = struct{}{}
+			profiles[index] = profile
+		}
+		config.MutationLabProfiles = profiles
+	}
 	return config, nil
 }
 
@@ -536,7 +588,30 @@ func cloneRuntimeConfig(config Config) Config {
 	if config.Remotes != nil {
 		config.Remotes = append([]Remote{}, config.Remotes...)
 	}
+	if config.MutationLabProfiles != nil {
+		profiles := make([]eebusraw.MutationLabProfileV1, len(config.MutationLabProfiles))
+		for index, profile := range config.MutationLabProfiles {
+			profiles[index] = profile.Clone()
+		}
+		config.MutationLabProfiles = profiles
+	}
 	return config
+}
+
+func mutationLabProfileForFacade(
+	profile eebusraw.MutationLabProfileV1,
+) eebusfacade.RuntimeLabProfile {
+	return eebusfacade.RuntimeLabProfile{
+		Contract:               profile.Contract,
+		ProfileID:              profile.ProfileID,
+		Target:                 profile.Target.Clone(),
+		AllowedValueHashes:     append([]eebusraw.HashV1(nil), profile.AllowedValueHashes...),
+		RollbackValueHash:      profile.RollbackValueHash,
+		MaximumProbeTTLSeconds: profile.MaximumProbeTTLSeconds,
+		SafetyPredicates:       append([]string(nil), profile.SafetyPredicates...),
+		EvidenceHashes:         append([]eebusraw.HashV1(nil), profile.EvidenceHashes...),
+		ExpiresAt:              profile.ExpiresAt,
+	}
 }
 
 func runtimeWildcard(value string) bool {

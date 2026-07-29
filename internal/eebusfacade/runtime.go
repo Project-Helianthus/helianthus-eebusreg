@@ -55,6 +55,19 @@ type RuntimeConfig struct {
 	ListenAddress    netip.AddrPort
 	DiscoveryEnabled bool
 	Remotes          []RuntimeRemote
+	LabProfiles      []RuntimeLabProfile
+}
+
+type RuntimeLabProfile struct {
+	Contract               string
+	ProfileID              string
+	Target                 eebusraw.FeatureTargetV1
+	AllowedValueHashes     []eebusraw.HashV1
+	RollbackValueHash      eebusraw.HashV1
+	MaximumProbeTTLSeconds uint64
+	SafetyPredicates       []string
+	EvidenceHashes         []eebusraw.HashV1
+	ExpiresAt              time.Time
 }
 
 type RuntimeRemote struct {
@@ -260,6 +273,7 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if dependencies.loadMaterial == nil || dependencies.now == nil {
 		return nil, errors.New("runtime dependencies are incomplete")
 	}
+	labProfiles := mutationLabProfilesForRuntime(config.LabProfiles)
 
 	seen := make(map[string]struct{}, len(config.Remotes))
 	for index, remote := range config.Remotes {
@@ -350,12 +364,13 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		return nil, closeRuntime(err)
 	}
 	runtimeEpoch := rawRuntimeEpochProvider(firstTrust, rawRuntimeEpoch)
-	rawFeatures := newRawFeatureRuntimeBridgeWithGenerationStore(
+	rawFeatures := newRawFeatureRuntimeBridgeWithMutationProfiles(
 		localDevice,
 		runtimeEpoch,
 		dependencies.now,
 		rawTokenIssuer,
 		rawConnectionGenerations,
+		labProfiles,
 	)
 	handler.bindRawFeatureRuntime(rawFeatures)
 	if dependencies.subscribeSPINEEvents == nil {
@@ -411,6 +426,7 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 				WriterWait:       50 * time.Millisecond,
 				RecoveryDeadline: 5 * time.Minute,
 				ReferenceKey:     mutationReferenceKey,
+				LabProfiles:      cloneRuntimeMutationLabProfiles(labProfiles),
 			},
 			eebusmutation.CoordinatorDependencies{
 				Executor:         rawFeatures,

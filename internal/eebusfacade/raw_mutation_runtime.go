@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"time"
 
@@ -244,24 +245,191 @@ func (bridge *rawFeatureRuntimeBridge) FullWriteIfCurrent(
 }
 
 func (bridge *rawFeatureRuntimeBridge) MutationPolicy(
-	_ context.Context,
-	target eebusraw.FeatureTargetV1,
+	ctx context.Context,
+	request eebusraw.FeatureDataSetRequestV1,
 	before eebusraw.TypedValueV1,
-	requested eebusraw.TypedValueV1,
 ) (eebusmutation.PolicyDecision, *eebusraw.ErrorV1) {
-	current, terminal := bridge.CurrentRuntimeBinding(target)
+	if ctx == nil || ctx.Err() != nil {
+		return eebusmutation.PolicyDecision{}, rawMutationFacadeError(
+			eebusraw.ErrorCodeV1Cancelled,
+			true,
+		)
+	}
+	current, terminal := bridge.CurrentRuntimeBinding(request.Target)
 	if terminal != nil || current.RuntimeEpoch == 0 {
 		return eebusmutation.PolicyDecision{}, terminal
 	}
 	beforeValid := before.Validate() == nil
-	requestedValid := requested.Validate() == nil
-	return eebusmutation.PolicyDecision{
+	requestedValid := request.Value.Validate() == nil
+	decision := eebusmutation.PolicyDecision{
 		FullWrite:             true,
 		Changeability:         eebusraw.ChangeabilityV1Unknown,
 		ConstraintsKnown:      false,
 		LabAllowlisted:        false,
 		RollbackRepresentable: beforeValid && requestedValid,
-	}, nil
+	}
+	matches := bridge.matchingMutationLabProfiles(request, before)
+	if len(matches) != 1 {
+		return decision, nil
+	}
+	profile := matches[0]
+	failures := mutationLabSafetyFailures(
+		profile.SafetyPredicates,
+		beforeValid && requestedValid,
+	)
+	if len(failures) != 0 {
+		decision.SafetyFailures = failures
+		return decision, nil
+	}
+	decision.Changeability = eebusraw.ChangeabilityV1True
+	decision.LabAllowlisted = true
+	decision.LabProfileID = profile.ProfileID
+	decision.EvidenceHashes = append(
+		[]eebusraw.HashV1(nil),
+		profile.EvidenceHashes...,
+	)
+	decision.SafetyPredicates = append(
+		[]string(nil),
+		profile.SafetyPredicates...,
+	)
+	return decision, nil
+}
+
+func (bridge *rawFeatureRuntimeBridge) matchingMutationLabProfiles(
+	request eebusraw.FeatureDataSetRequestV1,
+	before eebusraw.TypedValueV1,
+) []eebusmutation.LabProfile {
+	if bridge == nil || bridge.now == nil || request.ConstraintsOverride == nil {
+		return nil
+	}
+	now := bridge.now().UTC()
+	override := request.ConstraintsOverride
+	if now.IsZero() ||
+		strings.TrimSpace(override.Justification) == "" ||
+		!override.ExpiresAt.After(now) {
+		return nil
+	}
+	requestedHash, err := request.Value.ComputeHash()
+	if err != nil {
+		return nil
+	}
+	beforeHash, err := before.ComputeHash()
+	if err != nil {
+		return nil
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	matches := make([]eebusmutation.LabProfile, 0, 1)
+	for _, profile := range bridge.mutationLabProfiles {
+		if eebusraw.ValidateMutationLabProfileV1(
+			publicRuntimeMutationLabProfile(profile),
+		) != nil ||
+			profile.ProfileID != override.ProfileID ||
+			!profile.ExpiresAt.After(now) ||
+			override.ExpiresAt.After(profile.ExpiresAt) ||
+			!reflect.DeepEqual(profile.Target, request.Target) ||
+			profile.RollbackValueHash != beforeHash ||
+			(request.Mode == eebusraw.ModeV1Probe &&
+				request.ProbeTTLSeconds > profile.MaximumProbeTTLSeconds) ||
+			!mutationLabAllowsHash(profile.AllowedValueHashes, requestedHash) {
+			continue
+		}
+		matches = append(matches, cloneRuntimeMutationLabProfile(profile))
+	}
+	return matches
+}
+
+func mutationLabSafetyFailures(
+	predicates []string,
+	rollbackRepresentable bool,
+) []string {
+	var failures []string
+	for _, predicate := range predicates {
+		switch predicate {
+		case "exact-target-capability-current":
+		case "rollback-representable":
+			if !rollbackRepresentable {
+				failures = append(failures, predicate)
+			}
+		default:
+			failures = append(failures, predicate)
+		}
+	}
+	return failures
+}
+
+func mutationLabAllowsHash(
+	allowed []eebusraw.HashV1,
+	requested eebusraw.HashV1,
+) bool {
+	for _, candidate := range allowed {
+		if candidate == requested {
+			return true
+		}
+	}
+	return false
+}
+
+func publicRuntimeMutationLabProfile(
+	profile eebusmutation.LabProfile,
+) eebusraw.MutationLabProfileV1 {
+	return eebusraw.MutationLabProfileV1{
+		Contract:               profile.Contract,
+		ProfileID:              profile.ProfileID,
+		Target:                 profile.Target.Clone(),
+		AllowedValueHashes:     append([]eebusraw.HashV1(nil), profile.AllowedValueHashes...),
+		RollbackValueHash:      profile.RollbackValueHash,
+		MaximumProbeTTLSeconds: profile.MaximumProbeTTLSeconds,
+		SafetyPredicates:       append([]string(nil), profile.SafetyPredicates...),
+		EvidenceHashes:         append([]eebusraw.HashV1(nil), profile.EvidenceHashes...),
+		ExpiresAt:              profile.ExpiresAt,
+	}
+}
+
+func cloneRuntimeMutationLabProfiles(
+	profiles []eebusmutation.LabProfile,
+) []eebusmutation.LabProfile {
+	if profiles == nil {
+		return nil
+	}
+	cloned := make([]eebusmutation.LabProfile, len(profiles))
+	for index, profile := range profiles {
+		cloned[index] = cloneRuntimeMutationLabProfile(profile)
+	}
+	return cloned
+}
+
+func mutationLabProfilesForRuntime(
+	profiles []RuntimeLabProfile,
+) []eebusmutation.LabProfile {
+	if profiles == nil {
+		return nil
+	}
+	converted := make([]eebusmutation.LabProfile, len(profiles))
+	for index, profile := range profiles {
+		converted[index] = eebusmutation.LabProfile{
+			Contract:               profile.Contract,
+			ProfileID:              profile.ProfileID,
+			Target:                 profile.Target.Clone(),
+			AllowedValueHashes:     append([]eebusraw.HashV1(nil), profile.AllowedValueHashes...),
+			RollbackValueHash:      profile.RollbackValueHash,
+			MaximumProbeTTLSeconds: profile.MaximumProbeTTLSeconds,
+			SafetyPredicates:       append([]string(nil), profile.SafetyPredicates...),
+			EvidenceHashes:         append([]eebusraw.HashV1(nil), profile.EvidenceHashes...),
+			ExpiresAt:              profile.ExpiresAt,
+		}
+	}
+	return converted
+}
+
+func cloneRuntimeMutationLabProfile(
+	profile eebusmutation.LabProfile,
+) eebusmutation.LabProfile {
+	profile.Target = profile.Target.Clone()
+	profile.AllowedValueHashes = append([]eebusraw.HashV1(nil), profile.AllowedValueHashes...)
+	profile.SafetyPredicates = append([]string(nil), profile.SafetyPredicates...)
+	profile.EvidenceHashes = append([]eebusraw.HashV1(nil), profile.EvidenceHashes...)
+	return profile
 }
 
 func (bridge *rawFeatureRuntimeBridge) exactMutationWriteRequest(

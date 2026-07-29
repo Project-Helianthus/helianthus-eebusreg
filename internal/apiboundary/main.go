@@ -440,6 +440,7 @@ var ErrSecretDetected
 
 var allowedMSP0625MutationRawExports = frozenExportInventory(`
 const AuthScopeV1RawWrite
+const MutationLabProfileContractV1
 const ErrorCodeV1CASMismatch
 const ErrorCodeV1Conflict
 const ErrorCodeV1ConstraintFailure
@@ -475,6 +476,7 @@ func ValidateWriteAuthorizationV1
 func ValidateFeatureDataSetRequestV1
 func ValidateMutationGetRequestV1
 func ValidateMutationRollbackRequestV1
+func ValidateMutationLabProfileV1
 func ValidateMutationV1
 type ApplyVerificationV1
 type AuditTransitionV1
@@ -486,6 +488,11 @@ func FeatureDataSetRequestV1.GoString
 func FeatureDataSetRequestV1.String
 type ModeV1
 type MutationGetRequestV1
+type MutationLabProfileV1
+func MutationLabProfileV1.Clone
+func MutationLabProfileV1.Format
+func MutationLabProfileV1.GoString
+func MutationLabProfileV1.String
 type MutationRollbackRequestV1
 func MutationRollbackRequestV1.Format
 func MutationRollbackRequestV1.GoString
@@ -2181,6 +2188,17 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 				stableType("ConstraintOverrideV1", "struct",
 					field("ProfileID", "string", `json:"profile_id"`),
 					field("Justification", "string", `json:"justification"`),
+					field("ExpiresAt", "time.Time", `json:"expires_at"`),
+				),
+				stableType("MutationLabProfileV1", "struct",
+					field("Contract", "string", `json:"contract"`),
+					field("ProfileID", "string", `json:"profile_id"`),
+					field("Target", "FeatureTargetV1", `json:"target"`),
+					field("AllowedValueHashes", "[]HashV1", `json:"allowed_value_hashes"`),
+					field("RollbackValueHash", "HashV1", `json:"rollback_value_hash"`),
+					field("MaximumProbeTTLSeconds", "uint64", `json:"maximum_probe_ttl_seconds"`),
+					field("SafetyPredicates", "[]string", `json:"safety_predicates"`),
+					field("EvidenceHashes", "[]HashV1", `json:"evidence_hashes"`),
 					field("ExpiresAt", "time.Time", `json:"expires_at"`),
 				),
 				stableType("FeatureDataSetRequestV1", "struct",

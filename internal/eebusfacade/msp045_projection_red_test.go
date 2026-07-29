@@ -841,6 +841,8 @@ type msp045ProductSetup struct {
 	remotePretrusted      *bool
 	configureService      func(*msp045Service)
 	wrapRuntime           func(*msp045Service, eebusapi.ServiceReaderInterface) runtimeService
+	configureDependencies func(*runtimeDependencies)
+	configureRuntime      func(*RuntimeConfig)
 	discoveryEnabled      bool
 	suppressVisible       bool
 }
@@ -911,26 +913,29 @@ func newMSP045ProductHarness(t *testing.T, mutate func(*msp045ProductSetup)) *ms
 		remote: setup.remote, bridge: bridge, anchor: anchor, identityProvider: anchor,
 		remotePretrusted: setup.remotePretrusted,
 		configureService: setup.configureService,
-		wrapRuntime:      setup.wrapRuntime, discoveryEnabled: setup.discoveryEnabled,
+		wrapRuntime:      setup.wrapRuntime, configureDependencies: setup.configureDependencies,
+		configureRuntime: setup.configureRuntime, discoveryEnabled: setup.discoveryEnabled,
 		suppressVisible: setup.suppressVisible,
 	})
 }
 
 type msp045AcquireOptions struct {
-	stateRoot        string
-	adminRoot        string
-	remote           []byte
-	certificate      tls.Certificate
-	localSKI         string
-	bridge           runtimeAssociationBridge
-	anchor           firstTrustAnchorProvider
-	identityProvider firstTrustIdentityProvider
-	keyProviders     []eebusstore.KeyProviderBinding
-	remotePretrusted *bool
-	configureService func(*msp045Service)
-	wrapRuntime      func(*msp045Service, eebusapi.ServiceReaderInterface) runtimeService
-	discoveryEnabled bool
-	suppressVisible  bool
+	stateRoot             string
+	adminRoot             string
+	remote                []byte
+	certificate           tls.Certificate
+	localSKI              string
+	bridge                runtimeAssociationBridge
+	anchor                firstTrustAnchorProvider
+	identityProvider      firstTrustIdentityProvider
+	keyProviders          []eebusstore.KeyProviderBinding
+	remotePretrusted      *bool
+	configureService      func(*msp045Service)
+	wrapRuntime           func(*msp045Service, eebusapi.ServiceReaderInterface) runtimeService
+	configureDependencies func(*runtimeDependencies)
+	configureRuntime      func(*RuntimeConfig)
+	discoveryEnabled      bool
+	suppressVisible       bool
 }
 
 func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045RuntimeHarness {
@@ -988,12 +993,19 @@ func msp045AcquireHarness(t *testing.T, options msp045AcquireOptions) *msp045Run
 	dependencies.startFirstTrustAdmin = func(context.Context, string, *firstTrustCoordinator) (firstTrustAdminEndpoint, error) {
 		return msp045AdminEndpoint{}, nil
 	}
+	if options.configureDependencies != nil {
+		options.configureDependencies(&dependencies)
+	}
 	remoteConfig := RuntimeRemote{SKI: remoteSKI, Pretrusted: pretrusted, Allowlisted: true}
-	backendInterface, err := acquireRuntime(context.Background(), RuntimeConfig{
+	runtimeConfig := RuntimeConfig{
 		StateRoot: options.stateRoot, Interface: "synthetic-interface", ListenPort: 47_11,
 		DiscoveryEnabled: options.discoveryEnabled,
 		Remotes:          []RuntimeRemote{remoteConfig},
-	}, dependencies)
+	}
+	if options.configureRuntime != nil {
+		options.configureRuntime(&runtimeConfig)
+	}
+	backendInterface, err := acquireRuntime(context.Background(), runtimeConfig, dependencies)
 	if err != nil {
 		t.Fatalf("acquire MSP-045 runtime: %v", err)
 	}

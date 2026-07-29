@@ -21,6 +21,7 @@ import (
 
 	executor "github.com/Project-Helianthus/helianthus-eebus-go/features/executor"
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusmutation"
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 )
@@ -256,6 +257,7 @@ type rawFeatureRuntimeBridge struct {
 	pendingGeneration   map[string]uint64
 	generationStore     rawConnectionGenerationStore
 	inventory           map[string]eebusraw.FeaturesGetDataV1
+	mutationLabProfiles []eebusmutation.LabProfile
 	nextDispatch        uint64
 }
 
@@ -277,6 +279,24 @@ func newRawFeatureRuntimeBridgeWithGenerationStore(
 	issuer *rawReadTokenIssuer,
 	generationStore rawConnectionGenerationStore,
 ) *rawFeatureRuntimeBridge {
+	return newRawFeatureRuntimeBridgeWithMutationProfiles(
+		local,
+		runtimeEpoch,
+		now,
+		issuer,
+		generationStore,
+		nil,
+	)
+}
+
+func newRawFeatureRuntimeBridgeWithMutationProfiles(
+	local spineapi.DeviceLocalInterface,
+	runtimeEpoch func() uint64,
+	now func() time.Time,
+	issuer *rawReadTokenIssuer,
+	generationStore rawConnectionGenerationStore,
+	profiles []eebusmutation.LabProfile,
+) *rawFeatureRuntimeBridge {
 	return &rawFeatureRuntimeBridge{
 		local:               local,
 		runtimeEpoch:        runtimeEpoch,
@@ -288,6 +308,7 @@ func newRawFeatureRuntimeBridgeWithGenerationStore(
 		pendingGeneration:   make(map[string]uint64),
 		generationStore:     generationStore,
 		inventory:           make(map[string]eebusraw.FeaturesGetDataV1),
+		mutationLabProfiles: cloneRuntimeMutationLabProfiles(profiles),
 	}
 }
 

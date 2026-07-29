@@ -71,7 +71,7 @@ func newRawMutationCoordinator(
 		return nil, terminal
 	}
 	config.ReferenceKey = append([]byte(nil), config.ReferenceKey...)
-	config.LabProfiles = append([]rawMutationLabProfile(nil), config.LabProfiles...)
+	config.LabProfiles = cloneRawMutationLabProfiles(config.LabProfiles)
 	journal, records, err := openRawMutationJournal(config.StateRoot, dependencies.Persistence)
 	if err != nil {
 		return nil, internalMutationError()
@@ -227,6 +227,22 @@ func (coordinator *rawMutationCoordinator) FeaturesDataSet(
 	if terminal != nil {
 		return eebusraw.MutationV1{}, terminal
 	}
+	var forwardWriteExpiresAt time.Time
+	if request.ConstraintsOverride != nil {
+		profile, matches := exactRawMutationLabProfileForHash(
+			coordinator.config,
+			request,
+			binding.BeforeImageHash,
+		)
+		if matches != 1 {
+			return eebusraw.MutationV1{},
+				mutationError(eebusraw.ErrorCodeV1ConstraintsUnknown, false)
+		}
+		forwardWriteExpiresAt = profile.ExpiresAt
+		if request.ConstraintsOverride.ExpiresAt.Before(forwardWriteExpiresAt) {
+			forwardWriteExpiresAt = request.ConstraintsOverride.ExpiresAt
+		}
+	}
 	if terminal := validateCurrentRawMutationBinding(
 		coordinator.deps.BindingAuthority,
 		request.Target,
@@ -275,9 +291,8 @@ func (coordinator *rawMutationCoordinator) FeaturesDataSet(
 
 	decision, policyTerminal := coordinator.deps.Policy.MutationPolicy(
 		ctx,
-		request.Target.Clone(),
+		cloneRawMutationSetRequest(request),
 		beforeRead.Value.Clone(),
-		request.Value.Clone(),
 	)
 	if policyTerminal != nil {
 		return eebusraw.MutationV1{}, sanitizeMutationError(policyTerminal)
@@ -303,6 +318,15 @@ func (coordinator *rawMutationCoordinator) FeaturesDataSet(
 		return cloneMutation(entry.mutation), terminal
 	}
 
+	if !forwardWriteExpiresAt.IsZero() &&
+		!forwardWriteExpiresAt.After(coordinator.config.Now()) {
+		return coordinator.completeOriginalWrite(
+			ctx,
+			entry,
+			rawMutationWriteResult{},
+			mutationError(eebusraw.ErrorCodeV1ConstraintsUnknown, false),
+		)
+	}
 	writeResult, writeTerminal := coordinator.deps.Executor.FullWriteIfCurrent(
 		ctx,
 		request.Target.Clone(),

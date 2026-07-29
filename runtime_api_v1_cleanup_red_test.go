@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
 
 var (
@@ -30,6 +32,7 @@ func TestMSP05PInitialV1PublicShapeIsExact(t *testing.T) {
 		{name: "DiscoveryEnabled", typ: reflect.TypeOf(false)},
 		{name: "Remotes", typ: reflect.TypeOf([]Remote(nil))},
 		{name: "PairingPolicy", typ: reflect.TypeOf(PairingPolicy(""))},
+		{name: "MutationLabProfiles", typ: reflect.TypeOf([]eebusraw.MutationLabProfileV1(nil))},
 	})
 
 	policyType := reflect.TypeOf(PairingPolicy(""))

@@ -29,7 +29,7 @@ func TestMSP05PPublicAPIAttestationIsInitialV1(t *testing.T) {
 	}
 	root := msp05pRootSurface(t, doc)
 	want := map[string]string{
-		"Config":              "type Config struct{ Enabled bool; StateRoot string; Interface string; ListenAddress netip.AddrPort; DiscoveryEnabled bool; Remotes []Remote; PairingPolicy PairingPolicy }",
+		"Config":              "type Config struct{ Enabled bool; StateRoot string; Interface string; ListenAddress netip.AddrPort; DiscoveryEnabled bool; Remotes []Remote; PairingPolicy PairingPolicy; MutationLabProfiles []eebusraw.MutationLabProfileV1 }",
 		"New":                 "func New(Config) (Runtime, error)",
 		"PairingPolicy":       "type PairingPolicy string",
 		"PairingPolicyClosed": `const PairingPolicyClosed PairingPolicy = "closed"`,
@@ -228,6 +228,7 @@ func msp0625RawSymbol(symbol symbol) bool {
 		"NoContactEvidenceV1": {}, "RejectionVerificationV1": {},
 		"NoEffectVerificationV1": {}, "OutcomeEvidenceV1": {},
 		"RollbackV1": {}, "MutationV1": {},
+		"MutationLabProfileV1": {},
 	}
 	if _, ok := types[symbol.Name]; ok {
 		return true
@@ -253,9 +254,11 @@ func msp0625RawSymbol(symbol symbol) bool {
 		"ValidateFeaturesGetDataV1",
 		"ValidateMutationGetRequestV1",
 		"ValidateMutationRollbackRequestV1",
+		"ValidateMutationLabProfileV1",
 		"ValidateMutationV1",
 		"ValidateReadAuthorizationV1",
 		"ValidateWriteAuthorizationV1",
+		"MutationLabProfileContractV1",
 	} {
 		if symbol.Name == name {
 			return true

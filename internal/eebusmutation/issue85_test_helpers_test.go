@@ -391,7 +391,18 @@ func issue85WithRuntimeBinding(epoch, generation uint64) issue85HarnessOption {
 
 func issue85WithProfile(profile rawMutationLabProfile) issue85HarnessOption {
 	return func(harness *issue85Harness) {
-		harness.config.LabProfiles = []rawMutationLabProfile{profile}
+		harness.config.LabProfiles = []rawMutationLabProfile{
+			cloneRawMutationLabProfile(profile),
+		}
+		harness.policy.decision.LabProfileID = profile.ProfileID
+		harness.policy.decision.EvidenceHashes = append(
+			[]eebusraw.HashV1(nil),
+			profile.EvidenceHashes...,
+		)
+		harness.policy.decision.SafetyPredicates = append(
+			[]string(nil),
+			profile.SafetyPredicates...,
+		)
 	}
 }
 
@@ -582,7 +593,10 @@ func (harness *issue85Harness) exactLabProfile() rawMutationLabProfile {
 		RollbackValueHash:      beforeHash,
 		MaximumProbeTTLSeconds: 60,
 		SafetyPredicates:       []string{"rollback_representable"},
-		ExpiresAt:              harness.clock.Now().Add(10 * time.Minute),
+		EvidenceHashes: []eebusraw.HashV1{
+			"sha256:3333333333333333333333333333333333333333333333333333333333333333",
+		},
+		ExpiresAt: harness.clock.Now().Add(10 * time.Minute),
 	}
 }
 
@@ -1046,10 +1060,11 @@ type issue85PolicyProvider struct {
 
 func (provider *issue85PolicyProvider) MutationPolicy(
 	_ context.Context,
-	target eebusraw.FeatureTargetV1,
+	request eebusraw.FeatureDataSetRequestV1,
 	before eebusraw.TypedValueV1,
-	value eebusraw.TypedValueV1,
 ) (rawMutationPolicyDecision, *eebusraw.ErrorV1) {
+	target := request.Target
+	value := request.Value
 	provider.mu.Lock()
 	provider.calls++
 	call := provider.calls
@@ -1073,6 +1088,8 @@ func (provider *issue85PolicyProvider) MutationPolicy(
 	result := provider.decision
 	result.ConstraintFailures = append([]string(nil), result.ConstraintFailures...)
 	result.SafetyFailures = append([]string(nil), result.SafetyFailures...)
+	result.EvidenceHashes = append([]eebusraw.HashV1(nil), result.EvidenceHashes...)
+	result.SafetyPredicates = append([]string(nil), result.SafetyPredicates...)
 	provider.mu.Unlock()
 
 	if maxCalls >= 0 && call > maxCalls {
