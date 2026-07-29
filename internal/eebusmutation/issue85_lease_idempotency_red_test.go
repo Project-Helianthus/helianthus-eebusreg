@@ -1106,6 +1106,8 @@ func TestIssue85ExpiredProbeRecoveryWaitsForDeterministicTrigger(t *testing.T) {
 	recoveryExecutor := &issue85Executor{t: t, events: firstHarness.events}
 	recoveryScheduler := newIssue85Scheduler(firstHarness.clock, firstHarness.events)
 	draft := issue85HarnessDraft(t)
+	expiredProfile := draft.exactLabProfile()
+	expiredProfile.ExpiresAt = firstHarness.clock.Now().Add(-time.Second)
 	recoveryExecutor.setSteps(
 		[]issue85ReadStep{
 			draft.readStep(draft.requested),
@@ -1128,6 +1130,7 @@ func TestIssue85ExpiredProbeRecoveryWaitsForDeterministicTrigger(t *testing.T) {
 		issue85WithClock(firstHarness.clock),
 		issue85WithScheduler(recoveryScheduler),
 		issue85WithEvents(firstHarness.events),
+		issue85WithProfile(expiredProfile),
 	)
 	reads, writes, _, exhausted := recoveryExecutor.counts()
 	if reads != 0 || writes != 0 || exhausted != 0 {

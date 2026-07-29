@@ -582,7 +582,10 @@ func (harness *issue85Harness) exactLabProfile() rawMutationLabProfile {
 		RollbackValueHash:      beforeHash,
 		MaximumProbeTTLSeconds: 60,
 		SafetyPredicates:       []string{"rollback_representable"},
-		ExpiresAt:              harness.clock.Now().Add(10 * time.Minute),
+		EvidenceHashes: []eebusraw.HashV1{
+			"sha256:3333333333333333333333333333333333333333333333333333333333333333",
+		},
+		ExpiresAt: harness.clock.Now().Add(10 * time.Minute),
 	}
 }
 
