@@ -11,6 +11,7 @@ import (
 
 func TestIssue93RuntimeConfigOwnsMutationLabProfilesBeforeFacadeAcquisition(t *testing.T) {
 	profile := issue93RuntimeLabProfile(t)
+	expected := profile.Clone()
 	config := validRuntimeConfig(t.TempDir())
 	config.MutationLabProfiles = []eebusraw.MutationLabProfileV1{profile}
 
@@ -24,9 +25,13 @@ func TestIssue93RuntimeConfigOwnsMutationLabProfilesBeforeFacadeAcquisition(t *t
 	}
 
 	config.MutationLabProfiles[0].Target.EntityAddress[0] = 99
-	config.MutationLabProfiles[0].AllowedValueHashes[0] = "sha256:" + strings.Repeat("4", 64)
+	config.MutationLabProfiles[0].AllowedValueHashes[0] = eebusraw.HashV1(
+		"sha256:" + strings.Repeat("4", 64),
+	)
 	config.MutationLabProfiles[0].SafetyPredicates[0] = "changed"
-	config.MutationLabProfiles[0].EvidenceHashes[0] = "sha256:" + strings.Repeat("5", 64)
+	config.MutationLabProfiles[0].EvidenceHashes[0] = eebusraw.HashV1(
+		"sha256:" + strings.Repeat("5", 64),
+	)
 
 	if err := instance.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -42,9 +47,9 @@ func TestIssue93RuntimeConfigOwnsMutationLabProfilesBeforeFacadeAcquisition(t *t
 	}
 	got := acquired.MutationLabProfiles[0]
 	if got.Target.EntityAddress[0] != 1 ||
-		got.AllowedValueHashes[0] != profile.AllowedValueHashes[0] ||
-		got.SafetyPredicates[0] != profile.SafetyPredicates[0] ||
-		got.EvidenceHashes[0] != profile.EvidenceHashes[0] {
+		got.AllowedValueHashes[0] != expected.AllowedValueHashes[0] ||
+		got.SafetyPredicates[0] != expected.SafetyPredicates[0] ||
+		got.EvidenceHashes[0] != expected.EvidenceHashes[0] {
 		t.Fatalf("facade acquisition observed caller mutation: %+v", got)
 	}
 }
@@ -132,7 +137,9 @@ func issue93RuntimeLabProfile(t *testing.T) eebusraw.MutationLabProfileV1 {
 			"exact-target-capability-current",
 			"rollback-representable",
 		},
-		EvidenceHashes: []eebusraw.HashV1{"sha256:" + strings.Repeat("3", 64)},
-		ExpiresAt:      time.Unix(1_900_000_000, 0).UTC(),
+		EvidenceHashes: []eebusraw.HashV1{
+			eebusraw.HashV1("sha256:" + strings.Repeat("3", 64)),
+		},
+		ExpiresAt: time.Unix(1_900_000_000, 0).UTC(),
 	}
 }

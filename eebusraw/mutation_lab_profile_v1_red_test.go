@@ -83,9 +83,9 @@ func TestIssue93MutationLabProfileV1CloneOwnsNestedValues(t *testing.T) {
 	profile := issue93RawLabProfile()
 	clone := profile.Clone()
 	profile.Target.EntityAddress[0] = 99
-	profile.AllowedValueHashes[0] = "sha256:" + strings.Repeat("4", 64)
+	profile.AllowedValueHashes[0] = eebusraw.HashV1("sha256:" + strings.Repeat("4", 64))
 	profile.SafetyPredicates[0] = "changed"
-	profile.EvidenceHashes[0] = "sha256:" + strings.Repeat("5", 64)
+	profile.EvidenceHashes[0] = eebusraw.HashV1("sha256:" + strings.Repeat("5", 64))
 
 	if clone.Target.EntityAddress[0] != 1 ||
 		clone.AllowedValueHashes[0] != eebusraw.HashV1("sha256:"+strings.Repeat("1", 64)) ||
@@ -110,14 +110,18 @@ func issue93RawLabProfile() eebusraw.MutationLabProfileV1 {
 			Function:       "measurementListData",
 			Operation:      eebusraw.OperationV1Write,
 		},
-		AllowedValueHashes:     []eebusraw.HashV1{"sha256:" + strings.Repeat("1", 64)},
-		RollbackValueHash:      "sha256:" + strings.Repeat("2", 64),
+		AllowedValueHashes: []eebusraw.HashV1{
+			eebusraw.HashV1("sha256:" + strings.Repeat("1", 64)),
+		},
+		RollbackValueHash:      eebusraw.HashV1("sha256:" + strings.Repeat("2", 64)),
 		MaximumProbeTTLSeconds: 60,
 		SafetyPredicates: []string{
 			"exact-target-capability-current",
 			"rollback-representable",
 		},
-		EvidenceHashes: []eebusraw.HashV1{"sha256:" + strings.Repeat("3", 64)},
-		ExpiresAt:      time.Unix(1_900_000_000, 0).UTC(),
+		EvidenceHashes: []eebusraw.HashV1{
+			eebusraw.HashV1("sha256:" + strings.Repeat("3", 64)),
+		},
+		ExpiresAt: time.Unix(1_900_000_000, 0).UTC(),
 	}
 }

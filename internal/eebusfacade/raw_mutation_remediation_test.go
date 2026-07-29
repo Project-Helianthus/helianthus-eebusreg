@@ -79,8 +79,7 @@ func (runtime *remediationMutationRuntime) FullWriteIfCurrent(
 
 func (*remediationMutationRuntime) MutationPolicy(
 	context.Context,
-	eebusraw.FeatureTargetV1,
-	eebusraw.TypedValueV1,
+	eebusraw.FeatureDataSetRequestV1,
 	eebusraw.TypedValueV1,
 ) (eebusmutation.PolicyDecision, *eebusraw.ErrorV1) {
 	return eebusmutation.PolicyDecision{

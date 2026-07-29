@@ -45,6 +45,123 @@ func TestIssue93ProductionPolicyAttestsOneExactCurrentLabProfile(t *testing.T) {
 	}
 }
 
+func TestIssue93ProductionCompositionBindsIndependentProfileCopies(t *testing.T) {
+	var source eebusmutation.LabProfile
+	var coordinatorProfiles []eebusmutation.LabProfile
+	var policyBridge *rawFeatureRuntimeBridge
+	harness := newMSP045ProductHarness(t, func(setup *msp045ProductSetup) {
+		target := eebusraw.FeatureTargetV1{
+			RemoteSKI:      setup.remoteSKI,
+			SHIPID:         "issue93-composition-ship",
+			DeviceAddress:  "issue93-composition-device",
+			EntityAddress:  []uint64{1},
+			FeatureAddress: 7,
+			FeatureType:    "measurement",
+			FeatureRole:    eebusraw.FeatureRoleV1Server,
+			Function:       "measurementListData",
+			Operation:      eebusraw.OperationV1Write,
+		}
+		before := issue93FacadeValue(t, 20)
+		requested := issue93FacadeValue(t, 21)
+		beforeHash, err := before.ComputeHash()
+		if err != nil {
+			t.Fatal(err)
+		}
+		requestedHash, err := requested.ComputeHash()
+		if err != nil {
+			t.Fatal(err)
+		}
+		source = eebusmutation.LabProfile{
+			Contract:               eebusmutation.LabProfileContract,
+			ProfileID:              "issue93-composition-profile",
+			Target:                 target,
+			AllowedValueHashes:     []eebusraw.HashV1{requestedHash},
+			RollbackValueHash:      beforeHash,
+			MaximumProbeTTLSeconds: 60,
+			SafetyPredicates: []string{
+				"exact-target-capability-current",
+				"rollback-representable",
+			},
+			EvidenceHashes: []eebusraw.HashV1{
+				"sha256:3333333333333333333333333333333333333333333333333333333333333333",
+			},
+			ExpiresAt: time.Unix(1_900_000_000, 0).UTC(),
+		}
+		setup.configureRuntime = func(config *RuntimeConfig) {
+			config.LabProfiles = []eebusmutation.LabProfile{source}
+		}
+		setup.configureDependencies = func(dependencies *runtimeDependencies) {
+			productionFactory := dependencies.newMutationCoordinator
+			dependencies.newMutationCoordinator = func(
+				config eebusmutation.CoordinatorConfig,
+				deps eebusmutation.CoordinatorDependencies,
+			) (*eebusmutation.Coordinator, *eebusraw.ErrorV1) {
+				coordinatorProfiles = cloneRuntimeMutationLabProfiles(config.LabProfiles)
+				policyBridge, _ = deps.Policy.(*rawFeatureRuntimeBridge)
+				return productionFactory(config, deps)
+			}
+		}
+	})
+	if harness.backend.rawMutations == nil || policyBridge == nil {
+		t.Fatal("production composition omitted mutation coordinator or policy bridge")
+	}
+	source.Target.EntityAddress[0] = 99
+	source.AllowedValueHashes[0] =
+		"sha256:4444444444444444444444444444444444444444444444444444444444444444"
+	source.SafetyPredicates[0] = "changed"
+	source.EvidenceHashes[0] =
+		"sha256:5555555555555555555555555555555555555555555555555555555555555555"
+
+	if len(coordinatorProfiles) != 1 || len(policyBridge.mutationLabProfiles) != 1 {
+		t.Fatalf(
+			"production profile counts coordinator=%d policy=%d",
+			len(coordinatorProfiles),
+			len(policyBridge.mutationLabProfiles),
+		)
+	}
+	for owner, profile := range map[string]eebusmutation.LabProfile{
+		"coordinator": coordinatorProfiles[0],
+		"policy":      policyBridge.mutationLabProfiles[0],
+	} {
+		if profile.Target.EntityAddress[0] != 1 ||
+			profile.AllowedValueHashes[0] == source.AllowedValueHashes[0] ||
+			profile.SafetyPredicates[0] == source.SafetyPredicates[0] ||
+			profile.EvidenceHashes[0] == source.EvidenceHashes[0] {
+			t.Fatalf("%s retained mutable profile input: %+v", owner, profile)
+		}
+	}
+}
+
+func TestIssue93ProductionPolicyWithoutProfilesRemainsFailClosed(t *testing.T) {
+	fixture := newIssue83RawBridgeFixture(t)
+	before := issue93FacadeValue(t, 20)
+	requested := issue93FacadeValue(t, 21)
+	target := issue83TargetFromLocator(fixture.locators[0])
+	target.Operation = eebusraw.OperationV1Write
+
+	decision, terminal := fixture.bridge.MutationPolicy(
+		context.Background(),
+		eebusraw.FeatureDataSetRequestV1{
+			Target: target,
+			Value:  requested,
+			Mode:   eebusraw.ModeV1Apply,
+		},
+		before,
+	)
+	if terminal != nil {
+		t.Fatalf("MutationPolicy(no profiles) = %+v", terminal)
+	}
+	if !decision.FullWrite ||
+		decision.Changeability != eebusraw.ChangeabilityV1Unknown ||
+		decision.ConstraintsKnown ||
+		decision.LabAllowlisted {
+		t.Fatalf("no-profile policy decision = %+v", decision)
+	}
+	if fixture.sender.calls.Load() != 0 {
+		t.Fatalf("no-profile policy contacted remote %d times", fixture.sender.calls.Load())
+	}
+}
+
 func TestIssue93ProductionPolicyFailsClosedForInexactOrExpiredProfiles(t *testing.T) {
 	tests := []struct {
 		name   string

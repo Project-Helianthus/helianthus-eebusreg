@@ -33,33 +33,28 @@ func validateRawMutationConfiguration(
 	if now.IsZero() {
 		return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
 	}
+	if len(config.LabProfiles) > 16 {
+		return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
+	}
 	seenProfiles := make(map[string]struct{}, len(config.LabProfiles))
+	seenCommitments := make(map[eebusraw.HashV1]struct{}, len(config.LabProfiles))
 	for _, profile := range config.LabProfiles {
-		if profile.Contract != rawMutationLabProfileContract ||
-			strings.TrimSpace(profile.ProfileID) == "" ||
-			profile.ExpiresAt.IsZero() ||
-			!profile.ExpiresAt.After(now) ||
-			len(profile.AllowedValueHashes) == 0 ||
-			profile.RollbackValueHash == "" ||
-			profile.MaximumProbeTTLSeconds == 0 ||
-			len(profile.SafetyPredicates) == 0 ||
-			validateWriteTarget(profile.Target) != nil {
+		public := publicRawMutationLabProfile(profile)
+		if eebusraw.ValidateMutationLabProfileV1(public) != nil {
 			return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
 		}
 		if _, duplicate := seenProfiles[profile.ProfileID]; duplicate {
 			return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
 		}
+		commitment, err := eebusraw.CanonicalSHA256V1(public)
+		if err != nil {
+			return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
+		}
+		if _, duplicate := seenCommitments[commitment]; duplicate {
+			return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
+		}
 		seenProfiles[profile.ProfileID] = struct{}{}
-		for _, hash := range profile.AllowedValueHashes {
-			if hash == "" {
-				return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
-			}
-		}
-		for _, predicate := range profile.SafetyPredicates {
-			if strings.TrimSpace(predicate) == "" {
-				return mutationError(eebusraw.ErrorCodeV1InvalidArgument, false)
-			}
-		}
+		seenCommitments[commitment] = struct{}{}
 	}
 	return nil
 }
@@ -188,34 +183,51 @@ func validateRawMutationPolicy(
 		return mutationError(eebusraw.ErrorCodeV1ConstraintFailure, false)
 	}
 	if decision.ConstraintsKnown {
-		return nil
+		if decision.LabProfileID == "" &&
+			len(decision.EvidenceHashes) == 0 &&
+			len(decision.SafetyPredicates) == 0 {
+			return nil
+		}
 	}
-	if exactRawMutationLabProfiles(config, request, before) != 1 {
+	profile, matches := exactRawMutationLabProfile(config, request, before)
+	if matches != 1 ||
+		decision.LabProfileID != profile.ProfileID ||
+		!reflect.DeepEqual(decision.EvidenceHashes, profile.EvidenceHashes) ||
+		!reflect.DeepEqual(decision.SafetyPredicates, profile.SafetyPredicates) {
 		return mutationError(eebusraw.ErrorCodeV1ConstraintsUnknown, false)
 	}
 	return nil
 }
 
-func exactRawMutationLabProfiles(
+func exactRawMutationLabProfile(
 	config rawMutationCoordinatorConfig,
 	request eebusraw.FeatureDataSetRequestV1,
 	before eebusraw.TypedValueV1,
-) int {
+) (rawMutationLabProfile, int) {
+	beforeHash, err := before.ComputeHash()
+	if err != nil {
+		return rawMutationLabProfile{}, 0
+	}
+	return exactRawMutationLabProfileForHash(config, request, beforeHash)
+}
+
+func exactRawMutationLabProfileForHash(
+	config rawMutationCoordinatorConfig,
+	request eebusraw.FeatureDataSetRequestV1,
+	beforeHash eebusraw.HashV1,
+) (rawMutationLabProfile, int) {
 	override := request.ConstraintsOverride
 	if override == nil ||
 		strings.TrimSpace(override.Justification) == "" ||
 		!override.ExpiresAt.After(config.Now()) {
-		return 0
+		return rawMutationLabProfile{}, 0
 	}
 	requestedHash, err := request.Value.ComputeHash()
 	if err != nil {
-		return 0
-	}
-	beforeHash, err := before.ComputeHash()
-	if err != nil {
-		return 0
+		return rawMutationLabProfile{}, 0
 	}
 	matches := 0
+	var matched rawMutationLabProfile
 	for _, profile := range config.LabProfiles {
 		if profile.ProfileID != override.ProfileID ||
 			!profile.ExpiresAt.After(config.Now()) ||
@@ -235,9 +247,26 @@ func exactRawMutationLabProfiles(
 		}
 		if allowed {
 			matches++
+			matched = cloneRawMutationLabProfile(profile)
 		}
 	}
-	return matches
+	return matched, matches
+}
+
+func publicRawMutationLabProfile(
+	profile rawMutationLabProfile,
+) eebusraw.MutationLabProfileV1 {
+	return eebusraw.MutationLabProfileV1{
+		Contract:               profile.Contract,
+		ProfileID:              profile.ProfileID,
+		Target:                 profile.Target.Clone(),
+		AllowedValueHashes:     append([]eebusraw.HashV1(nil), profile.AllowedValueHashes...),
+		RollbackValueHash:      profile.RollbackValueHash,
+		MaximumProbeTTLSeconds: profile.MaximumProbeTTLSeconds,
+		SafetyPredicates:       append([]string(nil), profile.SafetyPredicates...),
+		EvidenceHashes:         append([]eebusraw.HashV1(nil), profile.EvidenceHashes...),
+		ExpiresAt:              profile.ExpiresAt,
+	}
 }
 
 func rawMutationIdentityHash(

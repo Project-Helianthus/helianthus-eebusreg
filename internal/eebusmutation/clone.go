@@ -90,3 +90,26 @@ func cloneTerminal(terminal *eebusraw.ErrorV1) *eebusraw.ErrorV1 {
 	cloned := terminal.Clone()
 	return &cloned
 }
+
+func cloneRawMutationLabProfiles(
+	profiles []rawMutationLabProfile,
+) []rawMutationLabProfile {
+	if profiles == nil {
+		return nil
+	}
+	cloned := make([]rawMutationLabProfile, len(profiles))
+	for index, profile := range profiles {
+		cloned[index] = cloneRawMutationLabProfile(profile)
+	}
+	return cloned
+}
+
+func cloneRawMutationLabProfile(
+	profile rawMutationLabProfile,
+) rawMutationLabProfile {
+	profile.Target = profile.Target.Clone()
+	profile.AllowedValueHashes = append([]eebusraw.HashV1(nil), profile.AllowedValueHashes...)
+	profile.SafetyPredicates = append([]string(nil), profile.SafetyPredicates...)
+	profile.EvidenceHashes = append([]eebusraw.HashV1(nil), profile.EvidenceHashes...)
+	return profile
+}

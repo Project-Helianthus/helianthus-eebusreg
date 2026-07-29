@@ -71,7 +71,7 @@ func newRawMutationCoordinator(
 		return nil, terminal
 	}
 	config.ReferenceKey = append([]byte(nil), config.ReferenceKey...)
-	config.LabProfiles = append([]rawMutationLabProfile(nil), config.LabProfiles...)
+	config.LabProfiles = cloneRawMutationLabProfiles(config.LabProfiles)
 	journal, records, err := openRawMutationJournal(config.StateRoot, dependencies.Persistence)
 	if err != nil {
 		return nil, internalMutationError()
@@ -227,6 +227,16 @@ func (coordinator *rawMutationCoordinator) FeaturesDataSet(
 	if terminal != nil {
 		return eebusraw.MutationV1{}, terminal
 	}
+	if request.ConstraintsOverride != nil {
+		if _, matches := exactRawMutationLabProfileForHash(
+			coordinator.config,
+			request,
+			binding.BeforeImageHash,
+		); matches != 1 {
+			return eebusraw.MutationV1{},
+				mutationError(eebusraw.ErrorCodeV1ConstraintsUnknown, false)
+		}
+	}
 	if terminal := validateCurrentRawMutationBinding(
 		coordinator.deps.BindingAuthority,
 		request.Target,
@@ -275,9 +285,8 @@ func (coordinator *rawMutationCoordinator) FeaturesDataSet(
 
 	decision, policyTerminal := coordinator.deps.Policy.MutationPolicy(
 		ctx,
-		request.Target.Clone(),
+		cloneRawMutationSetRequest(request),
 		beforeRead.Value.Clone(),
-		request.Value.Clone(),
 	)
 	if policyTerminal != nil {
 		return eebusraw.MutationV1{}, sanitizeMutationError(policyTerminal)

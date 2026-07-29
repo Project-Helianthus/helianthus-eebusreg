@@ -55,6 +55,7 @@ type RuntimeConfig struct {
 	ListenAddress    netip.AddrPort
 	DiscoveryEnabled bool
 	Remotes          []RuntimeRemote
+	LabProfiles      []eebusmutation.LabProfile
 }
 
 type RuntimeRemote struct {
@@ -350,12 +351,13 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		return nil, closeRuntime(err)
 	}
 	runtimeEpoch := rawRuntimeEpochProvider(firstTrust, rawRuntimeEpoch)
-	rawFeatures := newRawFeatureRuntimeBridgeWithGenerationStore(
+	rawFeatures := newRawFeatureRuntimeBridgeWithMutationProfiles(
 		localDevice,
 		runtimeEpoch,
 		dependencies.now,
 		rawTokenIssuer,
 		rawConnectionGenerations,
+		config.LabProfiles,
 	)
 	handler.bindRawFeatureRuntime(rawFeatures)
 	if dependencies.subscribeSPINEEvents == nil {
@@ -411,6 +413,7 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 				WriterWait:       50 * time.Millisecond,
 				RecoveryDeadline: 5 * time.Minute,
 				ReferenceKey:     mutationReferenceKey,
+				LabProfiles:      cloneRuntimeMutationLabProfiles(config.LabProfiles),
 			},
 			eebusmutation.CoordinatorDependencies{
 				Executor:         rawFeatures,
