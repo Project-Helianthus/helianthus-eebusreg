@@ -112,7 +112,11 @@ func TestIssue85BoundaryAllowlistsAddOnlyTheMutationSurface(t *testing.T) {
 }
 
 func issue85MutationRuntimeExports() []manifestExport {
-	return []manifestExport{{Kind: "type", Name: "RawMutationRuntimeV1"}}
+	return []manifestExport{
+		{Kind: "func", Name: "RawMutationOutcomeV1.Clone"},
+		{Kind: "type", Name: "RawMutationOutcomeV1"},
+		{Kind: "type", Name: "RawMutationRuntimeV1"},
+	}
 }
 
 func issue85MutationRawExports() []manifestExport {

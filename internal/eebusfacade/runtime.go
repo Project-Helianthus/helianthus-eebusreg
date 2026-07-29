@@ -643,12 +643,75 @@ func (backend *serviceBackend) FeaturesDataSet(
 	ctx context.Context,
 	auth eebusraw.WriteAuthorizationV1,
 	request eebusraw.FeatureDataSetRequestV1,
-) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+) (RawMutationOutcomeV1, *eebusraw.ErrorV1) {
+	if terminal := eebusraw.ValidateWriteAuthorizationV1(
+		auth,
+		eebusraw.ToolV1FeaturesDataSet,
+	); terminal != nil {
+		return RawMutationOutcomeV1{}, terminal
+	}
+	if terminal := validateRawMutationRequestWithoutToken(request); terminal != nil {
+		return RawMutationOutcomeV1{}, terminal
+	}
+	runtime, tokenTerminal := backend.rawMutationTokenRuntime(ctx, request.ReadToken)
+	if tokenTerminal != nil {
+		if tokenTerminal.Code == eebusraw.ErrorCodeV1StaleReadToken {
+			return RawMutationOutcomeV1{}, eebusraw.NewErrorV1(
+				eebusraw.ErrorCodeV1StaleReadToken,
+				"raw mutation read token is stale",
+				false,
+				eebusraw.SourceLayerV1Runtime,
+			)
+		}
+		cloned := tokenTerminal.Clone()
+		return RawMutationOutcomeV1{}, &cloned
+	}
 	coordinator, terminal := backend.mutationCoordinator()
 	if terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return RawMutationOutcomeV1{Runtime: runtime}, terminal
 	}
-	return coordinator.FeaturesDataSet(ctx, auth, request)
+	mutation, terminal := coordinator.FeaturesDataSet(ctx, auth, request)
+	return rawMutationOutcome(mutation, runtime), terminal
+}
+
+func (backend *serviceBackend) rawMutationTokenRuntime(
+	ctx context.Context,
+	token string,
+) (*eebusraw.RuntimeBindingV1, *eebusraw.ErrorV1) {
+	if backend == nil || backend.rawFeatures == nil ||
+		backend.rawFeatures.tokenIssuer == nil {
+		return nil, nil
+	}
+	binding, terminal := backend.rawFeatures.tokenIssuer.VerifyReadToken(ctx, token)
+	if terminal != nil ||
+		binding.Runtime.RuntimeEpoch == 0 ||
+		binding.Runtime.ConnectionGeneration == 0 {
+		return nil, terminal
+	}
+	runtime := binding.Runtime
+	return &runtime, nil
+}
+
+func validateRawMutationRequestWithoutToken(
+	request eebusraw.FeatureDataSetRequestV1,
+) *eebusraw.ErrorV1 {
+	request.ReadToken = strings.Repeat("A", 43)
+	return eebusraw.ValidateFeatureDataSetRequestV1(request)
+}
+
+func rawMutationOutcome(
+	mutation eebusraw.MutationV1,
+	runtime *eebusraw.RuntimeBindingV1,
+) RawMutationOutcomeV1 {
+	if mutation.Runtime.RuntimeEpoch != 0 &&
+		mutation.Runtime.ConnectionGeneration != 0 {
+		bound := mutation.Runtime
+		runtime = &bound
+	}
+	return RawMutationOutcomeV1{
+		Mutation: mutation,
+		Runtime:  runtime,
+	}
 }
 
 func (backend *serviceBackend) mutationCoordinator() (
@@ -673,24 +736,26 @@ func (backend *serviceBackend) MutationsGet(
 	ctx context.Context,
 	auth eebusraw.ReadAuthorizationV1,
 	request eebusraw.MutationGetRequestV1,
-) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+) (RawMutationOutcomeV1, *eebusraw.ErrorV1) {
 	coordinator, terminal := backend.mutationCoordinator()
 	if terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return RawMutationOutcomeV1{}, terminal
 	}
-	return coordinator.MutationsGet(ctx, auth, request)
+	mutation, terminal := coordinator.MutationsGet(ctx, auth, request)
+	return rawMutationOutcome(mutation, nil), terminal
 }
 
 func (backend *serviceBackend) MutationsRollback(
 	ctx context.Context,
 	auth eebusraw.WriteAuthorizationV1,
 	request eebusraw.MutationRollbackRequestV1,
-) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+) (RawMutationOutcomeV1, *eebusraw.ErrorV1) {
 	coordinator, terminal := backend.mutationCoordinator()
 	if terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return RawMutationOutcomeV1{}, terminal
 	}
-	return coordinator.MutationsRollback(ctx, auth, request)
+	mutation, terminal := coordinator.MutationsRollback(ctx, auth, request)
+	return rawMutationOutcome(mutation, nil), terminal
 }
 
 func (backend *serviceBackend) Close() error {

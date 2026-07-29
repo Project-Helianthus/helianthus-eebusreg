@@ -26,17 +26,22 @@ type RawMutationBackend interface {
 		context.Context,
 		eebusraw.WriteAuthorizationV1,
 		eebusraw.FeatureDataSetRequestV1,
-	) (eebusraw.MutationV1, *eebusraw.ErrorV1)
+	) (RawMutationOutcomeV1, *eebusraw.ErrorV1)
 	MutationsGet(
 		context.Context,
 		eebusraw.ReadAuthorizationV1,
 		eebusraw.MutationGetRequestV1,
-	) (eebusraw.MutationV1, *eebusraw.ErrorV1)
+	) (RawMutationOutcomeV1, *eebusraw.ErrorV1)
 	MutationsRollback(
 		context.Context,
 		eebusraw.WriteAuthorizationV1,
 		eebusraw.MutationRollbackRequestV1,
-	) (eebusraw.MutationV1, *eebusraw.ErrorV1)
+	) (RawMutationOutcomeV1, *eebusraw.ErrorV1)
+}
+
+type RawMutationOutcomeV1 struct {
+	Mutation eebusraw.MutationV1
+	Runtime  *eebusraw.RuntimeBindingV1
 }
 
 func (issuer *rawReadTokenIssuer) VerifyReadToken(

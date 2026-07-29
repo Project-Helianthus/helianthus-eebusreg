@@ -49,9 +49,28 @@ func TestIssue85PublicMutationSurfaceIsExactAndDependencyFree(t *testing.T) {
 	if got := rootSymbols["RawFeatureRuntimeV1"].Signature; got != readRuntimeSignature {
 		t.Errorf("RawFeatureRuntimeV1 signature = %q, want unchanged read-only surface %q", got, readRuntimeSignature)
 	}
-	const mutationRuntimeSignature = "type RawMutationRuntimeV1 interface{ FeaturesDataSet(context.Context, eebusraw.WriteAuthorizationV1, eebusraw.FeatureDataSetRequestV1) (eebusraw.MutationV1, *eebusraw.ErrorV1); MutationsGet(context.Context, eebusraw.ReadAuthorizationV1, eebusraw.MutationGetRequestV1) (eebusraw.MutationV1, *eebusraw.ErrorV1); MutationsRollback(context.Context, eebusraw.WriteAuthorizationV1, eebusraw.MutationRollbackRequestV1) (eebusraw.MutationV1, *eebusraw.ErrorV1) }"
+	const mutationRuntimeSignature = "type RawMutationRuntimeV1 interface{ FeaturesDataSet(context.Context, eebusraw.WriteAuthorizationV1, eebusraw.FeatureDataSetRequestV1) (RawMutationOutcomeV1, *eebusraw.ErrorV1); MutationsGet(context.Context, eebusraw.ReadAuthorizationV1, eebusraw.MutationGetRequestV1) (RawMutationOutcomeV1, *eebusraw.ErrorV1); MutationsRollback(context.Context, eebusraw.WriteAuthorizationV1, eebusraw.MutationRollbackRequestV1) (RawMutationOutcomeV1, *eebusraw.ErrorV1) }"
 	if got := rootSymbols["RawMutationRuntimeV1"].Signature; got != mutationRuntimeSignature {
 		t.Errorf("RawMutationRuntimeV1 signature = %q, want exact separate mutation surface %q", got, mutationRuntimeSignature)
+	}
+	const mutationOutcomeSignature = "type RawMutationOutcomeV1 struct{ Mutation eebusraw.MutationV1; Runtime *eebusraw.RuntimeBindingV1 }"
+	if got := rootSymbols["RawMutationOutcomeV1"]; got.Signature != mutationOutcomeSignature ||
+		got.TypeForm != "defined" {
+		t.Errorf("RawMutationOutcomeV1 = signature %q form %q, want defined %q", got.Signature, got.TypeForm, mutationOutcomeSignature)
+	}
+	const mutationOutcomeCloneSignature = "func (RawMutationOutcomeV1) Clone() RawMutationOutcomeV1"
+	cloneFound := false
+	for _, symbol := range root.Symbols {
+		if symbol.Name == "Clone" && symbol.Receiver != nil &&
+			symbol.Receiver.Base == "RawMutationOutcomeV1" {
+			cloneFound = true
+			if symbol.Signature != mutationOutcomeCloneSignature {
+				t.Errorf("RawMutationOutcomeV1.Clone = %q, want %q", symbol.Signature, mutationOutcomeCloneSignature)
+			}
+		}
+	}
+	if !cloneFound {
+		t.Error("RawMutationOutcomeV1.Clone is missing")
 	}
 	const runtimeSignature = "type Runtime interface{ PairingState() ([]PairingObservationV1, error); RawFeatureRuntimeV1; Shutdown() error; Snapshot() (SnapshotV1, error); Start(context.Context) error }"
 	if got := rootSymbols["Runtime"].Signature; got != runtimeSignature {

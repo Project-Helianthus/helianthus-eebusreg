@@ -13,17 +13,31 @@ type RawMutationRuntimeV1 interface {
 		context.Context,
 		eebusraw.WriteAuthorizationV1,
 		eebusraw.FeatureDataSetRequestV1,
-	) (eebusraw.MutationV1, *eebusraw.ErrorV1)
+	) (RawMutationOutcomeV1, *eebusraw.ErrorV1)
 	MutationsGet(
 		context.Context,
 		eebusraw.ReadAuthorizationV1,
 		eebusraw.MutationGetRequestV1,
-	) (eebusraw.MutationV1, *eebusraw.ErrorV1)
+	) (RawMutationOutcomeV1, *eebusraw.ErrorV1)
 	MutationsRollback(
 		context.Context,
 		eebusraw.WriteAuthorizationV1,
 		eebusraw.MutationRollbackRequestV1,
-	) (eebusraw.MutationV1, *eebusraw.ErrorV1)
+	) (RawMutationOutcomeV1, *eebusraw.ErrorV1)
+}
+
+type RawMutationOutcomeV1 struct {
+	Mutation eebusraw.MutationV1
+	Runtime  *eebusraw.RuntimeBindingV1
+}
+
+func (outcome RawMutationOutcomeV1) Clone() RawMutationOutcomeV1 {
+	outcome.Mutation = cloneMutationV1(outcome.Mutation)
+	if outcome.Runtime != nil {
+		runtime := *outcome.Runtime
+		outcome.Runtime = &runtime
+	}
+	return outcome
 }
 
 type rawMutationRuntimeBackend interface {
@@ -31,17 +45,17 @@ type rawMutationRuntimeBackend interface {
 		context.Context,
 		eebusraw.WriteAuthorizationV1,
 		eebusraw.FeatureDataSetRequestV1,
-	) (eebusraw.MutationV1, *eebusraw.ErrorV1)
+	) (RawMutationOutcomeV1, *eebusraw.ErrorV1)
 	MutationsGet(
 		context.Context,
 		eebusraw.ReadAuthorizationV1,
 		eebusraw.MutationGetRequestV1,
-	) (eebusraw.MutationV1, *eebusraw.ErrorV1)
+	) (RawMutationOutcomeV1, *eebusraw.ErrorV1)
 	MutationsRollback(
 		context.Context,
 		eebusraw.WriteAuthorizationV1,
 		eebusraw.MutationRollbackRequestV1,
-	) (eebusraw.MutationV1, *eebusraw.ErrorV1)
+	) (RawMutationOutcomeV1, *eebusraw.ErrorV1)
 }
 
 var _ RawMutationRuntimeV1 = (*runtimeImplementation)(nil)
@@ -51,82 +65,94 @@ func (backend *facadeRuntimeBackend) FeaturesDataSet(
 	ctx context.Context,
 	auth eebusraw.WriteAuthorizationV1,
 	request eebusraw.FeatureDataSetRequestV1,
-) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+) (RawMutationOutcomeV1, *eebusraw.ErrorV1) {
 	raw, ok := backend.backend.(eebusfacade.RawMutationBackend)
 	if !ok || raw == nil {
-		return eebusraw.MutationV1{}, eebusraw.NewErrorV1(
+		return RawMutationOutcomeV1{}, eebusraw.NewErrorV1(
 			eebusraw.ErrorCodeV1Disconnected,
 			"raw mutation facade capability is unavailable",
 			true,
 			eebusraw.SourceLayerV1Runtime,
 		)
 	}
-	return raw.FeaturesDataSet(ctx, auth, request)
+	outcome, terminal := raw.FeaturesDataSet(ctx, auth, request)
+	return rawMutationFacadeOutcomeV1(outcome), terminal
 }
 
 func (backend *facadeRuntimeBackend) MutationsGet(
 	ctx context.Context,
 	auth eebusraw.ReadAuthorizationV1,
 	request eebusraw.MutationGetRequestV1,
-) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+) (RawMutationOutcomeV1, *eebusraw.ErrorV1) {
 	raw, ok := backend.backend.(eebusfacade.RawMutationBackend)
 	if !ok || raw == nil {
-		return eebusraw.MutationV1{}, eebusraw.NewErrorV1(
+		return RawMutationOutcomeV1{}, eebusraw.NewErrorV1(
 			eebusraw.ErrorCodeV1Disconnected,
 			"raw mutation facade capability is unavailable",
 			true,
 			eebusraw.SourceLayerV1Runtime,
 		)
 	}
-	return raw.MutationsGet(ctx, auth, request)
+	outcome, terminal := raw.MutationsGet(ctx, auth, request)
+	return rawMutationFacadeOutcomeV1(outcome), terminal
 }
 
 func (backend *facadeRuntimeBackend) MutationsRollback(
 	ctx context.Context,
 	auth eebusraw.WriteAuthorizationV1,
 	request eebusraw.MutationRollbackRequestV1,
-) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+) (RawMutationOutcomeV1, *eebusraw.ErrorV1) {
 	raw, ok := backend.backend.(eebusfacade.RawMutationBackend)
 	if !ok || raw == nil {
-		return eebusraw.MutationV1{}, eebusraw.NewErrorV1(
+		return RawMutationOutcomeV1{}, eebusraw.NewErrorV1(
 			eebusraw.ErrorCodeV1Disconnected,
 			"raw mutation facade capability is unavailable",
 			true,
 			eebusraw.SourceLayerV1Runtime,
 		)
 	}
-	return raw.MutationsRollback(ctx, auth, request)
+	outcome, terminal := raw.MutationsRollback(ctx, auth, request)
+	return rawMutationFacadeOutcomeV1(outcome), terminal
+}
+
+func rawMutationFacadeOutcomeV1(
+	outcome eebusfacade.RawMutationOutcomeV1,
+) RawMutationOutcomeV1 {
+	return RawMutationOutcomeV1{
+		Mutation: outcome.Mutation,
+		Runtime:  outcome.Runtime,
+	}
 }
 
 func (runtime *runtimeImplementation) FeaturesDataSet(
 	ctx context.Context,
 	auth eebusraw.WriteAuthorizationV1,
 	request eebusraw.FeatureDataSetRequestV1,
-) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+) (RawMutationOutcomeV1, *eebusraw.ErrorV1) {
 	if terminal := eebusraw.ValidateWriteAuthorizationV1(auth, eebusraw.ToolV1FeaturesDataSet); terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return RawMutationOutcomeV1{}, terminal
 	}
 	if terminal := validateFeatureDataSetRequestV1(request); terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return RawMutationOutcomeV1{}, terminal
 	}
 	backend, terminal := runtime.rawMutationBackend()
 	if terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return RawMutationOutcomeV1{}, terminal
 	}
-	mutation, terminal := backend.FeaturesDataSet(ctx, auth, cloneFeatureDataSetRequestV1(request))
-	return cloneMutationResultV1(mutation, terminal)
+	outcome, terminal := backend.FeaturesDataSet(ctx, auth, cloneFeatureDataSetRequestV1(request))
+	return cloneMutationOutcomeResultV1(outcome, terminal)
 }
 
 func (runtime *runtimeImplementation) MutationsGet(
 	ctx context.Context,
 	auth eebusraw.ReadAuthorizationV1,
 	request eebusraw.MutationGetRequestV1,
-) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+) (RawMutationOutcomeV1, *eebusraw.ErrorV1) {
 	if terminal := eebusraw.ValidateReadAuthorizationV1(auth, eebusraw.ToolV1MutationsGet); terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return RawMutationOutcomeV1{}, terminal
 	}
 	if strings.TrimSpace(request.MutationRef) == "" {
-		return eebusraw.MutationV1{}, eebusraw.NewErrorV1(
+		return RawMutationOutcomeV1{}, eebusraw.NewErrorV1(
 			eebusraw.ErrorCodeV1InvalidArgument,
 			"mutation reference is required",
 			false,
@@ -135,23 +161,23 @@ func (runtime *runtimeImplementation) MutationsGet(
 	}
 	backend, terminal := runtime.rawMutationBackend()
 	if terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return RawMutationOutcomeV1{}, terminal
 	}
-	mutation, terminal := backend.MutationsGet(ctx, auth, request)
-	return cloneMutationResultV1(mutation, terminal)
+	outcome, terminal := backend.MutationsGet(ctx, auth, request)
+	return cloneMutationOutcomeResultV1(outcome, terminal)
 }
 
 func (runtime *runtimeImplementation) MutationsRollback(
 	ctx context.Context,
 	auth eebusraw.WriteAuthorizationV1,
 	request eebusraw.MutationRollbackRequestV1,
-) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+) (RawMutationOutcomeV1, *eebusraw.ErrorV1) {
 	if terminal := eebusraw.ValidateWriteAuthorizationV1(auth, eebusraw.ToolV1MutationsRollback); terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return RawMutationOutcomeV1{}, terminal
 	}
 	if strings.TrimSpace(request.MutationRef) == "" ||
 		strings.TrimSpace(request.IdempotencyKey) == "" {
-		return eebusraw.MutationV1{}, eebusraw.NewErrorV1(
+		return RawMutationOutcomeV1{}, eebusraw.NewErrorV1(
 			eebusraw.ErrorCodeV1InvalidArgument,
 			"mutation reference and idempotency key are required",
 			false,
@@ -160,10 +186,10 @@ func (runtime *runtimeImplementation) MutationsRollback(
 	}
 	backend, terminal := runtime.rawMutationBackend()
 	if terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return RawMutationOutcomeV1{}, terminal
 	}
-	mutation, terminal := backend.MutationsRollback(ctx, auth, request)
-	return cloneMutationResultV1(mutation, terminal)
+	outcome, terminal := backend.MutationsRollback(ctx, auth, request)
+	return cloneMutationOutcomeResultV1(outcome, terminal)
 }
 
 func (runtime *runtimeImplementation) rawMutationBackend() (rawMutationRuntimeBackend, *eebusraw.ErrorV1) {
@@ -280,16 +306,16 @@ func cloneFeatureDataSetRequestV1(request eebusraw.FeatureDataSetRequestV1) eebu
 	return request
 }
 
-func cloneMutationResultV1(
-	mutation eebusraw.MutationV1,
+func cloneMutationOutcomeResultV1(
+	outcome RawMutationOutcomeV1,
 	terminal *eebusraw.ErrorV1,
-) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
-	mutation = cloneMutationV1(mutation)
+) (RawMutationOutcomeV1, *eebusraw.ErrorV1) {
+	outcome = outcome.Clone()
 	if terminal == nil {
-		return mutation, nil
+		return outcome, nil
 	}
 	cloned := terminal.Clone()
-	return mutation, &cloned
+	return outcome, &cloned
 }
 
 func cloneMutationV1(mutation eebusraw.MutationV1) eebusraw.MutationV1 {
