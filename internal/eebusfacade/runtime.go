@@ -32,6 +32,17 @@ var (
 	errRuntimeTrustEffectsDenied   = errors.New("eebus runtime trust classification denies transport effects")
 )
 
+type runtimeLocalReadSourceError struct {
+	reason string
+}
+
+func (failure *runtimeLocalReadSourceError) Error() string {
+	if failure == nil || failure.reason == "" {
+		return "eebus runtime local READ source is unavailable"
+	}
+	return "eebus runtime local READ source is unavailable: " + failure.reason
+}
+
 type Backend interface {
 	Run(context.Context, func([]byte)) error
 	Close() error
@@ -334,9 +345,13 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if err := service.Setup(); err != nil {
 		return nil, closeRuntime(fmt.Errorf("setup eebus runtime service: %w", err))
 	}
+	localDevice, err := provisionRuntimeLocalReadSource(service)
+	if err != nil {
+		return nil, closeRuntime(err)
+	}
 	runtimeEpoch := rawRuntimeEpochProvider(firstTrust, rawRuntimeEpoch)
 	rawFeatures := newRawFeatureRuntimeBridgeWithGenerationStore(
-		service.LocalDevice(),
+		localDevice,
 		runtimeEpoch,
 		dependencies.now,
 		rawTokenIssuer,
@@ -439,6 +454,80 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		backend.serviceStarted = true
 	}
 	return backend, nil
+}
+
+func provisionRuntimeLocalReadSource(
+	service runtimeService,
+) (spineapi.DeviceLocalInterface, error) {
+	if service == nil {
+		return nil, &runtimeLocalReadSourceError{reason: "service is nil"}
+	}
+	local := service.LocalDevice()
+	if isNilRawRuntimeValue(local) {
+		return nil, &runtimeLocalReadSourceError{reason: "local device is nil or malformed"}
+	}
+	localAddress := local.Address()
+	if localAddress == nil || *localAddress == "" {
+		return nil, &runtimeLocalReadSourceError{reason: "local device is nil or malformed"}
+	}
+	cem := local.EntityForType(spinemodel.EntityTypeTypeCEM)
+	if isNilRawRuntimeValue(cem) || cem.EntityType() != spinemodel.EntityTypeTypeCEM {
+		return nil, &runtimeLocalReadSourceError{reason: "local CEM entity is missing or malformed"}
+	}
+	cemAddress := cem.Address()
+	if cemAddress == nil || cemAddress.Device == nil ||
+		*cemAddress.Device != *localAddress || len(cemAddress.Entity) == 0 {
+		return nil, &runtimeLocalReadSourceError{reason: "local CEM entity is missing or malformed"}
+	}
+	source := cem.GetOrAddFeature(
+		spinemodel.FeatureTypeTypeGeneric,
+		spinemodel.RoleTypeClient,
+	)
+	if isNilRawRuntimeValue(source) || source.Type() != spinemodel.FeatureTypeTypeGeneric ||
+		source.Role() != spinemodel.RoleTypeClient {
+		return nil, &runtimeLocalReadSourceError{reason: "local Generic/client feature is nil or malformed"}
+	}
+	sourceAddress := source.Address()
+	if sourceAddress == nil || sourceAddress.Device == nil || sourceAddress.Feature == nil ||
+		*sourceAddress.Device != *localAddress ||
+		!runtimeEntityAddressEqual(sourceAddress.Entity, cemAddress.Entity) {
+		return nil, &runtimeLocalReadSourceError{reason: "local Generic/client feature is nil or malformed"}
+	}
+	matches := 0
+	returnedSourcePresent := false
+	for _, feature := range cem.Features() {
+		if isNilRawRuntimeValue(feature) ||
+			feature.Type() != spinemodel.FeatureTypeTypeGeneric ||
+			feature.Role() != spinemodel.RoleTypeClient {
+			continue
+		}
+		matches++
+		if feature.Address() != nil &&
+			equalRawFeatureAddress(*feature.Address(), *sourceAddress) {
+			returnedSourcePresent = true
+		}
+	}
+	if matches != 1 || !returnedSourcePresent {
+		return nil, &runtimeLocalReadSourceError{
+			reason: "local CEM must contain exactly one Generic/client feature",
+		}
+	}
+	return local, nil
+}
+
+func runtimeEntityAddressEqual(
+	left []spinemodel.AddressEntityType,
+	right []spinemodel.AddressEntityType,
+) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (backend *serviceBackend) Run(ctx context.Context, publish func([]byte)) error {

@@ -1203,6 +1203,7 @@ type msp045Service struct {
 	cancelled           []string
 	pairingRegistration []bool
 	events              []string
+	localDevice         spineapi.DeviceLocalInterface
 }
 
 func (service *msp045Service) Setup() error {
@@ -1236,9 +1237,16 @@ func (service *msp045Service) RegisterRemoteSKI(ski string) {
 	service.mu.Unlock()
 }
 
-func (*msp045Service) LocalService() *shipapi.ServiceDetails      { return nil }
-func (*msp045Service) LocalDevice() spineapi.DeviceLocalInterface { return nil }
-func (*msp045Service) SetAutoAccept(bool)                         {}
+func (*msp045Service) LocalService() *shipapi.ServiceDetails { return nil }
+func (service *msp045Service) LocalDevice() spineapi.DeviceLocalInterface {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.localDevice == nil {
+		service.localDevice = runtimeTestLocalReadDevice()
+	}
+	return service.localDevice
+}
+func (*msp045Service) SetAutoAccept(bool) {}
 
 func (service *msp045Service) CancelPairingWithSKI(ski string) {
 	service.mu.Lock()

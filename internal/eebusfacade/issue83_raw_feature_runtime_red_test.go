@@ -39,7 +39,7 @@ func TestIssue83FeaturesGetReturnsExactInventoryThenCache(t *testing.T) {
 		data.Feature.DeviceAddress != fixture.remoteAddress ||
 		!reflect.DeepEqual(data.Feature.EntityAddress, []uint64{1}) ||
 		data.Feature.FeatureAddress != 11 ||
-		data.Feature.FeatureType != "measurement" ||
+		data.Feature.FeatureType != string(spinemodel.FeatureTypeTypeMeasurement) ||
 		data.Feature.FeatureRole != eebusraw.FeatureRoleV1Server {
 		t.Fatalf("inventory feature = %+v", data.Feature)
 	}
@@ -981,14 +981,14 @@ func newIssue83RawBridgeFixture(t *testing.T) issue83RawBridgeFixture {
 	)
 	localEntity := spine.NewEntityLocal(
 		local,
-		spinemodel.EntityTypeTypeDeviceInformation,
+		spinemodel.EntityTypeTypeCEM,
 		[]spinemodel.AddressEntityType{1},
 		time.Second,
 	)
 	localFeature := spine.NewFeatureLocal(
 		1,
 		localEntity,
-		spinemodel.FeatureTypeTypeMeasurement,
+		spinemodel.FeatureTypeTypeGeneric,
 		spinemodel.RoleTypeClient,
 	)
 	localEntity.AddFeature(localFeature)
@@ -1266,7 +1266,7 @@ func issue83Locator(ski, shipID, device string, feature uint64) eebusraw.Feature
 		DeviceAddress:  device,
 		EntityAddress:  []uint64{1},
 		FeatureAddress: feature,
-		FeatureType:    "measurement",
+		FeatureType:    string(spinemodel.FeatureTypeTypeMeasurement),
 		FeatureRole:    eebusraw.FeatureRoleV1Server,
 	}
 }

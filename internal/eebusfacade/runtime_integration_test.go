@@ -23,6 +23,7 @@ import (
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	spinemocks "github.com/Project-Helianthus/helianthus-spine-go/mocks"
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
+	spine "github.com/Project-Helianthus/helianthus-spine-go/spine"
 )
 
 const runtimeTestNodeToken = "0123456789abcdef0123456789abcdef"
@@ -572,7 +573,32 @@ func (service *fakeRuntimeService) SetPairingRegistration(value bool) error {
 func (*fakeRuntimeService) LocalService() *shipapi.ServiceDetails { return nil }
 
 func (service *fakeRuntimeService) LocalDevice() spineapi.DeviceLocalInterface {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.localDevice == nil {
+		service.localDevice = runtimeTestLocalReadDevice()
+	}
 	return service.localDevice
+}
+
+func runtimeTestLocalReadDevice() spineapi.DeviceLocalInterface {
+	local := spine.NewDeviceLocal(
+		"Helianthus",
+		"eebusreg",
+		"runtime-test",
+		"runtime-test",
+		"runtime-test-local-device",
+		spinemodel.DeviceTypeTypeEnergyManagementSystem,
+		spinemodel.NetworkManagementFeatureSetTypeSmart,
+	)
+	cem := spine.NewEntityLocal(
+		local,
+		spinemodel.EntityTypeTypeCEM,
+		[]spinemodel.AddressEntityType{1},
+		time.Second,
+	)
+	local.AddEntity(cem)
+	return local
 }
 
 type runtimeTestClock struct {
