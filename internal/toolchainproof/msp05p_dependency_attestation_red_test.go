@@ -45,7 +45,7 @@ func TestMSP05PToolchainScriptDeclaresReviewedRuntimeClosure(t *testing.T) {
 		{
 			name:    "ship",
 			path:    "github.com/Project-Helianthus/helianthus-ship-go",
-			version: "v0.6.1-helianthus.9",
+			version: "v0.6.1-helianthus.10",
 		},
 		{
 			name:    "spine",
