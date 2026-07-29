@@ -227,14 +227,20 @@ func (coordinator *rawMutationCoordinator) FeaturesDataSet(
 	if terminal != nil {
 		return eebusraw.MutationV1{}, terminal
 	}
+	var forwardWriteExpiresAt time.Time
 	if request.ConstraintsOverride != nil {
-		if _, matches := exactRawMutationLabProfileForHash(
+		profile, matches := exactRawMutationLabProfileForHash(
 			coordinator.config,
 			request,
 			binding.BeforeImageHash,
-		); matches != 1 {
+		)
+		if matches != 1 {
 			return eebusraw.MutationV1{},
 				mutationError(eebusraw.ErrorCodeV1ConstraintsUnknown, false)
+		}
+		forwardWriteExpiresAt = profile.ExpiresAt
+		if request.ConstraintsOverride.ExpiresAt.Before(forwardWriteExpiresAt) {
+			forwardWriteExpiresAt = request.ConstraintsOverride.ExpiresAt
 		}
 	}
 	if terminal := validateCurrentRawMutationBinding(
@@ -312,6 +318,15 @@ func (coordinator *rawMutationCoordinator) FeaturesDataSet(
 		return cloneMutation(entry.mutation), terminal
 	}
 
+	if !forwardWriteExpiresAt.IsZero() &&
+		!forwardWriteExpiresAt.After(coordinator.config.Now()) {
+		return coordinator.completeOriginalWrite(
+			ctx,
+			entry,
+			rawMutationWriteResult{},
+			mutationError(eebusraw.ErrorCodeV1ConstraintsUnknown, false),
+		)
+	}
 	writeResult, writeTerminal := coordinator.deps.Executor.FullWriteIfCurrent(
 		ctx,
 		request.Target.Clone(),
