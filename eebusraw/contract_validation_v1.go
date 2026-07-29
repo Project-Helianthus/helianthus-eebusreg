@@ -472,7 +472,6 @@ func validateReadObservationV1(observation ReadObservationV1) error {
 		validateProtocolMessageV1(observation.RawRequest) != nil ||
 		validateProtocolMessageV1(observation.RawResponse) != nil ||
 		observation.RawRequest.Classifier != "READ" ||
-		observation.RawRequest.Data != nil ||
 		observation.RawRequest.ErrorNumber != nil ||
 		observation.RawResponse.Classifier != "REPLY" ||
 		observation.RawResponse.ErrorNumber != nil ||
