@@ -12,16 +12,29 @@ func (coordinator *rawMutationCoordinator) MutationsRollback(
 	auth eebusraw.WriteAuthorizationV1,
 	request eebusraw.MutationRollbackRequestV1,
 ) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+	mutation, _, terminal := coordinator.MutationsRollbackOutcome(ctx, auth, request)
+	return mutation, terminal
+}
+
+func (coordinator *rawMutationCoordinator) MutationsRollbackOutcome(
+	ctx context.Context,
+	auth eebusraw.WriteAuthorizationV1,
+	request eebusraw.MutationRollbackRequestV1,
+) (
+	eebusraw.MutationV1,
+	*eebusraw.RuntimeBindingV1,
+	*eebusraw.ErrorV1,
+) {
 	if ctx == nil {
 		ctx = coordinator.ctx
 	}
 	ctx, cancel := coordinator.operationContext(ctx)
 	defer cancel()
 	if terminal := eebusraw.ValidateWriteAuthorizationV1(auth, eebusraw.ToolV1MutationsRollback); terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return eebusraw.MutationV1{}, nil, terminal
 	}
 	if terminal := eebusraw.ValidateMutationRollbackRequestV1(request); terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return eebusraw.MutationV1{}, nil, terminal
 	}
 	epoch := coordinator.config.RuntimeEpoch()
 	identityHash, err := rawMutationIdentityHash(
@@ -32,36 +45,46 @@ func (coordinator *rawMutationCoordinator) MutationsRollback(
 		request.IdempotencyKey,
 	)
 	if err != nil {
-		return eebusraw.MutationV1{}, internalMutationError()
+		return eebusraw.MutationV1{}, nil, internalMutationError()
 	}
 	requestHash, err := eebusraw.CanonicalSHA256V1(request)
 	if err != nil {
-		return eebusraw.MutationV1{}, internalMutationError()
+		return eebusraw.MutationV1{}, nil, internalMutationError()
 	}
 	principalHash, err := rawMutationPrincipalHash(auth.PrincipalClass)
 	if err != nil {
-		return eebusraw.MutationV1{}, internalMutationError()
+		return eebusraw.MutationV1{}, nil, internalMutationError()
 	}
 
-	entry, replay, terminal := coordinator.reserveRollback(
+	entry, replay, runtime, terminal := coordinator.reserveRollback(
 		request.MutationRef,
 		principalHash,
 		identityHash,
 		requestHash,
 	)
 	if terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return eebusraw.MutationV1{}, runtime, terminal
 	}
 	if replay {
-		return entry.snapshot(), nil
+		mutation := entry.snapshot()
+		bound := mutation.Runtime
+		return mutation, &bound, nil
 	}
 	defer coordinator.releaseWriter()
 	coordinator.cancelProbe(entry.snapshot().MutationRef)
+	var mutation eebusraw.MutationV1
 	if entry.durableTool == eebusraw.ToolV1MutationsRollback &&
 		rawMutationStateNeedsRecovery(entry.snapshot().State) {
-		return coordinator.recoverEntry(ctx, entry)
+		mutation, terminal = coordinator.recoverEntry(ctx, entry)
+	} else {
+		mutation, terminal = coordinator.startRollback(ctx, entry)
 	}
-	return coordinator.startRollback(ctx, entry)
+	if mutation.Runtime.RuntimeEpoch != 0 &&
+		mutation.Runtime.ConnectionGeneration != 0 {
+		bound := mutation.Runtime
+		runtime = &bound
+	}
+	return mutation, runtime, terminal
 }
 
 func (coordinator *rawMutationCoordinator) reserveRollback(
@@ -69,51 +92,65 @@ func (coordinator *rawMutationCoordinator) reserveRollback(
 	principalHash eebusraw.HashV1,
 	identityHash eebusraw.HashV1,
 	requestHash eebusraw.HashV1,
-) (*rawMutationEntry, bool, *eebusraw.ErrorV1) {
+) (
+	*rawMutationEntry,
+	bool,
+	*eebusraw.RuntimeBindingV1,
+	*eebusraw.ErrorV1,
+) {
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 	if coordinator.closed {
-		return nil, false, mutationError(eebusraw.ErrorCodeV1Disconnected, true)
+		return nil, false, nil,
+			mutationError(eebusraw.ErrorCodeV1Disconnected, true)
 	}
 	if coordinator.quarantined {
-		return nil, false, mutationError(eebusraw.ErrorCodeV1Conflict, false)
+		return nil, false, nil,
+			mutationError(eebusraw.ErrorCodeV1Conflict, false)
 	}
 	if known, exists := coordinator.idempotency[identityHash]; exists {
 		if known.requestHash != requestHash || known.mutationRef != mutationRef {
-			return nil, false, mutationError(eebusraw.ErrorCodeV1IdempotencyConflict, false)
+			return nil, false, nil,
+				mutationError(eebusraw.ErrorCodeV1IdempotencyConflict, false)
 		}
 		entry := coordinator.entries[known.mutationRef]
 		if entry == nil {
-			return nil, false, internalMutationError()
+			return nil, false, nil, internalMutationError()
 		}
+		mutation := entry.snapshot()
+		runtime := mutation.Runtime
 		if coordinator.writer {
-			return entry, true, nil
+			return entry, true, &runtime, nil
 		}
-		if rawMutationStateNeedsRecovery(entry.snapshot().State) {
+		if rawMutationStateNeedsRecovery(mutation.State) {
 			coordinator.writer = true
 			coordinator.writerDone = make(chan struct{})
-			return entry, false, nil
+			return entry, false, &runtime, nil
 		}
-		return entry, true, nil
+		return entry, true, &runtime, nil
 	}
 	entry := coordinator.entries[mutationRef]
 	if entry == nil {
-		return nil, false, mutationError(eebusraw.ErrorCodeV1NotFound, false)
+		return nil, false, nil,
+			mutationError(eebusraw.ErrorCodeV1NotFound, false)
 	}
 	mutation := entry.snapshot()
 	if entry.principalHash != principalHash ||
 		mutation.Runtime.RuntimeEpoch != coordinator.config.RuntimeEpoch() {
-		return nil, false, mutationError(eebusraw.ErrorCodeV1PermissionDenied, false)
+		return nil, false, nil,
+			mutationError(eebusraw.ErrorCodeV1PermissionDenied, false)
 	}
+	runtime := mutation.Runtime
 	if coordinator.writer {
-		return nil, false, mutationError(eebusraw.ErrorCodeV1WriterBusy, true)
+		return nil, false, &runtime,
+			mutationError(eebusraw.ErrorCodeV1WriterBusy, true)
 	}
 	coordinator.writer = true
 	coordinator.writerDone = make(chan struct{})
 	entry.durableIdentityHash = identityHash
 	entry.durableRequestHash = requestHash
 	entry.durableTool = eebusraw.ToolV1MutationsRollback
-	return entry, false, nil
+	return entry, false, &runtime, nil
 }
 
 func (coordinator *rawMutationCoordinator) startRollback(

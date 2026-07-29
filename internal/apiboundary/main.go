@@ -137,6 +137,7 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "func", Name: "RedactedSnapshotV1.String"}:                  {},
 	{Kind: "func", Name: "RedactedSnapshotV1.UnmarshalJSON"}:           {},
 	{Kind: "func", Name: "RedactedSnapshotV1.Validate"}:                {},
+	{Kind: "func", Name: "RawMutationOutcomeV1.Clone"}:                 {},
 	{Kind: "func", Name: "SnapshotV1.Clone"}:                           {},
 	{Kind: "func", Name: "SnapshotV1.ComputeDataHash"}:                 {},
 	{Kind: "func", Name: "SnapshotV1.Format"}:                          {},
@@ -169,6 +170,7 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "type", Name: "RedactedUseCaseV1"}:                          {},
 	{Kind: "type", Name: "Remote"}:                                     {},
 	{Kind: "type", Name: "RawFeatureRuntimeV1"}:                        {},
+	{Kind: "type", Name: "RawMutationOutcomeV1"}:                       {},
 	{Kind: "type", Name: "RawMutationRuntimeV1"}:                       {},
 	{Kind: "type", Name: "Runtime"}:                                    {},
 	{Kind: "type", Name: "RuntimeObservationV1"}:                       {},
@@ -184,16 +186,18 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 }
 
 var msp055RuntimeExports = map[manifestExport]struct{}{
-	{Kind: "const", Name: "PairingPolicyClosed"}: {},
-	{Kind: "func", Name: "New"}:                  {},
-	{Kind: "type", Name: "Config"}:               {},
-	{Kind: "type", Name: "PairingPolicy"}:        {},
-	{Kind: "type", Name: "RawFeatureRuntimeV1"}:  {},
-	{Kind: "type", Name: "RawMutationRuntimeV1"}: {},
-	{Kind: "type", Name: "Remote"}:               {},
-	{Kind: "type", Name: "Runtime"}:              {},
-	{Kind: "var", Name: "ErrRuntimeDisabled"}:    {},
-	{Kind: "var", Name: "ErrRuntimeShutdown"}:    {},
+	{Kind: "const", Name: "PairingPolicyClosed"}:       {},
+	{Kind: "func", Name: "New"}:                        {},
+	{Kind: "func", Name: "RawMutationOutcomeV1.Clone"}: {},
+	{Kind: "type", Name: "Config"}:                     {},
+	{Kind: "type", Name: "PairingPolicy"}:              {},
+	{Kind: "type", Name: "RawFeatureRuntimeV1"}:        {},
+	{Kind: "type", Name: "RawMutationOutcomeV1"}:       {},
+	{Kind: "type", Name: "RawMutationRuntimeV1"}:       {},
+	{Kind: "type", Name: "Remote"}:                     {},
+	{Kind: "type", Name: "Runtime"}:                    {},
+	{Kind: "var", Name: "ErrRuntimeDisabled"}:          {},
+	{Kind: "var", Name: "ErrRuntimeShutdown"}:          {},
 }
 
 var allowedMSP035RawExports = frozenExportInventory(`
@@ -1538,6 +1542,7 @@ func inspectStableContracts(root, modulePath string, fset *token.FileSet, packag
 		}
 	}
 	allExpectedTypes[modulePath]["RawFeatureRuntimeV1"] = struct{}{}
+	allExpectedTypes[modulePath]["RawMutationOutcomeV1"] = struct{}{}
 	allExpectedTypes[modulePath]["RawMutationRuntimeV1"] = struct{}{}
 	for _, spec := range specs {
 		if modulePath != canonicalModulePath {

@@ -126,7 +126,12 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 	}
 	symbols := root.Symbols[:0]
 	for _, symbol := range root.Symbols {
-		if symbol.Name == "RawFeatureRuntimeV1" || symbol.Name == "RawMutationRuntimeV1" {
+		if symbol.Name == "RawFeatureRuntimeV1" ||
+			symbol.Name == "RawMutationRuntimeV1" ||
+			symbol.Name == "RawMutationOutcomeV1" {
+			continue
+		}
+		if symbol.Receiver != nil && symbol.Receiver.Base == "RawMutationOutcomeV1" {
 			continue
 		}
 		if symbol.Name == "PairingPolicy" || symbol.Name == "PairingPolicyClosed" {

@@ -56,8 +56,8 @@ func TestIssue85RootRuntimeWiresSeparateMutationCapability(t *testing.T) {
 	if terminal != nil {
 		t.Fatalf("FeaturesDataSet() error = %+v", terminal)
 	}
-	if got.MutationRef != "issue85-root-ref" ||
-		got.State != eebusraw.MutationStateV1Applied ||
+	if got.Mutation.MutationRef != "issue85-root-ref" ||
+		got.Mutation.State != eebusraw.MutationStateV1Applied ||
 		backend.setCalls.Load() != 1 {
 		t.Fatalf("root mutation result=%+v calls=%d", got, backend.setCalls.Load())
 	}
@@ -75,7 +75,7 @@ func TestIssue85RootRuntimeWiresSeparateMutationCapability(t *testing.T) {
 		},
 	)
 	if terminal != nil ||
-		rolledBack.State != eebusraw.MutationStateV1RolledBack ||
+		rolledBack.Mutation.State != eebusraw.MutationStateV1RolledBack ||
 		backend.rollbackCalls.Load() != 1 {
 		t.Fatalf("root rollback result=%+v error=%+v calls=%d", rolledBack, terminal, backend.rollbackCalls.Load())
 	}
@@ -263,7 +263,7 @@ func TestIssue85RootRuntimeUsesReadAuthorizationOnlyForMutationStatus(t *testing
 		eebusraw.MutationGetRequestV1{MutationRef: "issue85-status-ref"},
 	)
 	if terminal != nil ||
-		got.MutationRef != "issue85-status-ref" ||
+		got.Mutation.MutationRef != "issue85-status-ref" ||
 		backend.getCalls.Load() != 1 {
 		t.Fatalf("read-authorized status result=%+v error=%+v calls=%d", got, terminal, backend.getCalls.Load())
 	}
@@ -292,27 +292,27 @@ func (backend *issue85RootMutationBackend) FeaturesDataSet(
 	context.Context,
 	eebusraw.WriteAuthorizationV1,
 	eebusraw.FeatureDataSetRequestV1,
-) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+) (RawMutationOutcomeV1, *eebusraw.ErrorV1) {
 	backend.setCalls.Add(1)
-	return backend.setResult, backend.terminal
+	return RawMutationOutcomeV1{Mutation: backend.setResult}, backend.terminal
 }
 
 func (backend *issue85RootMutationBackend) MutationsGet(
 	context.Context,
 	eebusraw.ReadAuthorizationV1,
 	eebusraw.MutationGetRequestV1,
-) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+) (RawMutationOutcomeV1, *eebusraw.ErrorV1) {
 	backend.getCalls.Add(1)
-	return backend.getResult, backend.terminal
+	return RawMutationOutcomeV1{Mutation: backend.getResult}, backend.terminal
 }
 
 func (backend *issue85RootMutationBackend) MutationsRollback(
 	context.Context,
 	eebusraw.WriteAuthorizationV1,
 	eebusraw.MutationRollbackRequestV1,
-) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+) (RawMutationOutcomeV1, *eebusraw.ErrorV1) {
 	backend.rollbackCalls.Add(1)
-	return backend.rollbackResult, backend.terminal
+	return RawMutationOutcomeV1{Mutation: backend.rollbackResult}, backend.terminal
 }
 
 func issue85RootWriteAuthorization(tool eebusraw.ToolV1) eebusraw.WriteAuthorizationV1 {
