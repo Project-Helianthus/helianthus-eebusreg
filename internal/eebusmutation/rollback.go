@@ -237,13 +237,7 @@ func (coordinator *rawMutationCoordinator) completeRollbackWrite(
 	}
 	if result.FrameSent {
 		entry.mutation.Rollback.ProtocolAccepted = nil
-		entry.mutation.OutcomeEvidence = &eebusraw.OutcomeEvidenceV1{
-			PossibleSideEffect:  true,
-			BlindRetryForbidden: true,
-			LastDurableState:    eebusraw.MutationStateV1RollbackDispatchIntent,
-			RecordedAt:          normalizedNow(coordinator.config.Now),
-		}
-		entry.mutation.Error = mutationError(eebusraw.ErrorCodeV1OutcomeUnknown, false)
+		coordinator.prepareRollbackUnknown(entry)
 		if terminal := coordinator.transition(entry, eebusraw.MutationStateV1OutcomeUnknown); terminal != nil {
 			return cloneMutation(entry.mutation), terminal
 		}
@@ -328,6 +322,9 @@ func (coordinator *rawMutationCoordinator) persistRolledBack(
 		EqualValueHash: hash,
 		VerifiedAt:     normalizedNow(coordinator.config.Now),
 	}
+	if entry.mutation.ProtocolAccepted != nil {
+		entry.mutation.OutcomeEvidence = nil
+	}
 	entry.mutation.Error = nil
 	if terminal := coordinator.transition(entry, eebusraw.MutationStateV1RolledBack); terminal != nil {
 		return cloneMutation(entry.mutation), terminal
@@ -339,6 +336,19 @@ func (coordinator *rawMutationCoordinator) persistRolledBack(
 func (coordinator *rawMutationCoordinator) persistRollbackUnknown(
 	entry *rawMutationEntry,
 ) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+	if entry.mutation.State == eebusraw.MutationStateV1OutcomeUnknown {
+		return entry.snapshot(), cloneTerminal(entry.mutation.Error)
+	}
+	coordinator.prepareRollbackUnknown(entry)
+	if terminal := coordinator.transition(entry, eebusraw.MutationStateV1OutcomeUnknown); terminal != nil {
+		return cloneMutation(entry.mutation), terminal
+	}
+	return cloneMutation(entry.mutation), cloneTerminal(entry.mutation.Error)
+}
+
+func (coordinator *rawMutationCoordinator) prepareRollbackUnknown(
+	entry *rawMutationEntry,
+) {
 	if entry.mutation.Rollback == nil {
 		entry.mutation.Rollback = &eebusraw.RollbackV1{Before: entry.mutation.Before.Clone()}
 	}
@@ -356,12 +366,6 @@ func (coordinator *rawMutationCoordinator) persistRollbackUnknown(
 		RecordedAt:          normalizedNow(coordinator.config.Now),
 	}
 	entry.mutation.Error = mutationError(eebusraw.ErrorCodeV1RollbackFailed, false)
-	if entry.mutation.State != eebusraw.MutationStateV1OutcomeUnknown {
-		if terminal := coordinator.transition(entry, eebusraw.MutationStateV1OutcomeUnknown); terminal != nil {
-			return cloneMutation(entry.mutation), terminal
-		}
-	}
-	return cloneMutation(entry.mutation), cloneTerminal(entry.mutation.Error)
 }
 
 func (coordinator *rawMutationCoordinator) rearmProbeTimers() {
