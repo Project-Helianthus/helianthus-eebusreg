@@ -197,6 +197,43 @@ func (coordinator *rawMutationCoordinator) FeaturesDataSet(
 		identityHash,
 		requestHash,
 		request,
+		false,
+	)
+	if terminal != nil {
+		return eebusraw.MutationV1{}, terminal
+	}
+	switch action {
+	case rawMutationSetReplay:
+		mutation := entry.snapshot()
+		return mutation, terminalForMutation(mutation)
+	case rawMutationSetInFlight:
+		return entry.snapshot(), nil
+	case rawMutationSetRecover:
+		defer coordinator.releaseWriter()
+		return coordinator.recoverEntry(ctx, entry)
+	case rawMutationSetVerifyToken:
+	case rawMutationSetNew:
+		return eebusraw.MutationV1{}, internalMutationError()
+	default:
+		return eebusraw.MutationV1{}, internalMutationError()
+	}
+
+	binding, terminal := verifyRawMutationReadToken(
+		ctx,
+		coordinator.config,
+		coordinator.deps.TokenVerifier,
+		auth,
+		request,
+	)
+	if terminal != nil {
+		return eebusraw.MutationV1{}, terminal
+	}
+	entry, action, terminal = coordinator.reserveSet(
+		principalHash,
+		identityHash,
+		requestHash,
+		request,
+		true,
 	)
 	if terminal != nil {
 		return eebusraw.MutationV1{}, terminal
@@ -217,16 +254,6 @@ func (coordinator *rawMutationCoordinator) FeaturesDataSet(
 		return eebusraw.MutationV1{}, internalMutationError()
 	}
 
-	binding, terminal := verifyRawMutationReadToken(
-		ctx,
-		coordinator.config,
-		coordinator.deps.TokenVerifier,
-		auth,
-		request,
-	)
-	if terminal != nil {
-		return eebusraw.MutationV1{}, terminal
-	}
 	var forwardWriteExpiresAt time.Time
 	if request.ConstraintsOverride != nil {
 		profile, matches := exactRawMutationLabProfileForHash(
@@ -337,38 +364,55 @@ func (coordinator *rawMutationCoordinator) FeaturesDataSet(
 }
 
 func (coordinator *rawMutationCoordinator) MutationsGet(
-	_ context.Context,
+	ctx context.Context,
 	auth eebusraw.ReadAuthorizationV1,
 	request eebusraw.MutationGetRequestV1,
 ) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+	mutation, _, terminal := coordinator.MutationsGetOutcome(ctx, auth, request)
+	return mutation, terminal
+}
+
+func (coordinator *rawMutationCoordinator) MutationsGetOutcome(
+	_ context.Context,
+	auth eebusraw.ReadAuthorizationV1,
+	request eebusraw.MutationGetRequestV1,
+) (
+	eebusraw.MutationV1,
+	*eebusraw.RuntimeBindingV1,
+	*eebusraw.ErrorV1,
+) {
 	if terminal := eebusraw.ValidateReadAuthorizationV1(auth, eebusraw.ToolV1MutationsGet); terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return eebusraw.MutationV1{}, nil, terminal
 	}
 	if terminal := eebusraw.ValidateMutationGetRequestV1(request); terminal != nil {
-		return eebusraw.MutationV1{}, terminal
+		return eebusraw.MutationV1{}, nil, terminal
 	}
 	principalHash, err := rawMutationPrincipalHash(auth.PrincipalClass)
 	if err != nil {
-		return eebusraw.MutationV1{}, internalMutationError()
+		return eebusraw.MutationV1{}, nil, internalMutationError()
 	}
 	coordinator.mu.Lock()
 	if coordinator.closed {
 		coordinator.mu.Unlock()
-		return eebusraw.MutationV1{}, mutationError(eebusraw.ErrorCodeV1Disconnected, true)
+		return eebusraw.MutationV1{}, nil,
+			mutationError(eebusraw.ErrorCodeV1Disconnected, true)
 	}
 	entry := coordinator.entries[request.MutationRef]
 	if entry == nil {
 		coordinator.mu.Unlock()
-		return eebusraw.MutationV1{}, mutationError(eebusraw.ErrorCodeV1NotFound, false)
+		return eebusraw.MutationV1{}, nil,
+			mutationError(eebusraw.ErrorCodeV1NotFound, false)
 	}
 	entryPrincipal := entry.principalHash
-	coordinator.mu.Unlock()
 	mutation := entry.snapshot()
+	coordinator.mu.Unlock()
 	if entryPrincipal != principalHash ||
 		mutation.Runtime.RuntimeEpoch != coordinator.config.RuntimeEpoch() {
-		return eebusraw.MutationV1{}, mutationError(eebusraw.ErrorCodeV1PermissionDenied, false)
+		return eebusraw.MutationV1{}, nil,
+			mutationError(eebusraw.ErrorCodeV1PermissionDenied, false)
 	}
-	return mutation, nil
+	runtime := mutation.Runtime
+	return mutation, &runtime, nil
 }
 
 func (coordinator *rawMutationCoordinator) Close() *eebusraw.ErrorV1 {
@@ -449,6 +493,7 @@ const (
 	rawMutationSetReplay
 	rawMutationSetInFlight
 	rawMutationSetRecover
+	rawMutationSetVerifyToken
 )
 
 func (coordinator *rawMutationCoordinator) reserveSet(
@@ -456,6 +501,7 @@ func (coordinator *rawMutationCoordinator) reserveSet(
 	identityHash eebusraw.HashV1,
 	requestHash eebusraw.HashV1,
 	request eebusraw.FeatureDataSetRequestV1,
+	allowNew bool,
 ) (*rawMutationEntry, rawMutationSetAction, *eebusraw.ErrorV1) {
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
@@ -482,6 +528,9 @@ func (coordinator *rawMutationCoordinator) reserveSet(
 			return entry, rawMutationSetRecover, nil
 		}
 		return entry, rawMutationSetReplay, nil
+	}
+	if !allowNew {
+		return nil, rawMutationSetVerifyToken, nil
 	}
 	if coordinator.writer {
 		return nil, rawMutationSetInvalid, mutationError(eebusraw.ErrorCodeV1WriterBusy, true)

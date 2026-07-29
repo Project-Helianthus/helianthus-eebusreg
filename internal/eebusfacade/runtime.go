@@ -741,8 +741,8 @@ func (backend *serviceBackend) MutationsGet(
 	if terminal != nil {
 		return RawMutationOutcomeV1{}, terminal
 	}
-	mutation, terminal := coordinator.MutationsGet(ctx, auth, request)
-	return rawMutationOutcome(mutation, nil), terminal
+	mutation, runtime, terminal := coordinator.MutationsGetOutcome(ctx, auth, request)
+	return rawMutationOutcome(mutation, runtime), terminal
 }
 
 func (backend *serviceBackend) MutationsRollback(
@@ -754,8 +754,8 @@ func (backend *serviceBackend) MutationsRollback(
 	if terminal != nil {
 		return RawMutationOutcomeV1{}, terminal
 	}
-	mutation, terminal := coordinator.MutationsRollback(ctx, auth, request)
-	return rawMutationOutcome(mutation, nil), terminal
+	mutation, runtime, terminal := coordinator.MutationsRollbackOutcome(ctx, auth, request)
+	return rawMutationOutcome(mutation, runtime), terminal
 }
 
 func (backend *serviceBackend) Close() error {

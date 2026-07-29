@@ -25,6 +25,8 @@ type issue95FacadeRuntime struct {
 	readCalls    int
 	writeCalls   int
 	policyCalls  int
+	blockRead    <-chan struct{}
+	readStarted  chan struct{}
 }
 
 func (runtime *issue95FacadeRuntime) CurrentRuntimeBinding(
@@ -42,16 +44,28 @@ func (runtime *issue95FacadeRuntime) FullReadIfCurrent(
 	expected eebusraw.RuntimeBindingV1,
 ) (eebusmutation.ReadResult, *eebusraw.ErrorV1) {
 	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
 	runtime.readCalls++
 	if expected != runtime.binding {
+		runtime.mu.Unlock()
 		return eebusmutation.ReadResult{}, rawMutationFacadeError(
 			eebusraw.ErrorCodeV1ConnectionGenerationMismatch,
 			false,
 		)
 	}
+	blockRead := runtime.blockRead
+	readStarted := runtime.readStarted
+	runtime.blockRead = nil
+	runtime.readStarted = nil
+	current := runtime.current.Clone()
+	runtime.mu.Unlock()
+	if readStarted != nil {
+		close(readStarted)
+	}
+	if blockRead != nil {
+		<-blockRead
+	}
 	return eebusmutation.ReadResult{
-		Value:       runtime.current.Clone(),
+		Value:       current,
 		Runtime:     runtime.binding,
 		Full:        true,
 		Trustworthy: true,
@@ -102,6 +116,16 @@ func (runtime *issue95FacadeRuntime) callCounts() (int, int, int, int) {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	return runtime.bindingCalls, runtime.readCalls, runtime.writeCalls, runtime.policyCalls
+}
+
+func (runtime *issue95FacadeRuntime) blockNextRead() (<-chan struct{}, chan<- struct{}) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	runtime.readStarted = started
+	runtime.blockRead = release
+	return started, release
 }
 
 type issue95FacadeFixture struct {
@@ -239,6 +263,69 @@ func issue95FacadeValue(t *testing.T, value any) eebusraw.TypedValueV1 {
 	return typed
 }
 
+func (fixture *issue95FacadeFixture) issueReadToken(
+	t *testing.T,
+	receivedAt time.Time,
+	before eebusraw.TypedValueV1,
+) string {
+	t.Helper()
+	readTarget := fixture.target.Clone()
+	readTarget.Operation = eebusraw.OperationV1Read
+	requestHash, err := eebusraw.CanonicalSHA256V1(eebusraw.FeatureDataGetRequestV1{
+		Targets: []eebusraw.FeatureTargetV1{readTarget},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeHash, err := before.ComputeHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := fixture.issuer.issue(
+		fixture.readAuth,
+		readTarget,
+		fixture.binding,
+		requestHash,
+		beforeHash,
+		receivedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token.ReadToken
+}
+
+func issue95AssertOutcomeNonLeak(
+	t *testing.T,
+	outcome RawMutationOutcomeV1,
+	terminal *eebusraw.ErrorV1,
+	secrets ...string,
+) {
+	t.Helper()
+	encoded, err := json.Marshal(struct {
+		Outcome RawMutationOutcomeV1
+		Error   *eebusraw.ErrorV1
+	}{Outcome: outcome, Error: terminal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostic := fmt.Sprintf("%s\n%+v\n%#v", encoded, outcome, terminal)
+	for _, forbidden := range append(secrets,
+		`"candidate_ref"`,
+		`"read_token"`,
+		`"idempotency_key"`,
+		`"private_key"`,
+		`"private_pem"`,
+		`"credential_token"`,
+		"PRIVATE KEY",
+		"BEGIN PRIVATE",
+	) {
+		if forbidden != "" && strings.Contains(diagnostic, forbidden) {
+			t.Fatalf("terminal outcome leaked forbidden value %q", forbidden)
+		}
+	}
+}
+
 func TestIssue95AuthenticatedExpiredTokenCarriesRuntimeWithoutContactOrWAL(t *testing.T) {
 	fixture := newIssue95FacadeFixture(t)
 	*fixture.now = fixture.now.Add(2 * time.Minute)
@@ -277,23 +364,90 @@ func TestIssue95AuthenticatedExpiredTokenCarriesRuntimeWithoutContactOrWAL(t *te
 	if len(wal) != 0 {
 		t.Fatalf("expired token wrote %d WAL bytes", len(wal))
 	}
-	encoded, err := json.Marshal(struct {
-		Outcome RawMutationOutcomeV1
-		Error   *eebusraw.ErrorV1
-	}{Outcome: outcome, Error: terminal})
-	if err != nil {
-		t.Fatal(err)
-	}
-	diagnostic := fmt.Sprintf("%s\n%+v\n%#v", encoded, outcome, terminal)
-	for _, secret := range []string{
+	issue95AssertOutcomeNonLeak(
+		t,
+		outcome,
+		terminal,
 		fixture.token,
 		fixture.request.IdempotencyKey,
-		"PRIVATE KEY",
-		"BEGIN PRIVATE",
-	} {
-		if strings.Contains(diagnostic, secret) {
-			t.Fatalf("terminal outcome leaked secret %q", secret)
+	)
+}
+
+func TestIssue95ExpiredTokenPrecedesContendedWriterLease(t *testing.T) {
+	fixture := newIssue95FacadeFixture(t)
+	started, release := fixture.runtime.blockNextRead()
+	released := false
+	defer func() {
+		if !released {
+			close(release)
 		}
+	}()
+	type setResult struct {
+		outcome  RawMutationOutcomeV1
+		terminal *eebusraw.ErrorV1
+	}
+	firstResult := make(chan setResult, 1)
+	go func() {
+		outcome, terminal := fixture.backend.FeaturesDataSet(
+			context.Background(),
+			fixture.writeAuth,
+			fixture.request,
+		)
+		firstResult <- setResult{outcome: outcome, terminal: terminal}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first SET did not acquire the writer lease")
+	}
+
+	issuedAt := *fixture.now
+	expiredRequest := fixture.request
+	expiredRequest.ReadToken = fixture.issueReadToken(
+		t,
+		issuedAt.Add(10*time.Second),
+		fixture.before,
+	)
+	expiredRequest.IdempotencyKey = "issue95-expired-contender"
+	*fixture.now = issuedAt.Add(2 * time.Minute)
+	beforeBinding, beforeReads, beforeWrites, beforePolicies :=
+		fixture.runtime.callCounts()
+	outcome, terminal := fixture.backend.FeaturesDataSet(
+		context.Background(),
+		fixture.writeAuth,
+		expiredRequest,
+	)
+	if terminal == nil ||
+		terminal.Code != eebusraw.ErrorCodeV1StaleReadToken ||
+		outcome.Runtime == nil ||
+		*outcome.Runtime != fixture.binding ||
+		!reflect.DeepEqual(outcome.Mutation, eebusraw.MutationV1{}) {
+		t.Fatalf("contended expired outcome = %+v, terminal = %+v", outcome, terminal)
+	}
+	afterBinding, afterReads, afterWrites, afterPolicies :=
+		fixture.runtime.callCounts()
+	if afterBinding != beforeBinding ||
+		afterReads != beforeReads ||
+		afterWrites != beforeWrites ||
+		afterPolicies != beforePolicies {
+		t.Fatalf(
+			"expired contender reached runtime: before=%d/%d/%d/%d after=%d/%d/%d/%d",
+			beforeBinding,
+			beforeReads,
+			beforeWrites,
+			beforePolicies,
+			afterBinding,
+			afterReads,
+			afterWrites,
+			afterPolicies,
+		)
+	}
+	close(release)
+	released = true
+	first := <-firstResult
+	if first.terminal != nil ||
+		first.outcome.Mutation.State != eebusraw.MutationStateV1Applied {
+		t.Fatalf("writer holder outcome = %+v, terminal = %+v", first.outcome, first.terminal)
 	}
 }
 
@@ -361,6 +515,13 @@ func TestIssue95ResolvedMutationOperationsCarryStoredRuntime(t *testing.T) {
 		*applied.Runtime != fixture.binding {
 		t.Fatalf("applied outcome = %+v, terminal = %+v", applied, terminal)
 	}
+	issue95AssertOutcomeNonLeak(
+		t,
+		applied,
+		terminal,
+		fixture.token,
+		fixture.request.IdempotencyKey,
+	)
 	getAuth := fixture.readAuth
 	getAuth.Tool = eebusraw.ToolV1MutationsGet
 	got, terminal := fixture.backend.MutationsGet(
@@ -383,6 +544,18 @@ func TestIssue95ResolvedMutationOperationsCarryStoredRuntime(t *testing.T) {
 		terminal.Code != eebusraw.ErrorCodeV1NotFound ||
 		!reflect.DeepEqual(missingGet, RawMutationOutcomeV1{}) {
 		t.Fatalf("missing get outcome = %+v, terminal = %+v", missingGet, terminal)
+	}
+	deniedAuth := getAuth
+	deniedAuth.PrincipalClass = "other-owner"
+	deniedGet, terminal := fixture.backend.MutationsGet(
+		context.Background(),
+		deniedAuth,
+		eebusraw.MutationGetRequestV1{MutationRef: applied.Mutation.MutationRef},
+	)
+	if terminal == nil ||
+		terminal.Code != eebusraw.ErrorCodeV1PermissionDenied ||
+		!reflect.DeepEqual(deniedGet, RawMutationOutcomeV1{}) {
+		t.Fatalf("denied get outcome = %+v, terminal = %+v", deniedGet, terminal)
 	}
 	rollbackAuth := fixture.writeAuth
 	rollbackAuth.Tool = eebusraw.ToolV1MutationsRollback
@@ -413,4 +586,125 @@ func TestIssue95ResolvedMutationOperationsCarryStoredRuntime(t *testing.T) {
 		!reflect.DeepEqual(missingRollback, RawMutationOutcomeV1{}) {
 		t.Fatalf("missing rollback outcome = %+v, terminal = %+v", missingRollback, terminal)
 	}
+}
+
+func TestIssue95RollbackWriterBusyCarriesResolvedStoredRuntime(t *testing.T) {
+	fixture := newIssue95FacadeFixture(t)
+	applied, terminal := fixture.backend.FeaturesDataSet(
+		context.Background(),
+		fixture.writeAuth,
+		fixture.request,
+	)
+	if terminal != nil || applied.Mutation.State != eebusraw.MutationStateV1Applied {
+		t.Fatalf("initial SET outcome = %+v, terminal = %+v", applied, terminal)
+	}
+
+	holderRequest := fixture.request
+	holderRequest.Value = fixture.before
+	holderRequest.ReadToken = fixture.issueReadToken(
+		t,
+		fixture.now.Add(10*time.Second),
+		fixture.requested,
+	)
+	holderRequest.IdempotencyKey = "issue95-rollback-writer-holder"
+	started, release := fixture.runtime.blockNextRead()
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	type setResult struct {
+		outcome  RawMutationOutcomeV1
+		terminal *eebusraw.ErrorV1
+	}
+	holderResult := make(chan setResult, 1)
+	go func() {
+		outcome, terminal := fixture.backend.FeaturesDataSet(
+			context.Background(),
+			fixture.writeAuth,
+			holderRequest,
+		)
+		holderResult <- setResult{outcome: outcome, terminal: terminal}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("second SET did not acquire the writer lease")
+	}
+
+	rollbackAuth := fixture.writeAuth
+	rollbackAuth.Tool = eebusraw.ToolV1MutationsRollback
+	beforeBinding, beforeReads, beforeWrites, beforePolicies :=
+		fixture.runtime.callCounts()
+	outcome, terminal := fixture.backend.MutationsRollback(
+		context.Background(),
+		rollbackAuth,
+		eebusraw.MutationRollbackRequestV1{
+			MutationRef:    applied.Mutation.MutationRef,
+			IdempotencyKey: "issue95-contended-rollback",
+		},
+	)
+	if terminal == nil ||
+		terminal.Code != eebusraw.ErrorCodeV1WriterBusy ||
+		!reflect.DeepEqual(outcome.Mutation, eebusraw.MutationV1{}) ||
+		outcome.Runtime == nil ||
+		*outcome.Runtime != fixture.binding {
+		t.Fatalf("contended rollback outcome = %+v, terminal = %+v", outcome, terminal)
+	}
+	afterBinding, afterReads, afterWrites, afterPolicies :=
+		fixture.runtime.callCounts()
+	if afterBinding != beforeBinding ||
+		afterReads != beforeReads ||
+		afterWrites != beforeWrites ||
+		afterPolicies != beforePolicies {
+		t.Fatalf(
+			"rollback binding used runtime lookup: before=%d/%d/%d/%d after=%d/%d/%d/%d",
+			beforeBinding,
+			beforeReads,
+			beforeWrites,
+			beforePolicies,
+			afterBinding,
+			afterReads,
+			afterWrites,
+			afterPolicies,
+		)
+	}
+	close(release)
+	released = true
+	holder := <-holderResult
+	if holder.terminal != nil ||
+		holder.outcome.Mutation.State != eebusraw.MutationStateV1Applied {
+		t.Fatalf("writer holder outcome = %+v, terminal = %+v", holder.outcome, holder.terminal)
+	}
+}
+
+func TestIssue95DisconnectedOutcomeIsBoundOnlyAfterTokenAdmission(t *testing.T) {
+	fixture := newIssue95FacadeFixture(t)
+	fixture.backend.rawMutations = nil
+	bound, terminal := fixture.backend.FeaturesDataSet(
+		context.Background(),
+		fixture.writeAuth,
+		fixture.request,
+	)
+	if terminal == nil ||
+		terminal.Code != eebusraw.ErrorCodeV1Disconnected ||
+		bound.Runtime == nil ||
+		*bound.Runtime != fixture.binding ||
+		!reflect.DeepEqual(bound.Mutation, eebusraw.MutationV1{}) {
+		t.Fatalf("bound disconnected outcome = %+v, terminal = %+v", bound, terminal)
+	}
+	getAuth := fixture.readAuth
+	getAuth.Tool = eebusraw.ToolV1MutationsGet
+	unbound, terminal := fixture.backend.MutationsGet(
+		context.Background(),
+		getAuth,
+		eebusraw.MutationGetRequestV1{MutationRef: strings.Repeat("D", 42) + "A"},
+	)
+	if terminal == nil ||
+		terminal.Code != eebusraw.ErrorCodeV1Disconnected ||
+		!reflect.DeepEqual(unbound, RawMutationOutcomeV1{}) {
+		t.Fatalf("unbound disconnected outcome = %+v, terminal = %+v", unbound, terminal)
+	}
+	issue95AssertOutcomeNonLeak(t, bound, terminal, fixture.token)
 }
