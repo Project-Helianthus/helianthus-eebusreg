@@ -720,8 +720,12 @@ func (coordinator *rawMutationCoordinator) transition(
 		requestHash: entry.durableRequestHash,
 		mutationRef: mutation.MutationRef,
 	}
-	if rawMutationStateQuarantinesWrites(mutation) {
-		coordinator.quarantined = true
+	coordinator.quarantined = false
+	for _, current := range coordinator.entries {
+		if rawMutationStateQuarantinesWrites(current.snapshot()) {
+			coordinator.quarantined = true
+			break
+		}
 	}
 	coordinator.mu.Unlock()
 	if coordinator.deps.CrashAfterDurable != nil {
