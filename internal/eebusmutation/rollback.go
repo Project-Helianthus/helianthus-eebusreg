@@ -336,11 +336,12 @@ func (coordinator *rawMutationCoordinator) persistRolledBack(
 func (coordinator *rawMutationCoordinator) persistRollbackUnknown(
 	entry *rawMutationEntry,
 ) (eebusraw.MutationV1, *eebusraw.ErrorV1) {
+	if entry.mutation.State == eebusraw.MutationStateV1OutcomeUnknown {
+		return entry.snapshot(), cloneTerminal(entry.mutation.Error)
+	}
 	coordinator.prepareRollbackUnknown(entry)
-	if entry.mutation.State != eebusraw.MutationStateV1OutcomeUnknown {
-		if terminal := coordinator.transition(entry, eebusraw.MutationStateV1OutcomeUnknown); terminal != nil {
-			return cloneMutation(entry.mutation), terminal
-		}
+	if terminal := coordinator.transition(entry, eebusraw.MutationStateV1OutcomeUnknown); terminal != nil {
+		return cloneMutation(entry.mutation), terminal
 	}
 	return cloneMutation(entry.mutation), cloneTerminal(entry.mutation.Error)
 }

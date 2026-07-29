@@ -2,6 +2,7 @@ package eebusmutation
 
 import (
 	"testing"
+	"time"
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
@@ -17,12 +18,14 @@ func TestIssue97UncertainRollbackPersistsRestartValidQuarantine(t *testing.T) {
 		"rollback reply unavailable",
 		true,
 	)
+	releaseRollbackReadback := make(chan struct{})
 	rollbackReadback := first.readStep(first.before)
 	rollbackReadback.terminal = issue85ErrorWith(
 		eebusraw.ErrorCodeV1Disconnected,
 		"rollback readback unavailable",
 		true,
 	)
+	rollbackReadback.block = releaseRollbackReadback
 	first.executor.setSteps(
 		[]issue85ReadStep{
 			first.readStep(first.before),
@@ -42,13 +45,40 @@ func TestIssue97UncertainRollbackPersistsRestartValidQuarantine(t *testing.T) {
 
 	applied, terminal := first.set()
 	issue85AssertNoError(t, terminal)
-	uncertain, terminal := first.rollback(
-		applied.MutationRef,
-		"issue97-uncertain-rollback",
-	)
+	type rollbackResult struct {
+		mutation eebusraw.MutationV1
+		terminal *eebusraw.ErrorV1
+	}
+	rollbackDone := make(chan rollbackResult, 1)
+	go func() {
+		mutation, rollbackTerminal := first.rollback(
+			applied.MutationRef,
+			"issue97-uncertain-rollback",
+		)
+		rollbackDone <- rollbackResult{
+			mutation: mutation,
+			terminal: rollbackTerminal,
+		}
+	}()
+	waitForIssue85Calls(t, first.executor, 4, 2)
+	first.clock.Advance(time.Second)
+	close(releaseRollbackReadback)
+	result := <-rollbackDone
+	uncertain, terminal := result.mutation, result.terminal
 	issue85AssertError(t, terminal, eebusraw.ErrorCodeV1RollbackFailed)
 	issue85AssertState(t, uncertain, eebusraw.MutationStateV1OutcomeUnknown)
 	issue87AssertCanonicalMutation(t, uncertain)
+	durable, statusError := first.status(applied.MutationRef)
+	issue85AssertNoError(t, statusError)
+	if uncertain.OutcomeEvidence == nil ||
+		durable.OutcomeEvidence == nil ||
+		uncertain.OutcomeEvidence.RecordedAt != durable.OutcomeEvidence.RecordedAt {
+		t.Fatalf(
+			"rollback response diverged from durable status:\nresponse=%+v\nstatus=%+v",
+			uncertain.OutcomeEvidence,
+			durable.OutcomeEvidence,
+		)
+	}
 	first.closeClean()
 
 	restartExecutor := &issue85Executor{t: t, events: first.events}
@@ -68,6 +98,14 @@ func TestIssue97UncertainRollbackPersistsRestartValidQuarantine(t *testing.T) {
 	issue85AssertNoError(t, statusError)
 	issue85AssertState(t, status, eebusraw.MutationStateV1OutcomeUnknown)
 	issue87AssertCanonicalMutation(t, status)
+	if status.OutcomeEvidence == nil ||
+		status.OutcomeEvidence.RecordedAt != durable.OutcomeEvidence.RecordedAt {
+		t.Fatalf(
+			"restart changed durable rollback evidence:\nbefore=%+v\nafter=%+v",
+			durable.OutcomeEvidence,
+			status.OutcomeEvidence,
+		)
+	}
 	if status.Error == nil ||
 		status.Error.Code != eebusraw.ErrorCodeV1RollbackFailed ||
 		status.Rollback == nil ||
