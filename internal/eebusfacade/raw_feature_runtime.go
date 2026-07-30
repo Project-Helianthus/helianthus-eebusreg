@@ -39,6 +39,7 @@ const (
 var (
 	errRawRuntimeEpochMismatch = errors.New("raw runtime epoch changed")
 	errRawRemoteNotAdmitted    = errors.New("raw remote is not admitted")
+	errRawTypedEmpty           = errors.New("typed command data is empty")
 )
 
 type RawFeatureBackend interface {
@@ -773,7 +774,13 @@ func (bridge *rawFeatureRuntimeBridge) readTarget(
 	}
 	responseValue, err := rawCommandValue(result.Response, true)
 	if err != nil {
-		return eebusraw.ReadObservationV1{}, rawDecodeError()
+		if errors.Is(err, errRawTypedEmpty) && len(exactUnknown) == 0 {
+			return eebusraw.ReadObservationV1{}, rawTypedEmptyError()
+		}
+		return eebusraw.ReadObservationV1{}, rawTerminalWithUnknown(
+			rawDecodeError(),
+			exactUnknown,
+		)
 	}
 	requestMessage := eebusraw.ProtocolMessageV1{
 		Classifier:     strings.ToUpper(string(spinemodel.CmdClassifierTypeRead)),
@@ -1223,7 +1230,7 @@ func rawCommandValue(command spinemodel.CmdType, requireNonEmpty bool) (eebusraw
 		return eebusraw.TypedValueV1{}, err
 	}
 	if requireNonEmpty && rawTypedValueEmpty(value.Value()) {
-		return eebusraw.TypedValueV1{}, errors.New("typed command data is empty")
+		return eebusraw.TypedValueV1{}, errRawTypedEmpty
 	}
 	return value, nil
 }
@@ -1247,7 +1254,13 @@ func rawExecutorErrorWithUnknown(
 	err error,
 	unknown []eebusraw.OpaqueObservationV1,
 ) *eebusraw.ErrorV1 {
-	terminal := translateRawExecutorError(err)
+	return rawTerminalWithUnknown(translateRawExecutorError(err), unknown)
+}
+
+func rawTerminalWithUnknown(
+	terminal *eebusraw.ErrorV1,
+	unknown []eebusraw.OpaqueObservationV1,
+) *eebusraw.ErrorV1 {
 	if terminal == nil || len(unknown) == 0 {
 		return terminal
 	}
@@ -1357,6 +1370,15 @@ func rawDecodeError() *eebusraw.ErrorV1 {
 		"raw READ response contained no complete typed data",
 		false,
 		eebusraw.SourceLayerV1Decode,
+	)
+}
+
+func rawTypedEmptyError() *eebusraw.ErrorV1 {
+	return eebusraw.NewErrorV1(
+		eebusraw.ErrorCodeV1TypedEmpty,
+		"raw READ response contained valid empty typed data",
+		false,
+		eebusraw.SourceLayerV1Remote,
 	)
 }
 

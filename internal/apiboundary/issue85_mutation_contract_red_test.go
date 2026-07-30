@@ -135,7 +135,7 @@ func issue85MutationRawExports() []manifestExport {
 				"ErrorCodeV1UnsupportedOperation", "ErrorCodeV1PartialOperationForbidden",
 				"ErrorCodeV1RuntimeEpochMismatch", "ErrorCodeV1ConnectionGenerationMismatch",
 				"ErrorCodeV1Disconnected", "ErrorCodeV1Timeout", "ErrorCodeV1Cancelled",
-				"ErrorCodeV1RemoteError", "ErrorCodeV1DecodeError",
+				"ErrorCodeV1RemoteError", "ErrorCodeV1TypedEmpty", "ErrorCodeV1DecodeError",
 				"ErrorCodeV1PartialResult", "ErrorCodeV1NotFound",
 				"ErrorCodeV1SecretDetected", "ErrorCodeV1Internal":
 				continue
@@ -381,6 +381,7 @@ func issue85MutationStableEnums() map[string][]manifestStableEnumValue {
 			"ErrorCodeV1Cancelled", "cancelled",
 			"ErrorCodeV1Disconnected", "disconnected",
 			"ErrorCodeV1RemoteError", "remote_error",
+			"ErrorCodeV1TypedEmpty", "typed_empty",
 			"ErrorCodeV1DecodeError", "decode_error",
 			"ErrorCodeV1PartialResult", "partial_result",
 			"ErrorCodeV1OutcomeUnknown", "outcome_unknown",

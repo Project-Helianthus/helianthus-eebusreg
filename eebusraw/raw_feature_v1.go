@@ -89,6 +89,7 @@ const (
 	ErrorCodeV1Timeout                      ErrorCodeV1 = "timeout"
 	ErrorCodeV1Cancelled                    ErrorCodeV1 = "cancelled"
 	ErrorCodeV1RemoteError                  ErrorCodeV1 = "remote_error"
+	ErrorCodeV1TypedEmpty                   ErrorCodeV1 = "typed_empty"
 	ErrorCodeV1DecodeError                  ErrorCodeV1 = "decode_error"
 	ErrorCodeV1PartialResult                ErrorCodeV1 = "partial_result"
 	ErrorCodeV1OutcomeUnknown               ErrorCodeV1 = "outcome_unknown"

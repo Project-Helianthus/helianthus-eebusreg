@@ -223,7 +223,10 @@ func TestIssue83ReadBoundsUnsupportedAndEmptyDataAreZeroOrExplicit(t *testing.T)
 			TimeoutMS: 1000,
 		},
 	)
-	if terminal == nil || terminal.Code != eebusraw.ErrorCodeV1DecodeError ||
+	if terminal == nil ||
+		terminal.Code != eebusraw.ErrorCodeV1TypedEmpty ||
+		terminal.Retriable ||
+		terminal.SourceLayer != eebusraw.SourceLayerV1Remote ||
 		data.Complete || len(data.Results) != 0 {
 		t.Fatalf("empty reply result=%+v error=%+v", data, terminal)
 	}
