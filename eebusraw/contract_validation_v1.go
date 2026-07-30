@@ -526,7 +526,9 @@ func validateOpaqueObservationV1(observation OpaqueObservationV1) error {
 func validateErrorV1(value ErrorV1) error {
 	if !validErrorCodeV1(value.Code) ||
 		!boundedStringV1(value.Message, 512) ||
-		!validSourceLayerV1(value.SourceLayer) {
+		!validSourceLayerV1(value.SourceLayer) ||
+		(value.Code == ErrorCodeV1TypedEmpty &&
+			(value.Retriable || value.SourceLayer != SourceLayerV1Remote)) {
 		return errors.New("structured error is invalid")
 	}
 	if value.Details != nil {
