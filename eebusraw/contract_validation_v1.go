@@ -1111,6 +1111,7 @@ func validErrorCodeV1(value ErrorCodeV1) bool {
 		ErrorCodeV1Timeout,
 		ErrorCodeV1Cancelled,
 		ErrorCodeV1RemoteError,
+		ErrorCodeV1TypedEmpty,
 		ErrorCodeV1DecodeError,
 		ErrorCodeV1PartialResult,
 		ErrorCodeV1OutcomeUnknown,

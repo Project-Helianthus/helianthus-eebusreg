@@ -324,6 +324,7 @@ const ErrorCodeV1RemoteError
 const ErrorCodeV1RuntimeEpochMismatch
 const ErrorCodeV1SecretDetected
 const ErrorCodeV1Timeout
+const ErrorCodeV1TypedEmpty
 const ErrorCodeV1UnsupportedOperation
 const FeatureRoleV1Client
 const FeatureRoleV1Server
@@ -2497,6 +2498,7 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 					enumValue("ErrorCodeV1Timeout", "timeout"),
 					enumValue("ErrorCodeV1Cancelled", "cancelled"),
 					enumValue("ErrorCodeV1RemoteError", "remote_error"),
+					enumValue("ErrorCodeV1TypedEmpty", "typed_empty"),
 					enumValue("ErrorCodeV1DecodeError", "decode_error"),
 					enumValue("ErrorCodeV1PartialResult", "partial_result"),
 					enumValue("ErrorCodeV1OutcomeUnknown", "outcome_unknown"),

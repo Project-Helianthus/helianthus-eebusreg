@@ -9,7 +9,7 @@ import (
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
-const issue105TypedEmptyCode eebusraw.ErrorCodeV1 = "typed_empty"
+const issue105TypedEmptyCode eebusraw.ErrorCodeV1 = eebusraw.ErrorCodeV1TypedEmpty
 
 func TestIssue105RawCommandValueDistinguishesTypedEmptyFromFalseZeroAndLabel(t *testing.T) {
 	label := spinemodel.LabelType("Parter")
@@ -167,6 +167,13 @@ func TestIssue105BatchAggregationUsesTypedEmpty(t *testing.T) {
 			t.Fatalf("mixed batch ordering/commitments = %+v", data)
 		}
 		issue105AssertTypedEmpty(t, &data.Failures[0].Error)
+		if validation := eebusraw.ValidateFeatureDataGetDataV1(
+			issue105MeasurementBatchRequest(fixture),
+			data,
+			terminal,
+		); validation != nil {
+			t.Fatalf("mixed typed-empty batch violates public contract: %+v", validation)
+		}
 	})
 
 	t.Run("all typed-empty returns typed_empty", func(t *testing.T) {
@@ -196,14 +203,20 @@ func issue105MeasurementBatch(
 	return fixture.bridge.featuresDataGet(
 		context.Background(),
 		issue83FacadeAuthorization(eebusraw.ToolV1FeaturesDataGet),
-		eebusraw.FeatureDataGetRequestV1{
-			Targets: []eebusraw.FeatureTargetV1{
-				issue83TargetFromLocator(fixture.locators[0]),
-				issue83TargetFromLocator(fixture.locators[1]),
-			},
-			TimeoutMS: 1000,
-		},
+		issue105MeasurementBatchRequest(fixture),
 	)
+}
+
+func issue105MeasurementBatchRequest(
+	fixture issue83RawBridgeFixture,
+) eebusraw.FeatureDataGetRequestV1 {
+	return eebusraw.FeatureDataGetRequestV1{
+		Targets: []eebusraw.FeatureTargetV1{
+			issue83TargetFromLocator(fixture.locators[0]),
+			issue83TargetFromLocator(fixture.locators[1]),
+		},
+		TimeoutMS: 1000,
+	}
 }
 
 func issue105AssertMeasurementReadFactory(t *testing.T, request spineapi.CorrelatedRequest) {
