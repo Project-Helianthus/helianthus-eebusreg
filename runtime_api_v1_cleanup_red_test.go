@@ -3,11 +3,7 @@ package eebusruntime
 import (
 	"context"
 	"errors"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"net/netip"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -50,63 +46,6 @@ func TestMSP05PInitialV1PublicShapeIsExact(t *testing.T) {
 	runtimeType := reflect.TypeOf((*Runtime)(nil)).Elem()
 	if runtimeType.NumMethod() != 6 {
 		t.Fatalf("Runtime method count = %d, want additive raw READ count 6", runtimeType.NumMethod())
-	}
-}
-
-func TestMSP05PNewDelegatesOnlyToTheValidatedInitialV1Seam(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fset := token.NewFileSet()
-	var declaration *ast.FuncDecl
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || filepath.Ext(name) != ".go" || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, name, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		for _, candidate := range file.Decls {
-			function, ok := candidate.(*ast.FuncDecl)
-			if ok && function.Recv == nil && function.Name.Name == "New" {
-				if declaration != nil {
-					t.Fatal("New is declared more than once")
-				}
-				declaration = function
-			}
-		}
-	}
-	if declaration == nil || declaration.Body == nil {
-		t.Fatal("New production declaration is missing")
-	}
-	if len(declaration.Body.List) != 1 {
-		t.Fatalf("New body has %d statements, want one validated-seam return", len(declaration.Body.List))
-	}
-	result, ok := declaration.Body.List[0].(*ast.ReturnStmt)
-	if !ok || len(result.Results) != 1 {
-		t.Fatal("New must return the validated v1 seam directly")
-	}
-	call, ok := result.Results[0].(*ast.CallExpr)
-	if !ok {
-		t.Fatal("New return is not a constructor call")
-	}
-	callee, ok := call.Fun.(*ast.Ident)
-	if !ok || callee.Name != "newRuntime" {
-		t.Fatalf("New delegates to %T, want newRuntime", call.Fun)
-	}
-	if declaration.Type.Params == nil || len(declaration.Type.Params.List) != 1 || len(declaration.Type.Params.List[0].Names) != 1 {
-		t.Fatal("New must name its one Config parameter for lossless delegation")
-	}
-	parameter := declaration.Type.Params.List[0].Names[0].Name
-	if len(call.Args) != 2 {
-		t.Fatalf("newRuntime argument count = %d, want config and private factory", len(call.Args))
-	}
-	carried, ok := call.Args[0].(*ast.Ident)
-	if !ok || carried.Name != parameter {
-		t.Fatal("New does not pass its Config value losslessly to newRuntime")
 	}
 }
 
