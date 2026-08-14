@@ -24,7 +24,6 @@ var errRuntimeSnapshotUnavailable = errors.New("eebus runtime snapshot is unavai
 
 type Runtime interface {
 	RawFeatureRuntimeV1
-	AdminV1() AdminV1
 	Start(context.Context) error
 	Shutdown() error
 	Snapshot() (SnapshotV1, error)
@@ -101,6 +100,18 @@ type facadeRuntimeBackend struct {
 
 func New(config Config) (Runtime, error) {
 	return newRuntime(config, newFacadeRuntimeBackend)
+}
+
+func NewOperatorRuntimeV1(config Config) (Runtime, AdminV1, error) {
+	runtime, err := New(config)
+	if err != nil {
+		return nil, nil, newAdminBoundaryUnavailableV1()
+	}
+	implementation, ok := runtime.(*runtimeImplementation)
+	if !ok {
+		return nil, nil, newAdminBoundaryUnavailableV1()
+	}
+	return runtime, newUnavailableAdminV1(implementation), nil
 }
 
 func newRuntime(config Config, factory runtimeBackendFactory) (Runtime, error) {
