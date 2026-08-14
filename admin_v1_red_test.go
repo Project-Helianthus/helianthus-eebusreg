@@ -45,6 +45,19 @@ func TestAdminV1SnapshotIsSanitizedAndHandlesAreOpaque(t *testing.T) {
 	} {
 		forbiddenAdminV1Fields(t, view)
 	}
+	for _, ownerRow := range []reflect.Type{
+		reflect.TypeOf(ConnectedPartnerV1{}),
+		reflect.TypeOf(DiscoveredPartnerV1{}),
+	} {
+		endpoint, ok := ownerRow.FieldByName("Endpoint")
+		if !ok {
+			t.Errorf("%s lacks the owner-only operational Endpoint field", ownerRow.Name())
+			continue
+		}
+		if endpoint.Type.Kind() != reflect.String {
+			t.Errorf("%s.Endpoint = %s, want owner-only operational string", ownerRow.Name(), endpoint.Type)
+		}
+	}
 
 	for _, handle := range []reflect.Type{
 		reflect.TypeOf(PartnerHandleV1{}),
@@ -87,6 +100,9 @@ func assertAdminV1MethodShape(t *testing.T, admin reflect.Type, name string, wan
 		t.Errorf("AdminV1.%s first input = %s, want context.Context", name, method.Type.In(0))
 	}
 	assertAdminV1NamedType(t, "AdminV1."+name+" request", method.Type.In(1), want.request)
+	if name != "Snapshot" {
+		assertAdminV1MutationRequestHasNoTransportCoordinates(t, name, method.Type.In(1), map[reflect.Type]bool{})
+	}
 
 	if method.Type.NumOut() != 2 {
 		t.Errorf("AdminV1.%s output count = %d, want typed result plus *AdminErrorV1", name, method.Type.NumOut())
@@ -108,12 +124,36 @@ func assertAdminV1NamedType(t *testing.T, label string, typ reflect.Type, name s
 	}
 }
 
+func assertAdminV1MutationRequestHasNoTransportCoordinates(t *testing.T, operation string, request reflect.Type, seen map[reflect.Type]bool) {
+	t.Helper()
+	for request.Kind() == reflect.Pointer {
+		request = request.Elem()
+	}
+	if request.Kind() != reflect.Struct || seen[request] {
+		return
+	}
+	seen[request] = true
+
+	for index := 0; index < request.NumField(); index++ {
+		field := request.Field(index)
+		if !field.IsExported() {
+			continue
+		}
+		name := strings.ToLower(field.Name)
+		switch name {
+		case "endpoint", "host", "port", "address":
+			t.Errorf("AdminV1.%s request publishes caller-controlled transport coordinate %s", operation, field.Name)
+		}
+		assertAdminV1MutationRequestHasNoTransportCoordinates(t, operation, field.Type, seen)
+	}
+}
+
 func forbiddenAdminV1Fields(t *testing.T, view reflect.Type) {
 	t.Helper()
 	forbidden := []string{
 		"candidate_ref", "candidate-ref", "candidate ref",
 		"nonce", "generation", "store", "association", "control", "manifest",
-		"path", "endpoint", "address", "host", "port", "private", "pem", "token",
+		"path", "private", "pem", "token",
 		"key bytes", "key_bytes", "key-bytes",
 	}
 	for index := 0; index < view.NumField(); index++ {
