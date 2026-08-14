@@ -188,7 +188,7 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "type", Name: "ConnectedPartnerV1"}:                         {},
 	{Kind: "type", Name: "DiscoveredPartnerV1"}:                        {},
 	{Kind: "type", Name: "ObservationHandleV1"}:                        {},
-	{Kind: "type", Name: "PairingCandidateV1"}:                         {},
+	{Kind: "type", Name: "CandidateV1"}:                                {},
 	{Kind: "type", Name: "PartnerHandleV1"}:                            {},
 	{Kind: "type", Name: "SelectionHandleV1"}:                          {},
 	{Kind: "type", Name: "TrustedPartnerV1"}:                           {},

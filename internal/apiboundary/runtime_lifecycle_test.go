@@ -116,7 +116,7 @@ type CandidateHandleV1
 type ConnectedPartnerV1
 type DiscoveredPartnerV1
 type ObservationHandleV1
-type PairingCandidateV1
+type CandidateV1
 type PartnerHandleV1
 type SelectionHandleV1
 type TrustedPartnerV1
@@ -152,7 +152,7 @@ type CandidateHandleV1
 type ConnectedPartnerV1
 type DiscoveredPartnerV1
 type ObservationHandleV1
-type PairingCandidateV1
+type CandidateV1
 type PartnerHandleV1
 type SelectionHandleV1
 type TrustedPartnerV1

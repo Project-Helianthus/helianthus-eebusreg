@@ -35,13 +35,13 @@ type AdminSnapshotV1 struct {
 	Trusted    []TrustedPartnerV1
 	Connected  []ConnectedPartnerV1
 	Discovered []DiscoveredPartnerV1
-	Candidates []PairingCandidateV1
+	Candidates []CandidateV1
 }
 
 type TrustedPartnerV1 struct{ SKI string }
 type ConnectedPartnerV1 struct{ SKI string }
 type DiscoveredPartnerV1 struct{ SKI string }
-type PairingCandidateV1 struct{}
+type CandidateV1 struct{}
 
 type unavailableAdminV1 struct {
 	runtime *runtimeImplementation

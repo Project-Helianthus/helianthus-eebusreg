@@ -39,7 +39,7 @@ func TestAdminV1SnapshotIsSanitizedAndDoesNotPublishPrivateBindings(t *testing.T
 		reflect.TypeOf(TrustedPartnerV1{}),
 		reflect.TypeOf(ConnectedPartnerV1{}),
 		reflect.TypeOf(DiscoveredPartnerV1{}),
-		reflect.TypeOf(PairingCandidateV1{}),
+		reflect.TypeOf(CandidateV1{}),
 	} {
 		forbiddenAdminV1Fields(t, view)
 	}
