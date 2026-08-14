@@ -33,6 +33,11 @@ type firstTrustTLSBindingSink interface {
 type firstTrustDiscoveredCandidate struct {
 	ref           string
 	claimedSKI    string
+	name          string
+	identifier    string
+	brand         string
+	typeName      string
+	model         string
 	firstReceived time.Time
 	lastReceived  time.Time
 	revision      uint64
@@ -41,6 +46,11 @@ type firstTrustDiscoveredCandidate struct {
 
 type firstTrustDiscoveredCandidateView struct {
 	ref           string
+	name          string
+	identifier    string
+	brand         string
+	typeName      string
+	model         string
 	firstReceived time.Time
 	lastReceived  time.Time
 	revision      uint64
@@ -123,6 +133,11 @@ func (coordinator *firstTrustCoordinator) visiblePairingCandidatesUpdated(candid
 		entry := firstTrustDiscoveredCandidate{
 			ref:           candidate.CandidateRef,
 			claimedSKI:    candidate.SKI,
+			name:          candidate.Name,
+			identifier:    candidate.Identifier,
+			brand:         candidate.Brand,
+			typeName:      candidate.Type,
+			model:         candidate.Model,
 			firstReceived: now,
 			lastReceived:  now,
 			revision:      revision,
@@ -171,6 +186,11 @@ func (coordinator *firstTrustCoordinator) discoveredCandidateSnapshot() firstTru
 	for _, candidate := range coordinator.discoveredCandidates {
 		view.candidates = append(view.candidates, firstTrustDiscoveredCandidateView{
 			ref:           candidate.ref,
+			name:          candidate.name,
+			identifier:    candidate.identifier,
+			brand:         candidate.brand,
+			typeName:      candidate.typeName,
+			model:         candidate.model,
 			firstReceived: candidate.firstReceived,
 			lastReceived:  candidate.lastReceived,
 			revision:      candidate.revision,
@@ -181,6 +201,134 @@ func (coordinator *firstTrustCoordinator) discoveredCandidateSnapshot() firstTru
 		return view.candidates[left].ref < view.candidates[right].ref
 	})
 	return view
+}
+
+func (coordinator *firstTrustCoordinator) operatorAdminV1ObservationCurrent(candidateRef, expectedSKI string, revision uint64) bool {
+	if coordinator == nil || revision == 0 || !validFirstTrustCandidateRef(candidateRef) {
+		return false
+	}
+	remote, normalized, ok := decodeFirstTrustSKI(expectedSKI)
+	if !ok || normalized != expectedSKI {
+		return false
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	coordinator.expireLocked(coordinator.now())
+	if coordinator.phase != firstTrustOpenEmpty || coordinator.window == nil ||
+		coordinator.candidateSnapshotState != "valid" || coordinator.candidateSelection != nil {
+		return false
+	}
+	candidate, exists := coordinator.discoveredCandidates[candidateRef]
+	return exists && candidate.lifecycle == "visible" && candidate.revision == revision &&
+		candidate.claimedSKI == expectedSKI && constantTimeFingerprintMatch(candidate.claimedSKI, remote)
+}
+
+func (coordinator *firstTrustCoordinator) reserveOperatorAdminV1Selection(candidateRef, expectedSKI string) (*firstTrustCandidateSelection, string) {
+	if coordinator == nil || !validFirstTrustCandidateRef(candidateRef) {
+		return nil, "candidate_unavailable"
+	}
+	remote, normalized, ok := decodeFirstTrustSKI(expectedSKI)
+	if !ok || normalized != expectedSKI {
+		return nil, "candidate_ski_mismatch"
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	coordinator.expireLocked(coordinator.now())
+	if coordinator.phase == firstTrustDisabled || coordinator.reopening {
+		return nil, "mutation_disabled"
+	}
+	if coordinator.phase != firstTrustOpenEmpty || coordinator.window == nil {
+		return nil, "pairing_closed"
+	}
+	if coordinator.candidateSelection != nil {
+		return nil, "candidate_busy"
+	}
+	if coordinator.candidateSnapshotState == "invalid" {
+		return nil, "candidate_snapshot_invalid"
+	}
+	candidate, exists := coordinator.discoveredCandidates[candidateRef]
+	if !exists {
+		return nil, "candidate_unavailable"
+	}
+	if candidate.lifecycle == "consumed" {
+		return nil, "candidate_consumed"
+	}
+	if candidate.lifecycle != "visible" {
+		return nil, "candidate_busy"
+	}
+	if candidate.claimedSKI != expectedSKI || !constantTimeFingerprintMatch(candidate.claimedSKI, remote) {
+		return nil, "candidate_ski_mismatch"
+	}
+	selection := &firstTrustCandidateSelection{
+		request: firstTrustRequest{
+			operation:    "select_candidate",
+			candidateRef: candidateRef,
+			expectedSKI:  expectedSKI,
+		},
+		candidateRef: candidateRef,
+		expectedSKI:  expectedSKI,
+		remote:       bytes.Clone(remote),
+		done:         make(chan struct{}),
+	}
+	coordinator.candidateSelection = selection
+	candidate.lifecycle = "reserved"
+	coordinator.discoveredCandidates[candidateRef] = candidate
+	return selection, ""
+}
+
+func (coordinator *firstTrustCoordinator) finishOperatorAdminV1Selection(selection *firstTrustCandidateSelection, accepted bool) string {
+	if coordinator == nil || selection == nil {
+		return "candidate_unavailable"
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.candidateSelection != selection || selection.completed {
+		return "stale_request"
+	}
+	outcome := "candidate_selected"
+	if !accepted {
+		outcome = "candidate_queue_failed"
+	}
+	if selection.abortOutcome != "" {
+		outcome = selection.abortOutcome
+	} else if selection.cancelled {
+		outcome = "pairing_closed"
+	}
+	selection.outcome = outcome
+	selection.completed = true
+	if outcome == "candidate_selected" {
+		if candidate, exists := coordinator.discoveredCandidates[selection.candidateRef]; exists &&
+			candidate.claimedSKI == selection.expectedSKI {
+			candidate.lifecycle = "consumed"
+			coordinator.discoveredCandidates[selection.candidateRef] = candidate
+		}
+	} else {
+		coordinator.cancelCandidateSelectionLocked(selection)
+		coordinator.invalidateCandidateSnapshotLocked("candidate_selection_failed")
+		coordinator.candidateSelection = nil
+	}
+	close(selection.done)
+	return outcome
+}
+
+func (coordinator *firstTrustCoordinator) operatorAdminV1SelectionCurrent(candidateRef, expectedSKI string) bool {
+	if coordinator == nil {
+		return false
+	}
+	remote, normalized, ok := decodeFirstTrustSKI(expectedSKI)
+	if !ok || normalized != expectedSKI {
+		return false
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	coordinator.expireLocked(coordinator.now())
+	selection := coordinator.candidateSelection
+	if selection == nil || selection.cancelled || !selection.completed || selection.outcome != "candidate_selected" ||
+		selection.candidateRef != candidateRef || selection.expectedSKI != expectedSKI || !bytes.Equal(selection.remote, remote) {
+		return false
+	}
+	return coordinator.phase == firstTrustOpenEmpty || coordinator.phase == firstTrustCandidatePending ||
+		coordinator.phase == firstTrustTransientTrusted || coordinator.phase == firstTrustCommitting
 }
 
 func (coordinator *firstTrustCoordinator) selectCandidate(ctx context.Context, key, candidateRef, expectedSKI string) string {

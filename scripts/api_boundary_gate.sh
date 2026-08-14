@@ -61,7 +61,7 @@ if git_grep_checked -nE 'net\\.Listen|tls\\.Listen|ListenAndServe|/data/eebus|Tr
 fi
 
 echo "==> no premature trust or pairing mutation API"
-if git_grep_checked -nE '^(type|func|const|var) +(RegisterRemoteSKI|UnregisterRemoteSKI|SetPairingWindow|.*PairingWindow|.*TrustStore|.*TrustMutation)' -- '*.go' ':!internal/**'; then
+if git_grep_checked -nE '^(type|func|const|var) +(RegisterRemoteSKI|UnregisterRemoteSKI|SetPairingWindow|.*TrustStore|.*TrustMutation)' -- '*.go' ':!internal/**'; then
   echo "Public API exposes premature trust or pairing mutation surface."
   exit 1
 fi

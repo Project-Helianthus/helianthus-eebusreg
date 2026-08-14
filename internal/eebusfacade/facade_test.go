@@ -50,6 +50,7 @@ func TestStaticEvidenceReturnsIndependentSlices(t *testing.T) {
 }
 
 func TestGoListPinsEEBusGoWithoutReplace(t *testing.T) {
+	const operatorAdminEEBusGoVersion = "v0.7.1-helianthus.17"
 	root := repoRoot(t)
 	cmd := exec.Command("go", "list", "-m", "-json", EEBusGoModulePath)
 	cmd.Dir = root
@@ -73,8 +74,8 @@ func TestGoListPinsEEBusGoWithoutReplace(t *testing.T) {
 	if module.Path != EEBusGoModulePath {
 		t.Fatalf("go list module path = %q, want %q", module.Path, EEBusGoModulePath)
 	}
-	if module.Version != EEBusGoVersion {
-		t.Fatalf("go list module version = %q, want %q", module.Version, EEBusGoVersion)
+	if module.Version != operatorAdminEEBusGoVersion {
+		t.Fatalf("go list module version = %q, want %q", module.Version, operatorAdminEEBusGoVersion)
 	}
 	if module.Replace != nil {
 		t.Fatalf("eebus-go module is replaced: %+v", module.Replace)

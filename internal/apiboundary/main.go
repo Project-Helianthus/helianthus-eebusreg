@@ -57,6 +57,7 @@ var allowedOperatorAdminMutationSurface = map[string]struct{}{
 	"ClosePairingWindow":          {},
 	"OpenPairingWindowRequestV1":  {},
 	"ClosePairingWindowRequestV1": {},
+	"TrustState":                  {},
 }
 
 var mutationVerbs = []string{
@@ -276,7 +277,91 @@ const AdminErrorCodeV1TerminalQuarantine
 const AdminErrorCodeV1PersistenceFailure
 const AdminErrorCodeV1UnknownState
 func AdminErrorV1.Error
+func AdminMutationResultV1.Format
+func AdminMutationResultV1.GoString
+func AdminMutationResultV1.MarshalJSON
+func AdminMutationResultV1.String
+func AdminSelectionResultV1.Format
+func AdminSelectionResultV1.GoString
+func AdminSelectionResultV1.MarshalJSON
+func AdminSelectionResultV1.String
+func AdminSnapshotRequestV1.Format
+func AdminSnapshotRequestV1.GoString
+func AdminSnapshotRequestV1.MarshalJSON
+func AdminSnapshotRequestV1.String
+func AdminSnapshotV1.Format
+func AdminSnapshotV1.GoString
+func AdminSnapshotV1.MarshalJSON
+func AdminSnapshotV1.String
+func CancelRequestV1.Format
+func CancelRequestV1.GoString
+func CancelRequestV1.MarshalJSON
+func CancelRequestV1.String
+func CandidateHandleV1.Format
+func CandidateHandleV1.GoString
+func CandidateHandleV1.MarshalJSON
+func CandidateHandleV1.String
+func CandidateV1.Format
+func CandidateV1.GoString
+func CandidateV1.MarshalJSON
+func CandidateV1.String
+func ClosePairingWindowRequestV1.Format
+func ClosePairingWindowRequestV1.GoString
+func ClosePairingWindowRequestV1.MarshalJSON
+func ClosePairingWindowRequestV1.String
+func ConfirmRequestV1.Format
+func ConfirmRequestV1.GoString
+func ConfirmRequestV1.MarshalJSON
+func ConfirmRequestV1.String
+func ConnectRequestV1.Format
+func ConnectRequestV1.GoString
+func ConnectRequestV1.MarshalJSON
+func ConnectRequestV1.String
+func ConnectedPartnerV1.Format
+func ConnectedPartnerV1.GoString
+func ConnectedPartnerV1.MarshalJSON
+func ConnectedPartnerV1.String
+func DiscoveredPartnerV1.Format
+func DiscoveredPartnerV1.GoString
+func DiscoveredPartnerV1.MarshalJSON
+func DiscoveredPartnerV1.String
+func MutationPreconditionV1.Format
+func MutationPreconditionV1.GoString
+func MutationPreconditionV1.MarshalJSON
+func MutationPreconditionV1.String
 func NewOperatorRuntimeV1
+func ObservationHandleV1.Format
+func ObservationHandleV1.GoString
+func ObservationHandleV1.MarshalJSON
+func ObservationHandleV1.String
+func OpenPairingWindowRequestV1.Format
+func OpenPairingWindowRequestV1.GoString
+func OpenPairingWindowRequestV1.MarshalJSON
+func OpenPairingWindowRequestV1.String
+func PartnerHandleV1.Format
+func PartnerHandleV1.GoString
+func PartnerHandleV1.MarshalJSON
+func PartnerHandleV1.String
+func RetryTrustedRequestV1.Format
+func RetryTrustedRequestV1.GoString
+func RetryTrustedRequestV1.MarshalJSON
+func RetryTrustedRequestV1.String
+func SelectRequestV1.Format
+func SelectRequestV1.GoString
+func SelectRequestV1.MarshalJSON
+func SelectRequestV1.String
+func SelectionHandleV1.Format
+func SelectionHandleV1.GoString
+func SelectionHandleV1.MarshalJSON
+func SelectionHandleV1.String
+func TrustedPartnerV1.Format
+func TrustedPartnerV1.GoString
+func TrustedPartnerV1.MarshalJSON
+func TrustedPartnerV1.String
+func UntrustRequestV1.Format
+func UntrustRequestV1.GoString
+func UntrustRequestV1.MarshalJSON
+func UntrustRequestV1.String
 type AdminV1
 type AdminErrorCodeV1
 type AdminErrorV1
@@ -304,6 +389,12 @@ type PartnerHandleV1
 type SelectionHandleV1
 type TrustedPartnerV1
 `)
+
+func init() {
+	for exported := range postM9OperatorAdminRuntimeExports {
+		allowedRuntimeExports[exported] = struct{}{}
+	}
+}
 
 var msp055RuntimeExports = map[manifestExport]struct{}{
 	{Kind: "const", Name: "PairingPolicyClosed"}:       {},

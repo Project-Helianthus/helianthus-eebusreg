@@ -31,6 +31,10 @@ func TestOperatorAdminV1BridgeSelectReservesWithoutDialAndConnectsAtMostOnce(t *
 		CandidateRef: candidateRef,
 		SKI:          operatorAdminV1BridgeTestSKI,
 		Name:         "owner-visible peer",
+		Identifier:   "owner-identifier",
+		Brand:        "owner-brand",
+		Type:         "owner-type",
+		Model:        "owner-model",
 	}})
 	snapshot, snapshotFailure := bridge.snapshotOperatorAdminV1(context.Background())
 	requireOperatorAdminV1BridgeSuccess(t, snapshotFailure)
@@ -41,8 +45,13 @@ func TestOperatorAdminV1BridgeSelectReservesWithoutDialAndConnectsAtMostOnce(t *
 	if observation == "" || observation == candidateRef || strings.Contains(observation, candidateRef) {
 		t.Fatalf("observation reference %q exposes or omits its private binding", observation)
 	}
-	if snapshot.discovered[0].ski != operatorAdminV1BridgeTestSKI {
-		t.Fatalf("discovered SKI = %q, want complete owner identity", snapshot.discovered[0].ski)
+	row := snapshot.discovered[0]
+	if row.ski != operatorAdminV1BridgeTestSKI || row.observationRevision == 0 || row.lastSeen.IsZero() ||
+		row.name != "owner-visible peer" || row.identifier != "owner-identifier" || row.brand != "owner-brand" ||
+		row.typeName != "owner-type" || row.model != "owner-model" || row.endpoint != "" ||
+		snapshot.capturedAt.IsZero() || snapshot.status == "" || snapshot.window != "open" ||
+		snapshot.windowDeadline.IsZero() || snapshot.register == "" || snapshot.listener == "" || snapshot.discovery == "" {
+		t.Fatalf("discovered owner facts or status incomplete: row=%#v snapshot=%#v", row, snapshot)
 	}
 
 	selection, selected, selectFailure := bridge.selectOperatorAdminV1(
@@ -239,6 +248,9 @@ func TestOperatorAdminV1BridgeRetryUsesOnlyIdentityAndUntrustResolvesCurrentBind
 	if snapshot.trusted[0].ski != wantSKI {
 		t.Fatalf("trusted SKI = %q, want %q", snapshot.trusted[0].ski, wantSKI)
 	}
+	if snapshot.trusted[0].shipID != association.service {
+		t.Fatalf("trusted SHIP ID = %q, want source-owned %q", snapshot.trusted[0].shipID, association.service)
+	}
 
 	retried, retryFailure := bridge.retryTrustedOperatorAdminV1(context.Background(), partner)
 	requireOperatorAdminV1BridgeSuccess(t, retryFailure)
@@ -262,6 +274,9 @@ func TestOperatorAdminV1BridgeRetryUsesOnlyIdentityAndUntrustResolvesCurrentBind
 	assertOperatorAdminV1BridgeAssociationRevoked(t, fixture.store.view, association.reference)
 	if fixture.store.calls() != publicationCallsBeforeUntrust+2 {
 		t.Fatalf("untrust durable publication calls = %d, want %d", fixture.store.calls(), publicationCallsBeforeUntrust+2)
+	}
+	if len(bridge.operationIDs) != 0 {
+		t.Fatalf("terminal untrust retained %d bridge operation IDs", len(bridge.operationIDs))
 	}
 }
 
@@ -322,6 +337,62 @@ func TestOperatorAdminV1BridgeRoutesWindowConfirmAndCancelThroughCurrentCoordina
 	})
 }
 
+func TestOperatorAdminV1BridgeSnapshotReportsInvalidDiscoveryAsDegraded(t *testing.T) {
+	fixture := newMSP04BFixture(t, "commit_durable")
+	coordinator := fixture.coordinator.(*firstTrustCoordinator)
+	service := newOperatorAdminV1BridgeServiceSpy()
+	bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 955})
+
+	coordinator.visiblePairingCandidatesUpdated([]shipapi.PairingCandidateRef{{
+		CandidateRef: "",
+		SKI:          operatorAdminV1BridgeTestSKI,
+	}})
+	snapshot, failure := bridge.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, failure)
+	if snapshot.discovery != "invalid" || snapshot.degraded != "discovery_unavailable" || len(snapshot.discovered) != 0 {
+		t.Fatalf("invalid discovery snapshot=%#v, want sanitized degraded status and no discovered rows", snapshot)
+	}
+
+	selection, transition, selectFailure := bridge.selectOperatorAdminV1(
+		context.Background(), "unknown-observation", operatorAdminV1BridgeTestSKI,
+	)
+	if selectFailure != "observation_stale" || selection != "" || transition.changed {
+		t.Fatalf("invalid discovery select=%q/%#v/%q, want zero-effect observation_stale", selection, transition, selectFailure)
+	}
+	selectCalls, connectCalls, retryCalls, _, _, _ := service.snapshot()
+	if selectCalls != 0 || connectCalls != 0 || retryCalls != 0 {
+		t.Fatalf("invalid discovery reached service calls %d/%d/%d", selectCalls, connectCalls, retryCalls)
+	}
+}
+
+func TestOperatorAdminV1BridgeTLSBoundIncompleteCandidateRemainsCancellable(t *testing.T) {
+	fixture := newIssue60Fixture(t)
+	bridge := newOperatorAdminV1Bridge(fixture.coordinator, newOperatorAdminV1BridgeServiceSpy(), &msp04cOrdinalReader{next: 958})
+
+	snapshot, failure := bridge.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, failure)
+	if len(snapshot.candidates) != 1 || snapshot.candidates[0].state != "association_incomplete" ||
+		snapshot.candidates[0].associationComplete || snapshot.candidates[0].expiresAt.IsZero() {
+		t.Fatalf("TLS-bound incomplete candidate facts=%#v, want cancellable association_incomplete row", snapshot.candidates)
+	}
+
+	cancelled, cancelFailure := bridge.cancelOperatorAdminV1(context.Background(), snapshot.candidates[0].reference)
+	requireOperatorAdminV1BridgeSuccess(t, cancelFailure)
+	if !cancelled.changed || cancelled.outcome != "cancelled" {
+		t.Fatalf("incomplete candidate cancel=%#v, want cancelled changed", cancelled)
+	}
+	if fixture.coordinator.trusted(fixture.remote) {
+		t.Fatal("incomplete candidate cancel published durable trust")
+	}
+	if fixture.service.registerCount() != 0 || fixture.service.unregisterCount() != 0 {
+		t.Fatalf("incomplete candidate cancel register/unregister=%d/%d, want 0/0", fixture.service.registerCount(), fixture.service.unregisterCount())
+	}
+	if _, _, _, _, _, _, ok := fixture.coordinator.candidate(); ok {
+		t.Fatal("incomplete candidate cancel retained coordinator candidate")
+	}
+	assertMSP04BCommitCount(t, fixture.base.store, 0)
+}
+
 func TestOperatorAdminV1BridgeCancelAfterTransientConfirmRevokesTargetWithoutDurableTrust(t *testing.T) {
 	fixture := newIssue60Fixture(t)
 	fixture.shipID()
@@ -341,6 +412,13 @@ func TestOperatorAdminV1BridgeCancelAfterTransientConfirmRevokesTargetWithoutDur
 		t.Fatalf("transient confirm registers=%d durable-trusted=%t, want 1/false", fixture.service.registerCount(), fixture.coordinator.trusted(fixture.remote))
 	}
 	assertMSP04BCommitCount(t, fixture.base.store, 0)
+	postConfirm, snapshotFailure := bridge.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, snapshotFailure)
+	if len(postConfirm.candidates) != 1 || postConfirm.candidates[0].state != "transient_trusted" ||
+		postConfirm.candidates[0].expiresAt.IsZero() || !postConfirm.candidates[0].associationComplete {
+		t.Fatalf("post-confirm transient candidate facts=%#v, want fresh cancellable association-complete row", postConfirm.candidates)
+	}
+	candidate = postConfirm.candidates[0].reference
 
 	cancelled, cancelFailure := bridge.cancelOperatorAdminV1(context.Background(), candidate)
 	requireOperatorAdminV1BridgeSuccess(t, cancelFailure)
@@ -383,6 +461,27 @@ func TestOperatorAdminV1BridgeMapsEveryReleasedTrustedRemoteRetryError(t *testin
 	}
 	if got := mapOperatorAdminV1RetryError(errors.New("future retry failure")); got != "unknown_state" {
 		t.Fatalf("unknown retry error mapping=%q, want fail-closed unknown_state", got)
+	}
+}
+
+func TestOperatorAdminV1BridgeRetiresTerminalOperationReferencesBeyondCapacity(t *testing.T) {
+	fixture := newMSP04BFixture(t, "commit_durable")
+	coordinator := fixture.coordinator.(*firstTrustCoordinator)
+	bridge := newOperatorAdminV1Bridge(coordinator, newOperatorAdminV1BridgeServiceSpy(), &msp04cOrdinalReader{next: 1_200})
+	for index := 0; index < 160; index++ {
+		opened, openFailure := bridge.openOperatorAdminV1(context.Background(), time.Minute)
+		requireOperatorAdminV1BridgeSuccess(t, openFailure)
+		if !opened.changed {
+			t.Fatalf("open %d transition=%#v, want changed", index, opened)
+		}
+		closed, closeFailure := bridge.closeOperatorAdminV1(context.Background())
+		requireOperatorAdminV1BridgeSuccess(t, closeFailure)
+		if !closed.changed {
+			t.Fatalf("close %d transition=%#v, want changed", index, closed)
+		}
+		if len(bridge.operations) != 0 {
+			t.Fatalf("terminal operation %d retained %d bridge references", index, len(bridge.operations))
+		}
 	}
 }
 
@@ -431,12 +530,10 @@ func TestOperatorAdminV1BridgeSnapshotIsBoundedSanitizedAndNeverPartial(t *testi
 		SKI:          operatorAdminV1BridgeTestSKI,
 	})
 	coordinator.visiblePairingCandidatesUpdated(overflow)
-	partial, overflowFailure := bridge.snapshotOperatorAdminV1(context.Background())
-	if overflowFailure == "" {
-		t.Fatal("invalid over-capacity discovery snapshot was accepted")
-	}
-	if !reflect.ValueOf(partial).IsZero() {
-		t.Fatalf("capacity failure returned partial facts %#v", partial)
+	degraded, overflowFailure := bridge.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, overflowFailure)
+	if degraded.discovery != "invalid" || degraded.degraded != "discovery_unavailable" || len(degraded.discovered) != 0 {
+		t.Fatalf("capacity-invalid discovery snapshot=%#v, want sanitized degraded status and no partial rows", degraded)
 	}
 }
 
@@ -563,6 +660,10 @@ func assertOperatorAdminV1BridgeSnapshotSanitized(t *testing.T, snapshot any) {
 			for index := 0; index < value.NumField(); index++ {
 				field := typ.Field(index)
 				normalized := strings.ToLower(strings.ReplaceAll(field.Name, "_", ""))
+				if normalized == "associationcomplete" && field.Type.Kind() == reflect.Bool {
+					visit(value.Field(index), path+"."+field.Name)
+					continue
+				}
 				for _, fragment := range forbidden {
 					fragment = strings.ReplaceAll(fragment, "_", "")
 					if strings.Contains(normalized, fragment) {

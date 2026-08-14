@@ -638,6 +638,32 @@ func (facade *firstTrustFacade) retrySink() (firstTrustRetryEventSink, bool) {
 	return retry, ok && retry.retryRuntimeEnabled()
 }
 
+func (facade *firstTrustFacade) operatorAdminV1ConnectedSnapshot() []operatorAdminV1BridgeRawConnected {
+	if facade == nil {
+		return nil
+	}
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	connected := make([]operatorAdminV1BridgeRawConnected, 0, len(facade.connections))
+	for normalized, connection := range facade.connections {
+		if connection == nil || !connection.active || !connection.connected || connection.cancelled || connection.blocked ||
+			!validOperatorAdminV1BridgeSKI(normalized) {
+			continue
+		}
+		trustState := "untrusted"
+		if connection.registered {
+			trustState = "trusted"
+			if connection.transient {
+				trustState = "transient"
+			}
+		}
+		connected = append(connected, operatorAdminV1BridgeRawConnected{
+			ski: normalized, trustState: trustState, connectionState: "connected", shipID: connection.shipID,
+		})
+	}
+	return connected
+}
+
 func (facade *firstTrustFacade) setWaiting(value bool) error {
 	if facade.service != nil {
 		if err := facade.service.SetPairingRegistration(value); err != nil {

@@ -235,14 +235,20 @@ func TestAdminV1ReducerLifecycleAndExactSnapshotViews(t *testing.T) {
 	requireAdminV1Success(t, failure)
 	assertOperatorAdminV1ViewLengths(t, trusted, 1, 0, 0, 0)
 	if trusted.StateRevision != 1 || adminV1HandleField[PartnerHandleV1](t, trusted.Trusted[0], "Partner") == (PartnerHandleV1{}) ||
-		!adminV1TimeField(t, trusted, "CapturedAt").Equal(operatorAdminV1TestFacts().capturedAt) {
+		!adminV1TimeField(t, trusted, "CapturedAt").Equal(operatorAdminV1TestFacts().capturedAt) ||
+		trusted.Status != "ready" || trusted.Window != "open" || trusted.WindowDeadline.IsZero() ||
+		trusted.Register != "enabled" || trusted.Listener != "ready" || trusted.Discovery != "ready" ||
+		trusted.DegradedCode != "" || trusted.TrustedCount != 1 || trusted.ConnectedCount != 1 ||
+		trusted.DiscoveredCount != 1 || trusted.CandidateCount != 1 || trusted.Trusted[0].TrustState != "trusted" {
 		t.Fatalf("trusted snapshot = %#v, want revision 1 with one partner handle", trusted)
 	}
 
 	connected, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Connected})
 	requireAdminV1Success(t, failure)
 	assertOperatorAdminV1ViewLengths(t, connected, 0, 1, 0, 0)
-	if connected.StateRevision != 1 || connected.Connected[0].Endpoint != "192.0.2.10:4712" {
+	if connected.StateRevision != 1 || connected.Connected[0].Endpoint != "192.0.2.10:4712" ||
+		connected.Connected[0].TrustState != "trusted" || connected.Connected[0].ConnectionState != "connected" ||
+		connected.Connected[0].SHIPID != "ship-id-connected" {
 		t.Fatalf("connected snapshot = %#v, want only owner endpoint row at revision 1", connected)
 	}
 
@@ -250,7 +256,11 @@ func TestAdminV1ReducerLifecycleAndExactSnapshotViews(t *testing.T) {
 	requireAdminV1Success(t, failure)
 	assertOperatorAdminV1ViewLengths(t, discovered, 0, 0, 1, 0)
 	if discovered.StateRevision != 1 || discovered.Discovered[0].Endpoint != "192.0.2.20:4712" ||
-		adminV1HandleField[ObservationHandleV1](t, discovered.Discovered[0], "Observation") == (ObservationHandleV1{}) {
+		adminV1HandleField[ObservationHandleV1](t, discovered.Discovered[0], "Observation") == (ObservationHandleV1{}) ||
+		discovered.Discovered[0].ObservationRevision != 1 || discovered.Discovered[0].LastSeen.IsZero() ||
+		discovered.Discovered[0].Name != "owner peer" || discovered.Discovered[0].Identifier != "owner-id" ||
+		discovered.Discovered[0].Brand != "owner-brand" || discovered.Discovered[0].Type != "owner-type" ||
+		discovered.Discovered[0].Model != "owner-model" {
 		t.Fatalf("discovered snapshot = %#v, want one owner endpoint observation at revision 1", discovered)
 	}
 
@@ -258,7 +268,9 @@ func TestAdminV1ReducerLifecycleAndExactSnapshotViews(t *testing.T) {
 	requireAdminV1Success(t, failure)
 	assertOperatorAdminV1ViewLengths(t, candidate, 0, 0, 0, 1)
 	if candidate.StateRevision != 1 || adminV1HandleField[CandidateHandleV1](t, candidate.Candidates[0], "Candidate") == (CandidateHandleV1{}) ||
-		adminV1StringField(t, candidate.Candidates[0], "SKI") != operatorAdminV1TestSKI {
+		adminV1StringField(t, candidate.Candidates[0], "SKI") != operatorAdminV1TestSKI ||
+		candidate.Candidates[0].State != "association_complete" || candidate.Candidates[0].ExpiresAt.IsZero() ||
+		!candidate.Candidates[0].AssociationComplete {
 		t.Fatalf("candidate snapshot = %#v, want one complete-SKI candidate handle at revision 1", candidate)
 	}
 
@@ -300,11 +312,11 @@ func TestAdminV1ReducerAsyncFactsAdvanceRevisionAndInvalidateHandles(t *testing.
 	changed := cloneOperatorAdminV1TestFacts(facts)
 	changed.discovered = []operatorAdminV1DiscoveredFact{{
 		reference: "observation-replacement", ski: operatorAdminV1TestSKI, endpoint: "192.0.2.21:4712",
-		expiresAt: clock.Now().Add(time.Minute),
+		observationRevision: 2, lastSeen: clock.Now(), name: "replacement", expiresAt: clock.Now().Add(time.Minute),
 	}}
 	changed.candidates = []operatorAdminV1CandidateFact{{
 		reference: "candidate-replacement", ski: operatorAdminV1TestSKI,
-		expiresAt: clock.Now().Add(time.Minute),
+		state: "association_complete", expiresAt: clock.Now().Add(time.Minute), associationComplete: true,
 	}}
 	backend.setFacts(changed)
 
@@ -472,12 +484,16 @@ func TestAdminV1ReducerFactsCoverOwnerStatusDeadlinesAndExactRows(t *testing.T) 
 		{name: "window deadline", change: func(facts *operatorAdminV1SnapshotFacts) {
 			facts.windowDeadline = facts.windowDeadline.Add(time.Second)
 		}},
+		{name: "register", change: func(facts *operatorAdminV1SnapshotFacts) { facts.register = "disabled" }},
 		{name: "listener", change: func(facts *operatorAdminV1SnapshotFacts) { facts.listener = "degraded" }},
 		{name: "discovery", change: func(facts *operatorAdminV1SnapshotFacts) { facts.discovery = "degraded" }},
+		{name: "degraded", change: func(facts *operatorAdminV1SnapshotFacts) { facts.degraded = AdminErrorCodeV1DiscoveryUnavailable }},
 		{name: "trusted row reference", change: func(facts *operatorAdminV1SnapshotFacts) { facts.trusted[0].reference = "partner-reference-2" }},
 		{name: "trusted row SKI", change: func(facts *operatorAdminV1SnapshotFacts) { facts.trusted[0].ski = strings.Repeat("a", 40) }},
+		{name: "trusted row state", change: func(facts *operatorAdminV1SnapshotFacts) { facts.trusted[0].trustState = "revoked" }},
 		{name: "connected row SKI", change: func(facts *operatorAdminV1SnapshotFacts) { facts.connected[0].ski = strings.Repeat("a", 40) }},
 		{name: "connected row endpoint", change: func(facts *operatorAdminV1SnapshotFacts) { facts.connected[0].endpoint = "192.0.2.11:4712" }},
+		{name: "connected row state", change: func(facts *operatorAdminV1SnapshotFacts) { facts.connected[0].connectionState = "disconnected" }},
 		{name: "discovered row reference", change: func(facts *operatorAdminV1SnapshotFacts) {
 			facts.discovered[0].reference = "observation-row-revision-2"
 		}},
@@ -486,11 +502,18 @@ func TestAdminV1ReducerFactsCoverOwnerStatusDeadlinesAndExactRows(t *testing.T) 
 		{name: "discovered row deadline", change: func(facts *operatorAdminV1SnapshotFacts) {
 			facts.discovered[0].expiresAt = facts.discovered[0].expiresAt.Add(time.Second)
 		}},
+		{name: "discovered row observation revision", change: func(facts *operatorAdminV1SnapshotFacts) { facts.discovered[0].observationRevision++ }},
+		{name: "discovered row last seen", change: func(facts *operatorAdminV1SnapshotFacts) {
+			facts.discovered[0].lastSeen = facts.discovered[0].lastSeen.Add(time.Second)
+		}},
+		{name: "discovered row metadata", change: func(facts *operatorAdminV1SnapshotFacts) { facts.discovered[0].model = "owner-model-2" }},
 		{name: "candidate row reference", change: func(facts *operatorAdminV1SnapshotFacts) { facts.candidates[0].reference = "candidate-row-revision-2" }},
 		{name: "candidate row SKI", change: func(facts *operatorAdminV1SnapshotFacts) { facts.candidates[0].ski = strings.Repeat("a", 40) }},
 		{name: "candidate row deadline", change: func(facts *operatorAdminV1SnapshotFacts) {
 			facts.candidates[0].expiresAt = facts.candidates[0].expiresAt.Add(time.Second)
 		}},
+		{name: "candidate row state", change: func(facts *operatorAdminV1SnapshotFacts) { facts.candidates[0].state = "transient_trusted" }},
+		{name: "candidate row association", change: func(facts *operatorAdminV1SnapshotFacts) { facts.candidates[0].associationComplete = false }},
 	}
 	t.Run("capture time is required but is not state equality", func(t *testing.T) {
 		clock := newOperatorAdminV1TestClock()
@@ -539,6 +562,30 @@ func TestAdminV1ReducerFactsCoverOwnerStatusDeadlinesAndExactRows(t *testing.T) 
 }
 
 func TestAdminV1ReducerExpiryAndFailedConsumedStateAdvanceRevision(t *testing.T) {
+	t.Run("optional discovery deadline does not expire observation handle", func(t *testing.T) {
+		clock := newOperatorAdminV1TestClock()
+		facts := operatorAdminV1TestFacts()
+		facts.window = "closed"
+		facts.windowDeadline = time.Time{}
+		facts.discovered[0].expiresAt = time.Time{}
+		backend := newOperatorAdminV1TestBackend(facts)
+		admin := newOperatorAdminV1Reducer(clock.Now, newOperatorAdminV1TestEntropy(), newOperatorAdminV1TestLifecycle(true, true, false), backend)
+		snapshot, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Discovered})
+		requireAdminV1Success(t, failure)
+		observation := adminV1HandleField[ObservationHandleV1](t, snapshot.Discovered[0], "Observation")
+
+		clock.Advance(time.Minute)
+		_, selectFailure := admin.Select(context.Background(), SelectRequestV1{
+			MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "optional-target-deadline", ExpectedStateRevision: snapshot.StateRevision},
+			Observation:            observation,
+			ExpectedSKI:            operatorAdminV1TestSKI,
+		})
+		requireAdminV1Success(t, selectFailure)
+		if backend.calls("select") != 1 {
+			t.Fatalf("optional zero discovery deadline suppressed select effects=%d, want 1", backend.calls("select"))
+		}
+	})
+
 	t.Run("target expiry caps observation and candidate handles", func(t *testing.T) {
 		clock := newOperatorAdminV1TestClock()
 		facts := operatorAdminV1TestFacts()
@@ -697,6 +744,42 @@ func TestAdminV1ReducerCompletedMutationsRollReplayCapacityWithoutReexecution(t 
 	requireAdminV1Code(t, conflict, AdminErrorCodeV1IdempotencyConflict)
 	if backend.calls("open") != 0 {
 		t.Fatalf("live replay conflict executed open effect %d times", backend.calls("open"))
+	}
+
+	failureBackend := newOperatorAdminV1TestBackend(operatorAdminV1TestFacts())
+	failureBackend.setEffect("close", operatorAdminV1Transition{}, AdminErrorCodeV1UnknownState, operatorAdminV1TestFacts())
+	failureAdmin := newOperatorAdminV1Reducer(
+		clock.Now, newOperatorAdminV1TestEntropyFrom(20_000), newOperatorAdminV1TestLifecycle(true, true, false), failureBackend,
+	)
+	failureSnapshot, snapshotFailure := failureAdmin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
+	requireAdminV1Success(t, snapshotFailure)
+	var liveFailureRequest ClosePairingWindowRequestV1
+	for index := 0; index < operatorAdminV1MaximumReplayEntries; index++ {
+		request := ClosePairingWindowRequestV1{MutationPreconditionV1: MutationPreconditionV1{
+			IdempotencyKey: fmt.Sprintf("terminal-failure-%03d", index), ExpectedStateRevision: failureSnapshot.StateRevision,
+		}}
+		_, callFailure := failureAdmin.ClosePairingWindow(context.Background(), request)
+		requireAdminV1Code(t, callFailure, AdminErrorCodeV1UnknownState)
+		if index == 0 {
+			liveFailureRequest = request
+		}
+	}
+	if failureBackend.calls("close") != operatorAdminV1MaximumReplayEntries {
+		t.Fatalf("terminal failure effects=%d, want %d", failureBackend.calls("close"), operatorAdminV1MaximumReplayEntries)
+	}
+	_, capacityFailure := failureAdmin.ClosePairingWindow(context.Background(), ClosePairingWindowRequestV1{
+		MutationPreconditionV1: MutationPreconditionV1{
+			IdempotencyKey: "terminal-failure-overflow", ExpectedStateRevision: failureSnapshot.StateRevision,
+		},
+	})
+	requireAdminV1Code(t, capacityFailure, AdminErrorCodeV1AdminBoundaryUnavailable)
+	if failureBackend.calls("close") != operatorAdminV1MaximumReplayEntries {
+		t.Fatalf("failure capacity overflow executed effect: calls=%d", failureBackend.calls("close"))
+	}
+	_, replayedFailure := failureAdmin.ClosePairingWindow(context.Background(), liveFailureRequest)
+	requireAdminV1Code(t, replayedFailure, AdminErrorCodeV1UnknownState)
+	if failureBackend.calls("close") != operatorAdminV1MaximumReplayEntries {
+		t.Fatalf("live terminal failure replay re-executed effect: calls=%d", failureBackend.calls("close"))
 	}
 }
 
@@ -1129,19 +1212,25 @@ func operatorAdminV1TestFacts() operatorAdminV1SnapshotFacts {
 		status:         "ready",
 		window:         "open",
 		windowDeadline: time.Unix(2_000_000_000, 0).Add(time.Minute),
+		register:       "enabled",
 		listener:       "ready",
 		discovery:      "ready",
-		trusted:        []operatorAdminV1TrustedFact{{reference: "partner-reference", ski: operatorAdminV1TestSKI}},
+		trusted: []operatorAdminV1TrustedFact{{
+			reference: "partner-reference", ski: operatorAdminV1TestSKI, trustState: "trusted",
+		}},
 		connected: []operatorAdminV1ConnectedFact{{
-			ski: operatorAdminV1TestSKI, endpoint: "192.0.2.10:4712",
+			ski: operatorAdminV1TestSKI, endpoint: "192.0.2.10:4712", trustState: "trusted",
+			connectionState: "connected", shipID: "ship-id-connected",
 		}},
 		discovered: []operatorAdminV1DiscoveredFact{{
 			reference: "observation-reference", ski: operatorAdminV1TestSKI, endpoint: "192.0.2.20:4712",
+			observationRevision: 1, lastSeen: time.Unix(2_000_000_000, 0), name: "owner peer",
+			identifier: "owner-id", brand: "owner-brand", typeName: "owner-type", model: "owner-model",
 			expiresAt: time.Unix(2_000_000_000, 0).Add(time.Minute),
 		}},
 		candidates: []operatorAdminV1CandidateFact{{
 			reference: "candidate-reference", ski: operatorAdminV1TestSKI,
-			expiresAt: time.Unix(2_000_000_000, 0).Add(time.Minute),
+			state: "association_complete", expiresAt: time.Unix(2_000_000_000, 0).Add(time.Minute), associationComplete: true,
 		}},
 	}
 }
@@ -1150,10 +1239,12 @@ func operatorAdminV1TestDiscoveredFacts(count int) []operatorAdminV1DiscoveredFa
 	result := make([]operatorAdminV1DiscoveredFact, count)
 	for index := range result {
 		result[index] = operatorAdminV1DiscoveredFact{
-			reference: "observation-" + strings.Repeat("x", index/26) + string(rune('a'+index%26)),
-			ski:       operatorAdminV1TestSKI,
-			endpoint:  "192.0.2.20:4712",
-			expiresAt: time.Unix(2_000_000_000, 0).Add(time.Minute),
+			reference:           "observation-" + strings.Repeat("x", index/26) + string(rune('a'+index%26)),
+			ski:                 operatorAdminV1TestSKI,
+			endpoint:            "192.0.2.20:4712",
+			observationRevision: uint64(index + 1),
+			lastSeen:            time.Unix(2_000_000_000, 0),
+			expiresAt:           time.Unix(2_000_000_000, 0).Add(time.Minute),
 		}
 	}
 	return result
@@ -1400,6 +1491,9 @@ func forbiddenAdminV1Fields(t *testing.T, view reflect.Type) {
 	}
 	for index := 0; index < view.NumField(); index++ {
 		field := view.Field(index)
+		if view == reflect.TypeOf(CandidateV1{}) && field.Name == "AssociationComplete" && field.Type.Kind() == reflect.Bool {
+			continue
+		}
 		if field.Name == "SKI" && field.Type.Kind() != reflect.String {
 			t.Fatalf("%s.SKI = %s, want canonical public identity string", view.Name(), field.Type)
 		}
