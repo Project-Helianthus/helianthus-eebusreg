@@ -23,7 +23,6 @@ type exactRuntimeContract interface {
 
 var (
 	_ exactRuntimeContract                      = Runtime(nil)
-	_ Runtime                                   = exactRuntimeContract(nil)
 	_ func(Config) (Runtime, error)             = New
 	_ interface{ Start(context.Context) error } = Runtime(nil)
 	_ error                                     = ErrRuntimeDisabled

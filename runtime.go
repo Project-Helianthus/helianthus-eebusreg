@@ -2,6 +2,7 @@ package eebusruntime
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
@@ -88,6 +90,8 @@ type runtimeImplementation struct {
 
 	shutdownDone chan struct{}
 	shutdownErr  error
+
+	adminBackend *operatorAdminV1BackendSlot
 }
 
 type facadeRuntimeBackend struct {
@@ -100,6 +104,21 @@ type facadeRuntimeBackend struct {
 
 func New(config Config) (Runtime, error) {
 	return newRuntime(config, newFacadeRuntimeBackend)
+}
+
+func NewOperatorRuntimeV1(config Config) (Runtime, AdminV1, error) {
+	runtime, err := newRuntime(config, newFacadeRuntimeBackend)
+	if err != nil {
+		return nil, nil, newAdminBoundaryUnavailableV1()
+	}
+	implementation, ok := runtime.(*runtimeImplementation)
+	if !ok {
+		return nil, nil, newAdminBoundaryUnavailableV1()
+	}
+	slot := &operatorAdminV1BackendSlot{}
+	implementation.adminBackend = slot
+	admin := newOperatorAdminV1Reducer(time.Now, rand.Reader, implementation, slot)
+	return runtime, admin, nil
 }
 
 func newRuntime(config Config, factory runtimeBackendFactory) (Runtime, error) {
@@ -207,6 +226,11 @@ func (runtime *runtimeImplementation) Start(ctx context.Context) error {
 	runtime.backend = backend
 	runtime.cancel = runCancel
 	runtime.done = done
+	if runtime.adminBackend != nil {
+		if adminBackend, ok := backend.(operatorAdminV1Backend); ok {
+			runtime.adminBackend.attach(adminBackend)
+		}
+	}
 	runtime.started = true
 	go runtime.runBackend(runCtx, backend, done)
 	runtime.finishStartAttemptLocked(attempt, nil)
@@ -227,6 +251,11 @@ func (runtime *runtimeImplementation) Shutdown() error {
 	}
 
 	runtime.shutdown = true
+	if runtime.adminBackend != nil {
+		if adminBackend, ok := runtime.backend.(operatorAdminV1Backend); ok {
+			runtime.adminBackend.detach(adminBackend)
+		}
+	}
 	completion := make(chan struct{})
 	runtime.shutdownDone = completion
 	attempt := runtime.starting
@@ -311,6 +340,15 @@ func (runtime *runtimeImplementation) PairingState() ([]PairingObservationV1, er
 	return snapshot.Pairing, nil
 }
 
+func (runtime *runtimeImplementation) operatorAdminV1Lifecycle() (bool, bool, bool) {
+	if runtime == nil {
+		return false, false, true
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return runtime.enabled, runtime.started && runtime.backend != nil && runtime.workerErr == nil, runtime.shutdown
+}
+
 func (runtime *runtimeImplementation) finishStartAttemptLocked(attempt *runtimeStartAttempt, err error) {
 	attempt.err = err
 	runtime.starting = nil
@@ -321,6 +359,11 @@ func (runtime *runtimeImplementation) runBackend(ctx context.Context, backend ru
 	runErr := backend.Run(ctx, runtime.publishSnapshot)
 	runtime.mu.Lock()
 	runtime.started = false
+	if runtime.adminBackend != nil {
+		if adminBackend, ok := backend.(operatorAdminV1Backend); ok {
+			runtime.adminBackend.detach(adminBackend)
+		}
+	}
 	switch {
 	case runErr == nil:
 		if !runtime.shutdown && ctx.Err() == nil && runtime.workerErr == nil {
@@ -451,6 +494,159 @@ func (backend *facadeRuntimeBackend) TerminalSnapshot() (SnapshotV1, bool) {
 		return SnapshotV1{}, false
 	}
 	return backend.terminal.Clone(), true
+}
+
+func (backend *facadeRuntimeBackend) snapshotOperatorAdminV1(ctx context.Context) (operatorAdminV1SnapshotFacts, *AdminErrorV1) {
+	internal := backend.operatorAdminV1InternalBackend()
+	if internal == nil {
+		return operatorAdminV1SnapshotFacts{}, newAdminBoundaryUnavailableV1()
+	}
+	snapshot, failure := internal.OperatorAdminV1Snapshot(ctx)
+	if terminal := operatorAdminV1FacadeFailure(failure); terminal != nil {
+		return operatorAdminV1SnapshotFacts{}, terminal
+	}
+	return operatorAdminV1SnapshotFacts{
+		capturedAt: snapshot.CapturedAt, status: snapshot.Status, window: snapshot.Window,
+		windowDeadline: snapshot.WindowDeadline, register: snapshot.Register, listener: snapshot.Listener,
+		discovery: snapshot.Discovery, degraded: AdminErrorCodeV1(snapshot.Degraded),
+		trusted: operatorAdminV1TrustedFactsFromFacade(snapshot.Trusted), connected: operatorAdminV1ConnectedFactsFromFacade(snapshot.Connected),
+		discovered: operatorAdminV1DiscoveredFactsFromFacade(snapshot.Discovered), candidates: operatorAdminV1CandidateFactsFromFacade(snapshot.Candidates),
+	}, nil
+}
+
+func (backend *facadeRuntimeBackend) openOperatorAdminV1(ctx context.Context, duration time.Duration) (operatorAdminV1Transition, *AdminErrorV1) {
+	internal := backend.operatorAdminV1InternalBackend()
+	if internal == nil {
+		return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+	}
+	transition, failure := internal.OperatorAdminV1Open(ctx, duration)
+	return operatorAdminV1TransitionFromFacade(transition), operatorAdminV1FacadeFailure(failure)
+}
+
+func (backend *facadeRuntimeBackend) closeOperatorAdminV1(ctx context.Context) (operatorAdminV1Transition, *AdminErrorV1) {
+	internal := backend.operatorAdminV1InternalBackend()
+	if internal == nil {
+		return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+	}
+	transition, failure := internal.OperatorAdminV1Close(ctx)
+	return operatorAdminV1TransitionFromFacade(transition), operatorAdminV1FacadeFailure(failure)
+}
+
+func (backend *facadeRuntimeBackend) selectOperatorAdminV1(ctx context.Context, reference, expectedSKI string) (string, operatorAdminV1Transition, *AdminErrorV1) {
+	internal := backend.operatorAdminV1InternalBackend()
+	if internal == nil {
+		return "", operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+	}
+	selection, transition, failure := internal.OperatorAdminV1Select(ctx, reference, expectedSKI)
+	return selection, operatorAdminV1TransitionFromFacade(transition), operatorAdminV1FacadeFailure(failure)
+}
+
+func (backend *facadeRuntimeBackend) connectOperatorAdminV1(ctx context.Context, reference string) (operatorAdminV1Transition, *AdminErrorV1) {
+	internal := backend.operatorAdminV1InternalBackend()
+	if internal == nil {
+		return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+	}
+	transition, failure := internal.OperatorAdminV1Connect(ctx, reference)
+	return operatorAdminV1TransitionFromFacade(transition), operatorAdminV1FacadeFailure(failure)
+}
+
+func (backend *facadeRuntimeBackend) confirmOperatorAdminV1(ctx context.Context, reference, expectedSKI string) (operatorAdminV1Transition, *AdminErrorV1) {
+	internal := backend.operatorAdminV1InternalBackend()
+	if internal == nil {
+		return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+	}
+	transition, failure := internal.OperatorAdminV1Confirm(ctx, reference, expectedSKI)
+	return operatorAdminV1TransitionFromFacade(transition), operatorAdminV1FacadeFailure(failure)
+}
+
+func (backend *facadeRuntimeBackend) cancelOperatorAdminV1(ctx context.Context, reference string) (operatorAdminV1Transition, *AdminErrorV1) {
+	internal := backend.operatorAdminV1InternalBackend()
+	if internal == nil {
+		return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+	}
+	transition, failure := internal.OperatorAdminV1Cancel(ctx, reference)
+	return operatorAdminV1TransitionFromFacade(transition), operatorAdminV1FacadeFailure(failure)
+}
+
+func (backend *facadeRuntimeBackend) retryTrustedOperatorAdminV1(ctx context.Context, reference string) (operatorAdminV1Transition, *AdminErrorV1) {
+	internal := backend.operatorAdminV1InternalBackend()
+	if internal == nil {
+		return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+	}
+	transition, failure := internal.OperatorAdminV1RetryTrusted(ctx, reference)
+	return operatorAdminV1TransitionFromFacade(transition), operatorAdminV1FacadeFailure(failure)
+}
+
+func (backend *facadeRuntimeBackend) untrustOperatorAdminV1(ctx context.Context, reference string) (operatorAdminV1Transition, *AdminErrorV1) {
+	internal := backend.operatorAdminV1InternalBackend()
+	if internal == nil {
+		return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+	}
+	transition, failure := internal.OperatorAdminV1Untrust(ctx, reference)
+	return operatorAdminV1TransitionFromFacade(transition), operatorAdminV1FacadeFailure(failure)
+}
+
+func (backend *facadeRuntimeBackend) operatorAdminV1InternalBackend() eebusfacade.OperatorAdminV1Backend {
+	if backend == nil || backend.backend == nil {
+		return nil
+	}
+	internal, _ := backend.backend.(eebusfacade.OperatorAdminV1Backend)
+	return internal
+}
+
+func operatorAdminV1TransitionFromFacade(source eebusfacade.OperatorAdminV1Transition) operatorAdminV1Transition {
+	return operatorAdminV1Transition{outcome: AdminOutcomeV1(source.Outcome), changed: source.Changed}
+}
+
+func operatorAdminV1FacadeFailure(failure string) *AdminErrorV1 {
+	if failure == "" {
+		return nil
+	}
+	return normalizeOperatorAdminV1Error(operatorAdminV1Error(AdminErrorCodeV1(failure)))
+}
+
+func operatorAdminV1TrustedFactsFromFacade(source []eebusfacade.OperatorAdminV1Fact) []operatorAdminV1TrustedFact {
+	result := make([]operatorAdminV1TrustedFact, len(source))
+	for index, fact := range source {
+		result[index] = operatorAdminV1TrustedFact{
+			reference: fact.Reference, ski: fact.SKI, trustState: fact.TrustState, shipID: fact.SHIPID, lastSeen: fact.LastSeen,
+		}
+	}
+	return result
+}
+
+func operatorAdminV1ConnectedFactsFromFacade(source []eebusfacade.OperatorAdminV1Fact) []operatorAdminV1ConnectedFact {
+	result := make([]operatorAdminV1ConnectedFact, len(source))
+	for index, fact := range source {
+		result[index] = operatorAdminV1ConnectedFact{
+			ski: fact.SKI, endpoint: fact.Endpoint, trustState: fact.TrustState,
+			connectionState: fact.ConnectionState, shipID: fact.SHIPID, lastSeen: fact.LastSeen,
+		}
+	}
+	return result
+}
+
+func operatorAdminV1DiscoveredFactsFromFacade(source []eebusfacade.OperatorAdminV1Fact) []operatorAdminV1DiscoveredFact {
+	result := make([]operatorAdminV1DiscoveredFact, len(source))
+	for index, fact := range source {
+		result[index] = operatorAdminV1DiscoveredFact{
+			reference: fact.Reference, ski: fact.SKI, endpoint: fact.Endpoint, observationRevision: fact.ObservationRevision,
+			lastSeen: fact.LastSeen, name: fact.Name, identifier: fact.Identifier, brand: fact.Brand,
+			typeName: fact.Type, model: fact.Model, expiresAt: fact.ExpiresAt,
+		}
+	}
+	return result
+}
+
+func operatorAdminV1CandidateFactsFromFacade(source []eebusfacade.OperatorAdminV1Fact) []operatorAdminV1CandidateFact {
+	result := make([]operatorAdminV1CandidateFact, len(source))
+	for index, fact := range source {
+		result[index] = operatorAdminV1CandidateFact{
+			reference: fact.Reference, ski: fact.SKI, state: fact.State,
+			expiresAt: fact.ExpiresAt, associationComplete: fact.AssociationComplete,
+		}
+	}
+	return result
 }
 
 func normalizeRuntimeConfig(config Config) (Config, error) {

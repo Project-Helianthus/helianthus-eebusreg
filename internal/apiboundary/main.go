@@ -52,6 +52,14 @@ var forbiddenExportFragments = []string{
 	"PairingWindow",
 }
 
+var allowedOperatorAdminMutationSurface = map[string]struct{}{
+	"OpenPairingWindow":           {},
+	"ClosePairingWindow":          {},
+	"OpenPairingWindowRequestV1":  {},
+	"ClosePairingWindowRequestV1": {},
+	"TrustState":                  {},
+}
+
 var mutationVerbs = []string{
 	"Register",
 	"Unregister",
@@ -120,12 +128,41 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "const", Name: "FeatureRoleV1Client"}:                       {},
 	{Kind: "const", Name: "FeatureRoleV1Server"}:                       {},
 	{Kind: "const", Name: "PairingPolicyClosed"}:                       {},
+	{Kind: "const", Name: "AdminViewV1Trusted"}:                        {},
+	{Kind: "const", Name: "AdminViewV1Connected"}:                      {},
+	{Kind: "const", Name: "AdminViewV1Discovered"}:                     {},
+	{Kind: "const", Name: "AdminViewV1Candidate"}:                      {},
+	{Kind: "const", Name: "AdminErrorCodeV1AdminBoundaryUnavailable"}:  {},
+	{Kind: "const", Name: "AdminErrorCodeV1Unauthenticated"}:           {},
+	{Kind: "const", Name: "AdminErrorCodeV1Forbidden"}:                 {},
+	{Kind: "const", Name: "AdminErrorCodeV1CSRFRejected"}:              {},
+	{Kind: "const", Name: "AdminErrorCodeV1InvalidRequest"}:            {},
+	{Kind: "const", Name: "AdminErrorCodeV1StateConflict"}:             {},
+	{Kind: "const", Name: "AdminErrorCodeV1SnapshotExpired"}:           {},
+	{Kind: "const", Name: "AdminErrorCodeV1IdempotencyConflict"}:       {},
+	{Kind: "const", Name: "AdminErrorCodeV1PairingClosed"}:             {},
+	{Kind: "const", Name: "AdminErrorCodeV1ObservationStale"}:          {},
+	{Kind: "const", Name: "AdminErrorCodeV1IdentityMismatch"}:          {},
+	{Kind: "const", Name: "AdminErrorCodeV1AssociationIncomplete"}:     {},
+	{Kind: "const", Name: "AdminErrorCodeV1CandidateExpired"}:          {},
+	{Kind: "const", Name: "AdminErrorCodeV1CandidateBusy"}:             {},
+	{Kind: "const", Name: "AdminErrorCodeV1TrustDenied"}:               {},
+	{Kind: "const", Name: "AdminErrorCodeV1ListenerUnavailable"}:       {},
+	{Kind: "const", Name: "AdminErrorCodeV1DiscoveryUnavailable"}:      {},
+	{Kind: "const", Name: "AdminErrorCodeV1AttemptTimeout"}:            {},
+	{Kind: "const", Name: "AdminErrorCodeV1Disconnected"}:              {},
+	{Kind: "const", Name: "AdminErrorCodeV1BackoffActive"}:             {},
+	{Kind: "const", Name: "AdminErrorCodeV1TerminalQuarantine"}:        {},
+	{Kind: "const", Name: "AdminErrorCodeV1PersistenceFailure"}:        {},
+	{Kind: "const", Name: "AdminErrorCodeV1UnknownState"}:              {},
+	{Kind: "func", Name: "AdminErrorV1.Error"}:                         {},
 	{Kind: "func", Name: "BuildRedactedSnapshotV1"}:                    {},
 	{Kind: "func", Name: "MetadataV1.MarshalJSON"}:                     {},
 	{Kind: "func", Name: "MetadataV1.UnmarshalJSON"}:                   {},
 	{Kind: "func", Name: "MetadataValueV1.MarshalJSON"}:                {},
 	{Kind: "func", Name: "MetadataValueV1.UnmarshalJSON"}:              {},
 	{Kind: "func", Name: "New"}:                                        {},
+	{Kind: "func", Name: "NewOperatorRuntimeV1"}:                       {},
 	{Kind: "func", Name: "NewSnapshotV1"}:                              {},
 	{Kind: "func", Name: "OpaqueScalarV1.MarshalJSON"}:                 {},
 	{Kind: "func", Name: "OpaqueScalarV1.UnmarshalJSON"}:               {},
@@ -181,8 +218,182 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "type", Name: "SnapshotV1"}:                                 {},
 	{Kind: "type", Name: "UseCaseV1"}:                                  {},
 	{Kind: "type", Name: "Config"}:                                     {},
+	{Kind: "type", Name: "AdminV1"}:                                    {},
+	{Kind: "type", Name: "AdminErrorCodeV1"}:                           {},
+	{Kind: "type", Name: "AdminErrorV1"}:                               {},
+	{Kind: "type", Name: "AdminOutcomeV1"}:                             {},
+	{Kind: "type", Name: "AdminViewV1"}:                                {},
+	{Kind: "type", Name: "AdminSnapshotV1"}:                            {},
+	{Kind: "type", Name: "AdminSnapshotRequestV1"}:                     {},
+	{Kind: "type", Name: "AdminMutationResultV1"}:                      {},
+	{Kind: "type", Name: "AdminSelectionResultV1"}:                     {},
+	{Kind: "type", Name: "MutationPreconditionV1"}:                     {},
+	{Kind: "type", Name: "OpenPairingWindowRequestV1"}:                 {},
+	{Kind: "type", Name: "ClosePairingWindowRequestV1"}:                {},
+	{Kind: "type", Name: "SelectRequestV1"}:                            {},
+	{Kind: "type", Name: "ConnectRequestV1"}:                           {},
+	{Kind: "type", Name: "ConfirmRequestV1"}:                           {},
+	{Kind: "type", Name: "CancelRequestV1"}:                            {},
+	{Kind: "type", Name: "RetryTrustedRequestV1"}:                      {},
+	{Kind: "type", Name: "UntrustRequestV1"}:                           {},
+	{Kind: "type", Name: "CandidateHandleV1"}:                          {},
+	{Kind: "type", Name: "ConnectedPartnerV1"}:                         {},
+	{Kind: "type", Name: "DiscoveredPartnerV1"}:                        {},
+	{Kind: "type", Name: "ObservationHandleV1"}:                        {},
+	{Kind: "type", Name: "CandidateV1"}:                                {},
+	{Kind: "type", Name: "PartnerHandleV1"}:                            {},
+	{Kind: "type", Name: "SelectionHandleV1"}:                          {},
+	{Kind: "type", Name: "TrustedPartnerV1"}:                           {},
 	{Kind: "var", Name: "ErrRuntimeDisabled"}:                          {},
 	{Kind: "var", Name: "ErrRuntimeShutdown"}:                          {},
+}
+
+var postM9OperatorAdminRuntimeExports = frozenExportInventory(`
+const AdminViewV1Trusted
+const AdminViewV1Connected
+const AdminViewV1Discovered
+const AdminViewV1Candidate
+const AdminErrorCodeV1AdminBoundaryUnavailable
+const AdminErrorCodeV1Unauthenticated
+const AdminErrorCodeV1Forbidden
+const AdminErrorCodeV1CSRFRejected
+const AdminErrorCodeV1InvalidRequest
+const AdminErrorCodeV1StateConflict
+const AdminErrorCodeV1SnapshotExpired
+const AdminErrorCodeV1IdempotencyConflict
+const AdminErrorCodeV1PairingClosed
+const AdminErrorCodeV1ObservationStale
+const AdminErrorCodeV1IdentityMismatch
+const AdminErrorCodeV1AssociationIncomplete
+const AdminErrorCodeV1CandidateExpired
+const AdminErrorCodeV1CandidateBusy
+const AdminErrorCodeV1TrustDenied
+const AdminErrorCodeV1ListenerUnavailable
+const AdminErrorCodeV1DiscoveryUnavailable
+const AdminErrorCodeV1AttemptTimeout
+const AdminErrorCodeV1Disconnected
+const AdminErrorCodeV1BackoffActive
+const AdminErrorCodeV1TerminalQuarantine
+const AdminErrorCodeV1PersistenceFailure
+const AdminErrorCodeV1UnknownState
+func AdminErrorV1.Error
+func AdminMutationResultV1.Format
+func AdminMutationResultV1.GoString
+func AdminMutationResultV1.MarshalJSON
+func AdminMutationResultV1.String
+func AdminSelectionResultV1.Format
+func AdminSelectionResultV1.GoString
+func AdminSelectionResultV1.MarshalJSON
+func AdminSelectionResultV1.String
+func AdminSnapshotRequestV1.Format
+func AdminSnapshotRequestV1.GoString
+func AdminSnapshotRequestV1.MarshalJSON
+func AdminSnapshotRequestV1.String
+func AdminSnapshotV1.Format
+func AdminSnapshotV1.GoString
+func AdminSnapshotV1.MarshalJSON
+func AdminSnapshotV1.String
+func CancelRequestV1.Format
+func CancelRequestV1.GoString
+func CancelRequestV1.MarshalJSON
+func CancelRequestV1.String
+func CandidateHandleV1.Format
+func CandidateHandleV1.GoString
+func CandidateHandleV1.MarshalJSON
+func CandidateHandleV1.String
+func CandidateV1.Format
+func CandidateV1.GoString
+func CandidateV1.MarshalJSON
+func CandidateV1.String
+func ClosePairingWindowRequestV1.Format
+func ClosePairingWindowRequestV1.GoString
+func ClosePairingWindowRequestV1.MarshalJSON
+func ClosePairingWindowRequestV1.String
+func ConfirmRequestV1.Format
+func ConfirmRequestV1.GoString
+func ConfirmRequestV1.MarshalJSON
+func ConfirmRequestV1.String
+func ConnectRequestV1.Format
+func ConnectRequestV1.GoString
+func ConnectRequestV1.MarshalJSON
+func ConnectRequestV1.String
+func ConnectedPartnerV1.Format
+func ConnectedPartnerV1.GoString
+func ConnectedPartnerV1.MarshalJSON
+func ConnectedPartnerV1.String
+func DiscoveredPartnerV1.Format
+func DiscoveredPartnerV1.GoString
+func DiscoveredPartnerV1.MarshalJSON
+func DiscoveredPartnerV1.String
+func MutationPreconditionV1.Format
+func MutationPreconditionV1.GoString
+func MutationPreconditionV1.MarshalJSON
+func MutationPreconditionV1.String
+func NewOperatorRuntimeV1
+func ObservationHandleV1.Format
+func ObservationHandleV1.GoString
+func ObservationHandleV1.MarshalJSON
+func ObservationHandleV1.String
+func OpenPairingWindowRequestV1.Format
+func OpenPairingWindowRequestV1.GoString
+func OpenPairingWindowRequestV1.MarshalJSON
+func OpenPairingWindowRequestV1.String
+func PartnerHandleV1.Format
+func PartnerHandleV1.GoString
+func PartnerHandleV1.MarshalJSON
+func PartnerHandleV1.String
+func RetryTrustedRequestV1.Format
+func RetryTrustedRequestV1.GoString
+func RetryTrustedRequestV1.MarshalJSON
+func RetryTrustedRequestV1.String
+func SelectRequestV1.Format
+func SelectRequestV1.GoString
+func SelectRequestV1.MarshalJSON
+func SelectRequestV1.String
+func SelectionHandleV1.Format
+func SelectionHandleV1.GoString
+func SelectionHandleV1.MarshalJSON
+func SelectionHandleV1.String
+func TrustedPartnerV1.Format
+func TrustedPartnerV1.GoString
+func TrustedPartnerV1.MarshalJSON
+func TrustedPartnerV1.String
+func UntrustRequestV1.Format
+func UntrustRequestV1.GoString
+func UntrustRequestV1.MarshalJSON
+func UntrustRequestV1.String
+type AdminV1
+type AdminErrorCodeV1
+type AdminErrorV1
+type AdminOutcomeV1
+type AdminViewV1
+type AdminSnapshotV1
+type AdminSnapshotRequestV1
+type AdminMutationResultV1
+type AdminSelectionResultV1
+type MutationPreconditionV1
+type OpenPairingWindowRequestV1
+type ClosePairingWindowRequestV1
+type SelectRequestV1
+type ConnectRequestV1
+type ConfirmRequestV1
+type CancelRequestV1
+type RetryTrustedRequestV1
+type UntrustRequestV1
+type CandidateHandleV1
+type ConnectedPartnerV1
+type DiscoveredPartnerV1
+type ObservationHandleV1
+type CandidateV1
+type PartnerHandleV1
+type SelectionHandleV1
+type TrustedPartnerV1
+`)
+
+func init() {
+	for exported := range postM9OperatorAdminRuntimeExports {
+		allowedRuntimeExports[exported] = struct{}{}
+	}
 }
 
 var msp055RuntimeExports = map[manifestExport]struct{}{
@@ -1189,6 +1400,9 @@ func inspectRuntimeExports(modulePath string, packages map[string]*packageInvent
 			if _, lifecycle := msp055RuntimeExports[expected]; lifecycle {
 				continue
 			}
+			if _, operatorAdmin := postM9OperatorAdminRuntimeExports[expected]; operatorAdmin {
+				continue
+			}
 		}
 		if _, present := inventory.exports[expected]; !present {
 			violations = append(violations, fmt.Sprintf("root eebusruntime export required by MSP-036 is missing: %s %s", expected.Kind, expected.Name))
@@ -1587,6 +1801,9 @@ func inspectStableContracts(root, modulePath string, fset *token.FileSet, packag
 		}
 		for name := range inventory.types {
 			if ast.IsExported(name) && strings.HasSuffix(name, "V1") {
+				if _, operatorAdmin := postM9OperatorAdminRuntimeExports[manifestExport{Kind: "type", Name: name}]; operatorAdmin {
+					continue
+				}
 				if _, ok := allExpectedTypes[spec.importPath][name]; !ok {
 					violations = append(violations, fmt.Sprintf("%s: unexpected stable contract type %s", spec.importPath, name))
 				}
@@ -1719,6 +1936,9 @@ func (i *sourceImporter) Import(path string) (*types.Package, error) {
 func stableTypeCheckFiles(packagePath string, files []*ast.File) []*ast.File {
 	result := make([]*ast.File, 0, len(files))
 	for _, file := range files {
+		if fileDeclaresPostM9OperatorAdminSurface(file) {
+			continue
+		}
 		implementation := false
 		for _, spec := range file.Imports {
 			importPath, err := strconv.Unquote(spec.Path.Value)
@@ -1732,6 +1952,17 @@ func stableTypeCheckFiles(packagePath string, files []*ast.File) []*ast.File {
 		}
 	}
 	return result
+}
+
+func fileDeclaresPostM9OperatorAdminSurface(file *ast.File) bool {
+	exports := make(map[manifestExport]struct{})
+	collectExports(file, exports)
+	for exported := range exports {
+		if _, operatorAdmin := postM9OperatorAdminRuntimeExports[exported]; operatorAdmin {
+			return true
+		}
+	}
+	return false
 }
 
 func typedConstants(root string, fset *token.FileSet, pkg *types.Package) map[string]constantDeclaration {
@@ -2791,6 +3022,9 @@ func checkExportedName(fset *token.FileSet, rel string, ident *ast.Ident, violat
 		return
 	}
 	name := ident.Name
+	if _, allowed := allowedOperatorAdminMutationSurface[name]; allowed {
+		return
+	}
 	for _, fragment := range forbiddenExportFragments {
 		if name == "SHIPID" && fragment == "SHIP" {
 			continue

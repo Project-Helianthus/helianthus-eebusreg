@@ -45,7 +45,7 @@ func TestMSP05PInitialV1PublicShapeIsExact(t *testing.T) {
 
 	runtimeType := reflect.TypeOf((*Runtime)(nil)).Elem()
 	if runtimeType.NumMethod() != 6 {
-		t.Fatalf("Runtime method count = %d, want additive raw READ count 6", runtimeType.NumMethod())
+		t.Fatalf("Runtime method count = %d, want candidate-free additive raw READ count 6", runtimeType.NumMethod())
 	}
 }
 

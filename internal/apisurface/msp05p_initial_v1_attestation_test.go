@@ -22,6 +22,63 @@ var msp05pRemovedV2Names = map[string]struct{}{
 	"PairingPolicyV2Closed": {},
 }
 
+var msp05pPostM9OperatorAdminNames = map[string]struct{}{
+	"AdminErrorCodeV1AdminBoundaryUnavailable": {},
+	"AdminErrorCodeV1AssociationIncomplete":    {},
+	"AdminErrorCodeV1AttemptTimeout":           {},
+	"AdminErrorCodeV1BackoffActive":            {},
+	"AdminErrorCodeV1CSRFRejected":             {},
+	"AdminErrorCodeV1CandidateBusy":            {},
+	"AdminErrorCodeV1CandidateExpired":         {},
+	"AdminErrorCodeV1Disconnected":             {},
+	"AdminErrorCodeV1DiscoveryUnavailable":     {},
+	"AdminErrorCodeV1Forbidden":                {},
+	"AdminErrorCodeV1IdempotencyConflict":      {},
+	"AdminErrorCodeV1IdentityMismatch":         {},
+	"AdminErrorCodeV1InvalidRequest":           {},
+	"AdminErrorCodeV1ListenerUnavailable":      {},
+	"AdminErrorCodeV1ObservationStale":         {},
+	"AdminErrorCodeV1PairingClosed":            {},
+	"AdminErrorCodeV1PersistenceFailure":       {},
+	"AdminErrorCodeV1SnapshotExpired":          {},
+	"AdminErrorCodeV1StateConflict":            {},
+	"AdminErrorCodeV1TerminalQuarantine":       {},
+	"AdminErrorCodeV1TrustDenied":              {},
+	"AdminErrorCodeV1Unauthenticated":          {},
+	"AdminErrorCodeV1UnknownState":             {},
+	"AdminViewV1Candidate":                     {},
+	"AdminViewV1Connected":                     {},
+	"AdminViewV1Discovered":                    {},
+	"AdminViewV1Trusted":                       {},
+	"NewOperatorRuntimeV1":                     {},
+	"AdminErrorCodeV1":                         {},
+	"AdminErrorV1":                             {},
+	"AdminMutationResultV1":                    {},
+	"AdminOutcomeV1":                           {},
+	"AdminSelectionResultV1":                   {},
+	"AdminSnapshotRequestV1":                   {},
+	"AdminSnapshotV1":                          {},
+	"AdminV1":                                  {},
+	"AdminViewV1":                              {},
+	"CancelRequestV1":                          {},
+	"CandidateHandleV1":                        {},
+	"CandidateV1":                              {},
+	"ClosePairingWindowRequestV1":              {},
+	"ConfirmRequestV1":                         {},
+	"ConnectRequestV1":                         {},
+	"ConnectedPartnerV1":                       {},
+	"DiscoveredPartnerV1":                      {},
+	"MutationPreconditionV1":                   {},
+	"ObservationHandleV1":                      {},
+	"OpenPairingWindowRequestV1":               {},
+	"PartnerHandleV1":                          {},
+	"RetryTrustedRequestV1":                    {},
+	"SelectRequestV1":                          {},
+	"SelectionHandleV1":                        {},
+	"TrustedPartnerV1":                         {},
+	"UntrustRequestV1":                         {},
+}
+
 func TestMSP05PPublicAPIAttestationIsInitialV1(t *testing.T) {
 	doc, err := extract(moduleRoot(t))
 	if err != nil {
@@ -126,6 +183,9 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 	}
 	symbols := root.Symbols[:0]
 	for _, symbol := range root.Symbols {
+		if msp05pPostM9OperatorAdminSymbol(symbol) {
+			continue
+		}
 		if symbol.Name == "RawFeatureRuntimeV1" ||
 			symbol.Name == "RawMutationRuntimeV1" ||
 			symbol.Name == "RawMutationOutcomeV1" {
@@ -211,6 +271,17 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 		projected.Packages[index].Symbols = rawSymbols
 	}
 	return projected
+}
+
+func msp05pPostM9OperatorAdminSymbol(symbol symbol) bool {
+	if _, ok := msp05pPostM9OperatorAdminNames[symbol.Name]; ok {
+		return true
+	}
+	if symbol.Receiver == nil {
+		return false
+	}
+	_, ok := msp05pPostM9OperatorAdminNames[symbol.Receiver.Base]
+	return ok
 }
 
 func msp0625RawSymbol(symbol symbol) bool {

@@ -3,6 +3,7 @@ package eebusfacade
 import (
 	"context"
 	"crypto"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -83,6 +84,7 @@ type serviceBackend struct {
 	rawFeatures      *rawFeatureRuntimeBridge
 	rawMutations     *eebusmutation.Coordinator
 	firstTrust       *runtimeFirstTrustResources
+	operatorAdmin    *operatorAdminV1Bridge
 	outgoingAttempts *firstTrustOutgoingAttemptBridge
 	unsubscribeSPINE func() error
 	listenerTerminal <-chan error
@@ -234,6 +236,7 @@ type runtimeObservationReducer struct {
 var _ Backend = (*serviceBackend)(nil)
 var _ RawFeatureBackend = (*serviceBackend)(nil)
 var _ RawMutationBackend = (*serviceBackend)(nil)
+var _ OperatorAdminV1Backend = (*serviceBackend)(nil)
 
 var defaultRuntimeDependencies = runtimeDependencies{
 	loadMaterial:           loadProtectedRuntimeMaterial,
@@ -398,6 +401,12 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 		}
 		outgoingAttemptBridge.bindTLSLifecycle(firstTrust.facade)
 	}
+	var operatorAdmin *operatorAdminV1Bridge
+	if firstTrust != nil {
+		if adminService, ok := service.(operatorAdminV1Service); ok {
+			operatorAdmin = newOperatorAdminV1Bridge(firstTrust.coordinator, adminService, rand.Reader)
+		}
+	}
 	var rawMutations *eebusmutation.Coordinator
 	if dependencies.newMutationCoordinator != nil {
 		mutationEpoch := runtimeEpoch()
@@ -443,7 +452,7 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	}
 	backend := &serviceBackend{
 		service: service, handler: handler, firstTrust: firstTrust, outgoingAttempts: outgoingAttemptBridge,
-		rawFeatures: rawFeatures, rawMutations: rawMutations, unsubscribeSPINE: unsubscribeSPINE,
+		operatorAdmin: operatorAdmin, rawFeatures: rawFeatures, rawMutations: rawMutations, unsubscribeSPINE: unsubscribeSPINE,
 		closeDone: make(chan struct{}),
 	}
 	if scoped, ok := service.(runtimeScopedService); ok {
@@ -773,7 +782,12 @@ func (backend *serviceBackend) Close() error {
 	}
 	backend.closed = true
 	coordinator := backend.rawMutations
+	operatorAdmin := backend.operatorAdmin
+	backend.operatorAdmin = nil
 	backend.mu.Unlock()
+	if operatorAdmin != nil {
+		operatorAdmin.closeOperatorAdminV1Bridge()
+	}
 	var mutationErr error
 	if coordinator != nil {
 		if terminal := coordinator.Close(); terminal != nil {

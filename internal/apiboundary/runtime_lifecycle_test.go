@@ -72,6 +72,165 @@ func TestMSP05PInitialV1ContractIsExactlyAllowlisted(t *testing.T) {
 	}
 }
 
+func TestPostM9OperatorAdminV1ContractIsExactlyAllowlisted(t *testing.T) {
+	want := postM9OperatorAdminV1ExportInventory()
+	if !maps.Equal(postM9OperatorAdminRuntimeExports, want) {
+		t.Fatal("post-M9 AdminV1 snapshot-only exemption does not match the exact public inventory")
+	}
+	for exported := range want {
+		if _, ok := allowedRuntimeExports[exported]; !ok {
+			t.Errorf("post-M9 AdminV1 export is not allowlisted: %s %s", exported.Kind, exported.Name)
+		}
+	}
+	if _, legacy := allowedRuntimeExports[manifestExport{Kind: "type", Name: "ActionHandleV1"}]; legacy {
+		t.Error("post-M9 AdminV1 allowlist still exposes generic ActionHandleV1")
+	}
+}
+
+func postM9OperatorAdminV1ExportInventory() map[manifestExport]struct{} {
+	return frozenExportInventory(`
+const AdminViewV1Trusted
+const AdminViewV1Connected
+const AdminViewV1Discovered
+const AdminViewV1Candidate
+const AdminErrorCodeV1AdminBoundaryUnavailable
+const AdminErrorCodeV1Unauthenticated
+const AdminErrorCodeV1Forbidden
+const AdminErrorCodeV1CSRFRejected
+const AdminErrorCodeV1InvalidRequest
+const AdminErrorCodeV1StateConflict
+const AdminErrorCodeV1SnapshotExpired
+const AdminErrorCodeV1IdempotencyConflict
+const AdminErrorCodeV1PairingClosed
+const AdminErrorCodeV1ObservationStale
+const AdminErrorCodeV1IdentityMismatch
+const AdminErrorCodeV1AssociationIncomplete
+const AdminErrorCodeV1CandidateExpired
+const AdminErrorCodeV1CandidateBusy
+const AdminErrorCodeV1TrustDenied
+const AdminErrorCodeV1ListenerUnavailable
+const AdminErrorCodeV1DiscoveryUnavailable
+const AdminErrorCodeV1AttemptTimeout
+const AdminErrorCodeV1Disconnected
+const AdminErrorCodeV1BackoffActive
+const AdminErrorCodeV1TerminalQuarantine
+const AdminErrorCodeV1PersistenceFailure
+const AdminErrorCodeV1UnknownState
+func AdminErrorV1.Error
+func AdminMutationResultV1.Format
+func AdminMutationResultV1.GoString
+func AdminMutationResultV1.MarshalJSON
+func AdminMutationResultV1.String
+func AdminSelectionResultV1.Format
+func AdminSelectionResultV1.GoString
+func AdminSelectionResultV1.MarshalJSON
+func AdminSelectionResultV1.String
+func AdminSnapshotRequestV1.Format
+func AdminSnapshotRequestV1.GoString
+func AdminSnapshotRequestV1.MarshalJSON
+func AdminSnapshotRequestV1.String
+func AdminSnapshotV1.Format
+func AdminSnapshotV1.GoString
+func AdminSnapshotV1.MarshalJSON
+func AdminSnapshotV1.String
+func CancelRequestV1.Format
+func CancelRequestV1.GoString
+func CancelRequestV1.MarshalJSON
+func CancelRequestV1.String
+func CandidateHandleV1.Format
+func CandidateHandleV1.GoString
+func CandidateHandleV1.MarshalJSON
+func CandidateHandleV1.String
+func CandidateV1.Format
+func CandidateV1.GoString
+func CandidateV1.MarshalJSON
+func CandidateV1.String
+func ClosePairingWindowRequestV1.Format
+func ClosePairingWindowRequestV1.GoString
+func ClosePairingWindowRequestV1.MarshalJSON
+func ClosePairingWindowRequestV1.String
+func ConfirmRequestV1.Format
+func ConfirmRequestV1.GoString
+func ConfirmRequestV1.MarshalJSON
+func ConfirmRequestV1.String
+func ConnectRequestV1.Format
+func ConnectRequestV1.GoString
+func ConnectRequestV1.MarshalJSON
+func ConnectRequestV1.String
+func ConnectedPartnerV1.Format
+func ConnectedPartnerV1.GoString
+func ConnectedPartnerV1.MarshalJSON
+func ConnectedPartnerV1.String
+func DiscoveredPartnerV1.Format
+func DiscoveredPartnerV1.GoString
+func DiscoveredPartnerV1.MarshalJSON
+func DiscoveredPartnerV1.String
+func MutationPreconditionV1.Format
+func MutationPreconditionV1.GoString
+func MutationPreconditionV1.MarshalJSON
+func MutationPreconditionV1.String
+func NewOperatorRuntimeV1
+func ObservationHandleV1.Format
+func ObservationHandleV1.GoString
+func ObservationHandleV1.MarshalJSON
+func ObservationHandleV1.String
+func OpenPairingWindowRequestV1.Format
+func OpenPairingWindowRequestV1.GoString
+func OpenPairingWindowRequestV1.MarshalJSON
+func OpenPairingWindowRequestV1.String
+func PartnerHandleV1.Format
+func PartnerHandleV1.GoString
+func PartnerHandleV1.MarshalJSON
+func PartnerHandleV1.String
+func RetryTrustedRequestV1.Format
+func RetryTrustedRequestV1.GoString
+func RetryTrustedRequestV1.MarshalJSON
+func RetryTrustedRequestV1.String
+func SelectRequestV1.Format
+func SelectRequestV1.GoString
+func SelectRequestV1.MarshalJSON
+func SelectRequestV1.String
+func SelectionHandleV1.Format
+func SelectionHandleV1.GoString
+func SelectionHandleV1.MarshalJSON
+func SelectionHandleV1.String
+func TrustedPartnerV1.Format
+func TrustedPartnerV1.GoString
+func TrustedPartnerV1.MarshalJSON
+func TrustedPartnerV1.String
+func UntrustRequestV1.Format
+func UntrustRequestV1.GoString
+func UntrustRequestV1.MarshalJSON
+func UntrustRequestV1.String
+type AdminV1
+type AdminErrorCodeV1
+type AdminErrorV1
+type AdminOutcomeV1
+type AdminViewV1
+type AdminSnapshotV1
+type AdminSnapshotRequestV1
+type AdminMutationResultV1
+type AdminSelectionResultV1
+type MutationPreconditionV1
+type OpenPairingWindowRequestV1
+type ClosePairingWindowRequestV1
+type SelectRequestV1
+type ConnectRequestV1
+type ConfirmRequestV1
+type CancelRequestV1
+type RetryTrustedRequestV1
+type UntrustRequestV1
+type CandidateHandleV1
+type ConnectedPartnerV1
+type DiscoveredPartnerV1
+type ObservationHandleV1
+type CandidateV1
+type PartnerHandleV1
+type SelectionHandleV1
+type TrustedPartnerV1
+`)
+}
+
 func msp055LifecycleExports() []manifestExport {
 	return []manifestExport{
 		{Kind: "func", Name: "New"},

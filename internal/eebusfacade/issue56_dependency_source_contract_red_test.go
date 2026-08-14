@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	issue56EEBusGoVersion = "v0.7.1-helianthus.15"
-	issue56SHIPGoVersion  = "v0.6.1-helianthus.13"
+	issue56EEBusGoVersion = "v0.7.1-helianthus.17"
+	issue56SHIPGoVersion  = "v0.6.1-helianthus.15"
 )
 
 func TestIssue56DependencyPinsAreReleasedDirectAndWorkspaceFree(t *testing.T) {
@@ -53,6 +53,7 @@ func TestIssue56SHIPSourceContractPinsBeforeWebSocketAndHasNoEndpointFallback(t 
 	connections := issue56ReadSource(t, root, "hub", "hub_connections.go")
 	pairing := issue56ReadSource(t, root, "hub", "hub_pairing.go")
 	api := issue56ReadSource(t, root, "api", "pairing_candidate.go")
+	retryAPI := issue56ReadSource(t, root, "api", "trusted_remote_retry.go")
 
 	issue56RequireInOrder(t, connections,
 		"func (d *websocketOutgoingAttemptDialer) DialContextExpectedSKI(",
@@ -62,22 +63,44 @@ func TestIssue56SHIPSourceContractPinsBeforeWebSocketAndHasNoEndpointFallback(t 
 	)
 	issue56RequireAll(t, connections,
 		"connectFoundPairingCandidate(",
-		"expectedSKI, false, true, candidateAuthority",
+		"false,\n\t\ttrue,\n\t\tcandidateAuthority,\n\t\t\"protected SHIP connection\"",
 		"DialContextExpectedSKI(permit.Context, address, nil, expectedSKI)",
 		"errors.New(\"outgoing dialer does not support expected-SKI pinning\")",
 	)
 	issue56RequireAll(t, pairing,
-		"func (h *Hub) QueuePairingCandidate(candidateRef, expectedSKI string) error",
+		"func (h *Hub) SelectPairingCandidate(candidateRef, expectedSKI string) (api.PairingCandidateReservation, error)",
+		"reservation, _, err := h.admitPairingCandidate(candidateRef, expectedSKI, false)",
 		"h.consumedPairingCandidates[candidateRef] = struct{}{}",
 		"entry, exists := h.visiblePairingCandidates[candidateRef]",
+		"func (h *Hub) ConnectPairingCandidate(reservation api.PairingCandidateReservation) error",
+		"candidate.reservation.Matches(reservation)",
+		"activeCandidate.connectIssued = true",
+		"h.launchPairingCandidate(launch)",
 	)
 	issue56RequireAll(t, api,
-		"type PairingCandidateQueuer interface {",
-		"QueuePairingCandidate(candidateRef, expectedSKI string) error",
+		"type PairingCandidateController interface {",
+		"SelectPairingCandidate(candidateRef, expectedSKI string) (PairingCandidateReservation, error)",
+		"ConnectPairingCandidate(PairingCandidateReservation) error",
+		"func (PairingCandidateReservation) MarshalJSON() ([]byte, error)",
+		"return nil, ErrPairingCandidateReservationSerialization",
+	)
+	issue56RequireAll(t, retryAPI,
+		"type TrustedRemoteRetryController interface {",
+		"RetryTrustedRemote(expectedSKI string) error",
+	)
+	issue56RequireAll(t, connections,
+		"func (h *Hub) RetryTrustedRemote(expectedSKI string) error",
+		"observation, observed := h.visibleTrustedRemoteObservations[ski]",
 	)
 	for _, forbidden := range []string{"host string", "port int", "path string", "endpoint string"} {
-		if strings.Contains(api, "QueuePairingCandidate(candidateRef, expectedSKI string, "+forbidden) {
-			t.Fatalf("pairing queue accepts static endpoint field %q", forbidden)
+		for _, prefix := range []string{
+			"SelectPairingCandidate(candidateRef, expectedSKI string, ",
+			"ConnectPairingCandidate(reservation PairingCandidateReservation, ",
+			"RetryTrustedRemote(expectedSKI string, ",
+		} {
+			if strings.Contains(api+retryAPI, prefix+forbidden) {
+				t.Fatalf("owner mutation accepts static transport coordinate %q", forbidden)
+			}
 		}
 	}
 }
@@ -116,6 +139,11 @@ func TestIssue56EEBusGoSourceContractKeepsCandidateCallbackOptionalAndOrdered(t 
 		"VisiblePairingCandidatesUpdated(service ServiceInterface, candidates []shipapi.PairingCandidateRef)",
 		"type PairingCandidateQueuer interface {",
 		"QueuePairingCandidate(candidateRef, expectedSKI string) error",
+		"type PairingCandidateController interface {",
+		"SelectPairingCandidate(candidateRef, expectedSKI string) (shipapi.PairingCandidateReservation, error)",
+		"ConnectPairingCandidate(reservation shipapi.PairingCandidateReservation) error",
+		"type TrustedRemoteRetryController interface {",
+		"RetryTrustedRemote(expectedSKI string) error",
 	)
 	issue56RequireInOrder(t, hub,
 		"reader, ok := s.serviceHandler.(api.PairingCandidateReader)",
@@ -123,8 +151,12 @@ func TestIssue56EEBusGoSourceContractKeepsCandidateCallbackOptionalAndOrdered(t 
 		"event.reader.VisiblePairingCandidatesUpdated(service, event.candidates)",
 	)
 	issue56RequireAll(t, service,
-		"func (s *Service) QueuePairingCandidate(candidateRef, expectedSKI string) error",
-		"return queuer.QueuePairingCandidate(candidateRef, expectedSKI)",
+		"func (s *Service) SelectPairingCandidate(",
+		"return controller.SelectPairingCandidate(candidateRef, expectedSKI)",
+		"func (s *Service) ConnectPairingCandidate(reservation shipapi.PairingCandidateReservation) error",
+		"return controller.ConnectPairingCandidate(reservation)",
+		"func (s *Service) RetryTrustedRemote(expectedSKI string) error",
+		"return controller.RetryTrustedRemote(expectedSKI)",
 	)
 }
 
