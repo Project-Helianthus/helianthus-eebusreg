@@ -363,6 +363,7 @@ func (bridge *operatorAdminV1Bridge) snapshotOperatorAdminV1(ctx context.Context
 	if failure != "" {
 		return operatorAdminV1BridgeSnapshot{}, failure
 	}
+	bridge.pruneSelectionsLocked()
 	return bridge.sanitizeSnapshot(raw)
 }
 
@@ -432,6 +433,7 @@ func (bridge *operatorAdminV1Bridge) selectOperatorAdminV1(
 	if !bridge.coordinator.operatorAdminV1ObservationCurrent(binding.candidateRef, binding.ski, binding.revision) {
 		return "", operatorAdminV1BridgeTransition{}, "observation_stale"
 	}
+	bridge.pruneSelectionsLocked()
 	if len(bridge.selections) >= operatorAdminV1BridgeMaximumReferences {
 		return "", operatorAdminV1BridgeTransition{}, "admin_boundary_unavailable"
 	}
@@ -474,12 +476,21 @@ func (bridge *operatorAdminV1Bridge) connectOperatorAdminV1(ctx context.Context,
 		!bridge.coordinator.operatorAdminV1SelectionCurrent(binding.candidateRef, binding.ski) {
 		return operatorAdminV1BridgeTransition{}, "observation_stale"
 	}
-	binding.consumed = true
-	bridge.selections[reference] = binding
+	// Retire the process-local connect authority before invoking the effect.
+	// This keeps a panic or returned error from reopening the same outbound dial.
+	delete(bridge.selections, reference)
 	if err := callOperatorAdminV1Connect(bridge.service, binding.reservation); err != nil {
 		return operatorAdminV1BridgeTransition{changed: true}, mapOperatorAdminV1ConnectError(err)
 	}
 	return operatorAdminV1BridgeTransition{outcome: "connection_started", changed: true}, ""
+}
+
+func (bridge *operatorAdminV1Bridge) pruneSelectionsLocked() {
+	for reference, binding := range bridge.selections {
+		if binding.consumed || !bridge.coordinator.operatorAdminV1SelectionCurrent(binding.candidateRef, binding.ski) {
+			delete(bridge.selections, reference)
+		}
+	}
 }
 
 func (bridge *operatorAdminV1Bridge) confirmOperatorAdminV1(

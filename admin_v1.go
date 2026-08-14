@@ -208,6 +208,13 @@ func operatorAdminV1Format(state fmt.State, _ rune) {
 func operatorAdminV1String() string               { return operatorAdminV1RedactedRendering }
 func operatorAdminV1MarshalJSON() ([]byte, error) { return nil, errOperatorAdminV1Serialization }
 
+func (*operatorAdminV1Reducer) String() string   { return operatorAdminV1String() }
+func (*operatorAdminV1Reducer) GoString() string { return operatorAdminV1String() }
+func (*operatorAdminV1Reducer) Format(state fmt.State, verb rune) {
+	operatorAdminV1Format(state, verb)
+}
+func (*operatorAdminV1Reducer) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
+
 func (PartnerHandleV1) String() string                    { return operatorAdminV1String() }
 func (PartnerHandleV1) GoString() string                  { return operatorAdminV1String() }
 func (PartnerHandleV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }

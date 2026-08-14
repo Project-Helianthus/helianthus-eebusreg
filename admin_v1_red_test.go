@@ -107,7 +107,9 @@ func TestNewOperatorRuntimeV1AdminValueNeverFormatsOrSerializesFacts(t *testing.
 		if rendered != operatorAdminV1RedactedRendering &&
 			rendered != "admin="+operatorAdminV1RedactedRendering &&
 			rendered != "["+operatorAdminV1RedactedRendering+"]" &&
-			rendered != "map[admin:"+operatorAdminV1RedactedRendering+"]" {
+			rendered != "admin=["+operatorAdminV1RedactedRendering+"]" &&
+			rendered != "map[admin:"+operatorAdminV1RedactedRendering+"]" &&
+			rendered != "admin=map[admin:"+operatorAdminV1RedactedRendering+"]" {
 			t.Fatalf("AdminV1 formatting leaked concrete value: %q", rendered)
 		}
 		for _, forbidden := range []string{"ski", "endpoint", "handle", "replay", "idempotency", "token"} {
