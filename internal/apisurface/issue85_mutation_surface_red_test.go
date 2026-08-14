@@ -72,7 +72,7 @@ func TestIssue85PublicMutationSurfaceIsExactAndDependencyFree(t *testing.T) {
 	if !cloneFound {
 		t.Error("RawMutationOutcomeV1.Clone is missing")
 	}
-	const runtimeSignature = "type Runtime interface{ AdminV1() AdminV1; PairingState() ([]PairingObservationV1, error); RawFeatureRuntimeV1; Shutdown() error; Snapshot() (SnapshotV1, error); Start(context.Context) error }"
+	const runtimeSignature = "type Runtime interface{ PairingState() ([]PairingObservationV1, error); RawFeatureRuntimeV1; Shutdown() error; Snapshot() (SnapshotV1, error); Start(context.Context) error }"
 	if got := rootSymbols["Runtime"].Signature; got != runtimeSignature {
 		t.Errorf("Runtime signature = %q, want unchanged lifecycle surface %q", got, runtimeSignature)
 	}

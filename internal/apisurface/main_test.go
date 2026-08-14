@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -72,19 +73,129 @@ func TestRootLifecycleSignaturesAreExact(t *testing.T) {
 	root := doc.Packages[0]
 	got := map[string]string{}
 	for _, symbol := range root.Symbols {
-		if symbol.Name == "New" || symbol.Name == "Runtime" || symbol.Name == "SnapshotV1" {
+		if symbol.Name == "New" || symbol.Name == "NewOperatorRuntimeV1" || symbol.Name == "Runtime" || symbol.Name == "SnapshotV1" {
 			got[symbol.Name] = symbol.Signature
 		}
 	}
 	if got["New"] != "func New(Config) (Runtime, error)" {
 		t.Fatalf("New signature = %q", got["New"])
 	}
-	wantRuntime := "type Runtime interface{ AdminV1() AdminV1; PairingState() ([]PairingObservationV1, error); RawFeatureRuntimeV1; Shutdown() error; Snapshot() (SnapshotV1, error); Start(context.Context) error }"
+	if got["NewOperatorRuntimeV1"] != "func NewOperatorRuntimeV1(Config) (Runtime, AdminV1, error)" {
+		t.Fatalf("NewOperatorRuntimeV1 signature = %q", got["NewOperatorRuntimeV1"])
+	}
+	wantRuntime := "type Runtime interface{ PairingState() ([]PairingObservationV1, error); RawFeatureRuntimeV1; Shutdown() error; Snapshot() (SnapshotV1, error); Start(context.Context) error }"
 	if got["Runtime"] != wantRuntime {
 		t.Fatalf("Runtime signature = %q", got["Runtime"])
 	}
 	if !strings.Contains(got["SnapshotV1"], `json:\"meta\"`) {
 		t.Fatalf("SnapshotV1 signature omitted JSON tags: %q", got["SnapshotV1"])
+	}
+}
+
+func TestOperatorAdminV1RequestResultAndErrorSurfaceIsExact(t *testing.T) {
+	doc, err := extract(moduleRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	packages := make(map[string]surface, len(doc.Packages))
+	for _, pkg := range doc.Packages {
+		packages[pkg.Path] = pkg
+	}
+	root := issue85SymbolsByName(packages[modulePath].Symbols)
+
+	wantSignatures := map[string]string{
+		"AdminV1":                     "type AdminV1 interface{ Cancel(context.Context, CancelRequestV1) (AdminMutationResultV1, *AdminErrorV1); ClosePairingWindow(context.Context, ClosePairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1); Confirm(context.Context, ConfirmRequestV1) (AdminMutationResultV1, *AdminErrorV1); Connect(context.Context, ConnectRequestV1) (AdminMutationResultV1, *AdminErrorV1); OpenPairingWindow(context.Context, OpenPairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1); RetryTrusted(context.Context, RetryTrustedRequestV1) (AdminMutationResultV1, *AdminErrorV1); Select(context.Context, SelectRequestV1) (AdminSelectionResultV1, *AdminErrorV1); Snapshot(context.Context, AdminSnapshotRequestV1) (AdminSnapshotV1, *AdminErrorV1); Untrust(context.Context, UntrustRequestV1) (AdminMutationResultV1, *AdminErrorV1) }",
+		"MutationPreconditionV1":      "type MutationPreconditionV1 struct{ IdempotencyKey string; ExpectedStateRevision uint64 }",
+		"AdminSnapshotRequestV1":      "type AdminSnapshotRequestV1 struct{ View AdminViewV1 }",
+		"OpenPairingWindowRequestV1":  "type OpenPairingWindowRequestV1 struct{ MutationPreconditionV1; Duration time.Duration }",
+		"ClosePairingWindowRequestV1": "type ClosePairingWindowRequestV1 struct{ MutationPreconditionV1 }",
+		"SelectRequestV1":             "type SelectRequestV1 struct{ MutationPreconditionV1; Observation ObservationHandleV1; ExpectedSKI string }",
+		"ConnectRequestV1":            "type ConnectRequestV1 struct{ MutationPreconditionV1; Selection SelectionHandleV1 }",
+		"ConfirmRequestV1":            "type ConfirmRequestV1 struct{ MutationPreconditionV1; Candidate CandidateHandleV1; ExpectedSKI string }",
+		"CancelRequestV1":             "type CancelRequestV1 struct{ MutationPreconditionV1; Candidate CandidateHandleV1 }",
+		"RetryTrustedRequestV1":       "type RetryTrustedRequestV1 struct{ MutationPreconditionV1; Partner PartnerHandleV1 }",
+		"UntrustRequestV1":            "type UntrustRequestV1 struct{ MutationPreconditionV1; Partner PartnerHandleV1 }",
+		"AdminMutationResultV1":       "type AdminMutationResultV1 struct{ StateRevision uint64; Outcome AdminOutcomeV1; Replayed bool }",
+		"AdminSelectionResultV1":      "type AdminSelectionResultV1 struct{ AdminMutationResultV1; Selection SelectionHandleV1 }",
+		"AdminOutcomeV1":              "type AdminOutcomeV1 string",
+		"AdminViewV1":                 "type AdminViewV1 string",
+		"AdminErrorCodeV1":            "type AdminErrorCodeV1 string",
+		"AdminErrorV1":                "type AdminErrorV1 struct{ Code AdminErrorCodeV1 }",
+	}
+	for name, want := range wantSignatures {
+		got, exists := root[name]
+		if !exists {
+			t.Errorf("public operator AdminV1 surface is missing %s", name)
+			continue
+		}
+		if got.Signature != want || got.TypeForm != "defined" {
+			t.Errorf("%s = signature %q form %q, want defined %q", name, got.Signature, got.TypeForm, want)
+		}
+	}
+	if got := root["Error"]; got.Signature != "func (AdminErrorV1) Error() string" || got.Receiver == nil || got.Receiver.Base != "AdminErrorV1" {
+		t.Errorf("AdminErrorV1.Error = %#v, want typed error method", got)
+	}
+	if snapshot := root["AdminSnapshotV1"].Signature; !strings.Contains(snapshot, "StateRevision uint64") {
+		t.Errorf("AdminSnapshotV1 = %q, want non-zero operator StateRevision field", snapshot)
+	}
+
+	wantHandles := []string{"CandidateHandleV1", "ObservationHandleV1", "PartnerHandleV1", "SelectionHandleV1"}
+	var gotHandles []string
+	for _, item := range packages[modulePath].Symbols {
+		if item.Kind == "type" && strings.HasSuffix(item.Name, "HandleV1") {
+			gotHandles = append(gotHandles, item.Name)
+		}
+	}
+	sort.Strings(gotHandles)
+	if strings.Join(gotHandles, "\n") != strings.Join(wantHandles, "\n") {
+		t.Errorf("public AdminV1 handles = %v, want exactly four opaque handles %v", gotHandles, wantHandles)
+	}
+
+	for name, value := range operatorAdminV1ClosedConstants() {
+		got, exists := root[name]
+		if !exists {
+			t.Errorf("closed AdminV1 surface is missing %s=%q", name, value)
+			continue
+		}
+		wantType := "AdminErrorCodeV1"
+		if strings.HasPrefix(name, "AdminViewV1") {
+			wantType = "AdminViewV1"
+		}
+		if got.Kind != "const" || got.Type != wantType || got.Value != `"`+value+`"` {
+			t.Errorf("%s = kind %q type %q value %q, want %s const %q", name, got.Kind, got.Type, got.Value, wantType, value)
+		}
+	}
+}
+
+func operatorAdminV1ClosedConstants() map[string]string {
+	return map[string]string{
+		"AdminViewV1Trusted":                       "trusted",
+		"AdminViewV1Connected":                     "connected",
+		"AdminViewV1Discovered":                    "discovered",
+		"AdminViewV1Candidate":                     "candidate",
+		"AdminErrorCodeV1AdminBoundaryUnavailable": "admin_boundary_unavailable",
+		"AdminErrorCodeV1Unauthenticated":          "unauthenticated",
+		"AdminErrorCodeV1Forbidden":                "forbidden",
+		"AdminErrorCodeV1CSRFRejected":             "csrf_rejected",
+		"AdminErrorCodeV1InvalidRequest":           "invalid_request",
+		"AdminErrorCodeV1StateConflict":            "state_conflict",
+		"AdminErrorCodeV1SnapshotExpired":          "snapshot_expired",
+		"AdminErrorCodeV1IdempotencyConflict":      "idempotency_conflict",
+		"AdminErrorCodeV1PairingClosed":            "pairing_closed",
+		"AdminErrorCodeV1ObservationStale":         "observation_stale",
+		"AdminErrorCodeV1IdentityMismatch":         "identity_mismatch",
+		"AdminErrorCodeV1AssociationIncomplete":    "association_incomplete",
+		"AdminErrorCodeV1CandidateExpired":         "candidate_expired",
+		"AdminErrorCodeV1CandidateBusy":            "candidate_busy",
+		"AdminErrorCodeV1TrustDenied":              "trust_denied",
+		"AdminErrorCodeV1ListenerUnavailable":      "listener_unavailable",
+		"AdminErrorCodeV1DiscoveryUnavailable":     "discovery_unavailable",
+		"AdminErrorCodeV1AttemptTimeout":           "attempt_timeout",
+		"AdminErrorCodeV1Disconnected":             "disconnected",
+		"AdminErrorCodeV1BackoffActive":            "backoff_active",
+		"AdminErrorCodeV1TerminalQuarantine":       "terminal_quarantine",
+		"AdminErrorCodeV1PersistenceFailure":       "persistence_failure",
+		"AdminErrorCodeV1UnknownState":             "unknown_state",
 	}
 }
 

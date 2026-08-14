@@ -930,7 +930,7 @@ func writeMSP035DependencyFixture(t *testing.T, root string) {
 	)
 	copyMSP035FixtureDirectory(t, root, "eebusraw")
 	copyMSP035FixtureDirectory(t, root, "eebusevidence")
-	for _, name := range []string{"admin_v1.go", "raw_snapshot_v1.go", "raw_snapshot_value_v1.go", "redacted_snapshot_v1.go"} {
+	for _, name := range []string{"raw_snapshot_v1.go", "raw_snapshot_value_v1.go", "redacted_snapshot_v1.go"} {
 		data, err := os.ReadFile(filepath.Join(msp035FixtureSourceRoot(t), name))
 		if err != nil {
 			t.Fatal(err)

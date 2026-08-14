@@ -72,6 +72,81 @@ func TestMSP05PInitialV1ContractIsExactlyAllowlisted(t *testing.T) {
 	}
 }
 
+func TestPostM9OperatorAdminV1ContractIsExactlyAllowlisted(t *testing.T) {
+	want := postM9OperatorAdminV1ExportInventory()
+	if !maps.Equal(postM9OperatorAdminRuntimeExports, want) {
+		t.Fatal("post-M9 AdminV1 snapshot-only exemption does not match the exact public inventory")
+	}
+	for exported := range want {
+		if _, ok := allowedRuntimeExports[exported]; !ok {
+			t.Errorf("post-M9 AdminV1 export is not allowlisted: %s %s", exported.Kind, exported.Name)
+		}
+	}
+	if _, legacy := allowedRuntimeExports[manifestExport{Kind: "type", Name: "ActionHandleV1"}]; legacy {
+		t.Error("post-M9 AdminV1 allowlist still exposes generic ActionHandleV1")
+	}
+}
+
+func postM9OperatorAdminV1ExportInventory() map[manifestExport]struct{} {
+	return frozenExportInventory(`
+const AdminViewV1Trusted
+const AdminViewV1Connected
+const AdminViewV1Discovered
+const AdminViewV1Candidate
+const AdminErrorCodeV1AdminBoundaryUnavailable
+const AdminErrorCodeV1Unauthenticated
+const AdminErrorCodeV1Forbidden
+const AdminErrorCodeV1CSRFRejected
+const AdminErrorCodeV1InvalidRequest
+const AdminErrorCodeV1StateConflict
+const AdminErrorCodeV1SnapshotExpired
+const AdminErrorCodeV1IdempotencyConflict
+const AdminErrorCodeV1PairingClosed
+const AdminErrorCodeV1ObservationStale
+const AdminErrorCodeV1IdentityMismatch
+const AdminErrorCodeV1AssociationIncomplete
+const AdminErrorCodeV1CandidateExpired
+const AdminErrorCodeV1CandidateBusy
+const AdminErrorCodeV1TrustDenied
+const AdminErrorCodeV1ListenerUnavailable
+const AdminErrorCodeV1DiscoveryUnavailable
+const AdminErrorCodeV1AttemptTimeout
+const AdminErrorCodeV1Disconnected
+const AdminErrorCodeV1BackoffActive
+const AdminErrorCodeV1TerminalQuarantine
+const AdminErrorCodeV1PersistenceFailure
+const AdminErrorCodeV1UnknownState
+func AdminErrorV1.Error
+func NewOperatorRuntimeV1
+type AdminV1
+type AdminErrorCodeV1
+type AdminErrorV1
+type AdminOutcomeV1
+type AdminViewV1
+type AdminSnapshotV1
+type AdminSnapshotRequestV1
+type AdminMutationResultV1
+type AdminSelectionResultV1
+type MutationPreconditionV1
+type OpenPairingWindowRequestV1
+type ClosePairingWindowRequestV1
+type SelectRequestV1
+type ConnectRequestV1
+type ConfirmRequestV1
+type CancelRequestV1
+type RetryTrustedRequestV1
+type UntrustRequestV1
+type CandidateHandleV1
+type ConnectedPartnerV1
+type DiscoveredPartnerV1
+type ObservationHandleV1
+type CandidateV1
+type PartnerHandleV1
+type SelectionHandleV1
+type TrustedPartnerV1
+`)
+}
+
 func msp055LifecycleExports() []manifestExport {
 	return []manifestExport{
 		{Kind: "func", Name: "New"},
@@ -109,17 +184,6 @@ const FeatureRoleV1Unspecified
 const FeatureRoleV1Client
 const FeatureRoleV1Server
 const PairingPolicyClosed
-type AdminV1
-type AdminSnapshotV1
-type ActionHandleV1
-type CandidateHandleV1
-type ConnectedPartnerV1
-type DiscoveredPartnerV1
-type ObservationHandleV1
-type CandidateV1
-type PartnerHandleV1
-type SelectionHandleV1
-type TrustedPartnerV1
 func BuildRedactedSnapshotV1
 func MetadataV1.MarshalJSON
 func MetadataV1.UnmarshalJSON
@@ -145,17 +209,6 @@ func SnapshotV1.MarshalJSON
 func SnapshotV1.String
 func SnapshotV1.Validate
 type Config
-type AdminV1
-type AdminSnapshotV1
-type ActionHandleV1
-type CandidateHandleV1
-type ConnectedPartnerV1
-type DiscoveredPartnerV1
-type ObservationHandleV1
-type CandidateV1
-type PartnerHandleV1
-type SelectionHandleV1
-type TrustedPartnerV1
 type DegradationReasonV1
 type DegradationV1
 type DeviceV1

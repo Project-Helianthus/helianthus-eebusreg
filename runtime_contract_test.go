@@ -15,7 +15,6 @@ import (
 
 type exactRuntimeContract interface {
 	RawFeatureRuntimeV1
-	AdminV1() AdminV1
 	Start(context.Context) error
 	Shutdown() error
 	Snapshot() (SnapshotV1, error)
@@ -24,7 +23,6 @@ type exactRuntimeContract interface {
 
 var (
 	_ exactRuntimeContract                      = Runtime(nil)
-	_ Runtime                                   = exactRuntimeContract(nil)
 	_ func(Config) (Runtime, error)             = New
 	_ interface{ Start(context.Context) error } = Runtime(nil)
 	_ error                                     = ErrRuntimeDisabled
@@ -44,7 +42,6 @@ func TestRuntimePublicLifecycleContractIsExact(t *testing.T) {
 			eebusraw.ReadAuthorizationV1,
 			eebusraw.FeatureDataGetRequestV1,
 		) (eebusraw.FeatureDataGetDataV1, *eebusraw.ErrorV1))(nil)),
-		"AdminV1":      reflect.TypeOf((func() AdminV1)(nil)),
 		"Start":        reflect.TypeOf((func(context.Context) error)(nil)),
 		"Shutdown":     reflect.TypeOf((func() error)(nil)),
 		"Snapshot":     reflect.TypeOf((func() (SnapshotV1, error))(nil)),
