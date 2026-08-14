@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -78,6 +79,69 @@ func TestOperatorAdminV1BridgeSelectReservesWithoutDialAndConnectsAtMostOnce(t *
 	}
 }
 
+func TestOperatorAdminV1BridgeDiscoveryRevisionReplacesSameCandidateIdentityObservation(t *testing.T) {
+	fixture := newMSP04BFixture(t, "commit_durable")
+	coordinator := fixture.coordinator.(*firstTrustCoordinator)
+	service := newOperatorAdminV1BridgeServiceSpy()
+	bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 710})
+	if transition, failure := bridge.openOperatorAdminV1(context.Background(), time.Minute); failure != "" || !transition.changed {
+		t.Fatalf("open transition=%#v failure=%q", transition, failure)
+	}
+
+	candidate := shipapi.PairingCandidateRef{
+		CandidateRef: "same-private-candidate-ref",
+		SKI:          operatorAdminV1BridgeTestSKI,
+	}
+	coordinator.visiblePairingCandidatesUpdated([]shipapi.PairingCandidateRef{candidate})
+	first, failure := bridge.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, failure)
+	if len(first.discovered) != 1 {
+		t.Fatalf("first discovered rows=%d, want 1", len(first.discovered))
+	}
+	oldObservation := first.discovered[0].reference
+	firstRevision := coordinator.candidateSnapshotRevision
+
+	coordinator.visiblePairingCandidatesUpdated([]shipapi.PairingCandidateRef{candidate})
+	second, failure := bridge.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, failure)
+	if len(second.discovered) != 1 {
+		t.Fatalf("second discovered rows=%d, want 1", len(second.discovered))
+	}
+	newObservation := second.discovered[0].reference
+	if coordinator.candidateSnapshotRevision != firstRevision+1 {
+		t.Fatalf("coordinator discovery revision=%d -> %d, want exactly +1", firstRevision, coordinator.candidateSnapshotRevision)
+	}
+	if second.discovered[0].ski != first.discovered[0].ski || second.discovered[0].ski != operatorAdminV1BridgeTestSKI {
+		t.Fatalf("fixture changed identity across discovery revisions: first=%#v second=%#v", first.discovered[0], second.discovered[0])
+	}
+	if oldObservation == "" || newObservation == "" || oldObservation == newObservation {
+		t.Fatalf("same candidate identity retained observation %q across discovery revision", oldObservation)
+	}
+
+	selection, transition, staleFailure := bridge.selectOperatorAdminV1(
+		context.Background(), oldObservation, operatorAdminV1BridgeTestSKI,
+	)
+	if staleFailure != "observation_stale" || selection != "" || transition.changed {
+		t.Fatalf("old discovery revision select=%q/%#v/%q, want zero-effect observation_stale", selection, transition, staleFailure)
+	}
+	selectCalls, connectCalls, retryCalls, _, _, _ := service.snapshot()
+	if selectCalls != 0 || connectCalls != 0 || retryCalls != 0 {
+		t.Fatalf("old discovery revision reached service calls %d/%d/%d", selectCalls, connectCalls, retryCalls)
+	}
+
+	selection, transition, currentFailure := bridge.selectOperatorAdminV1(
+		context.Background(), newObservation, operatorAdminV1BridgeTestSKI,
+	)
+	requireOperatorAdminV1BridgeSuccess(t, currentFailure)
+	if selection == "" || !transition.changed {
+		t.Fatalf("current discovery revision select=%q/%#v, want changed reservation", selection, transition)
+	}
+	selectCalls, connectCalls, retryCalls, selectedRef, selectedSKI, _ := service.snapshot()
+	if selectCalls != 1 || connectCalls != 0 || retryCalls != 0 || selectedRef != candidate.CandidateRef || selectedSKI != candidate.SKI {
+		t.Fatalf("current discovery revision service calls=%d/%d/%d ref=%q ski=%q", selectCalls, connectCalls, retryCalls, selectedRef, selectedSKI)
+	}
+}
+
 func TestOperatorAdminV1BridgeMapsUnknownServiceOutcomesFailClosed(t *testing.T) {
 	fixture := newMSP04BFixture(t, "commit_durable")
 	coordinator := fixture.coordinator.(*firstTrustCoordinator)
@@ -97,12 +161,49 @@ func TestOperatorAdminV1BridgeMapsUnknownServiceOutcomesFailClosed(t *testing.T)
 	selection, transition, selectFailure := bridge.selectOperatorAdminV1(
 		context.Background(), snapshot.discovered[0].reference, operatorAdminV1BridgeTestSKI,
 	)
-	if selectFailure != "unknown_state" || selection != "" || transition.changed {
-		t.Fatalf("unknown select result = %q/%#v/%q, want zero fail-closed unknown_state", selection, transition, selectFailure)
+	if selectFailure != "unknown_state" || selection != "" || !transition.changed {
+		t.Fatalf("unknown select result = %q/%#v/%q, want fail-closed unknown_state that reports consumed internal state", selection, transition, selectFailure)
 	}
 	_, connectCalls, _, _, _, _ := service.snapshot()
 	if connectCalls != 0 {
 		t.Fatalf("unknown select outcome caused %d dial effects", connectCalls)
+	}
+}
+
+func TestOperatorAdminV1BridgeConnectFailureReportsConsumedSelectionChange(t *testing.T) {
+	fixture := newMSP04BFixture(t, "commit_durable")
+	coordinator := fixture.coordinator.(*firstTrustCoordinator)
+	service := newOperatorAdminV1BridgeServiceSpy()
+	service.connectErr = shipapi.ErrPairingCandidateReservationUnavailable
+	bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 740})
+	if transition, failure := bridge.openOperatorAdminV1(context.Background(), time.Minute); failure != "" || !transition.changed {
+		t.Fatalf("open transition=%#v failure=%q", transition, failure)
+	}
+	coordinator.visiblePairingCandidatesUpdated([]shipapi.PairingCandidateRef{{
+		CandidateRef: "connect-error-private-ref",
+		SKI:          operatorAdminV1BridgeTestSKI,
+	}})
+	snapshot, failure := bridge.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, failure)
+	selection, transition, failure := bridge.selectOperatorAdminV1(
+		context.Background(), snapshot.discovered[0].reference, operatorAdminV1BridgeTestSKI,
+	)
+	requireOperatorAdminV1BridgeSuccess(t, failure)
+	if selection == "" || !transition.changed {
+		t.Fatalf("selection=%q transition=%#v, want current reservation", selection, transition)
+	}
+
+	connected, connectFailure := bridge.connectOperatorAdminV1(context.Background(), selection)
+	if connectFailure != "observation_stale" || !connected.changed {
+		t.Fatalf("failed connect transition=%#v failure=%q, want observation_stale with consumed-state changed=true", connected, connectFailure)
+	}
+	_, repeatedFailure := bridge.connectOperatorAdminV1(context.Background(), selection)
+	if repeatedFailure != "observation_stale" {
+		t.Fatalf("consumed selection retry failure=%q, want observation_stale", repeatedFailure)
+	}
+	_, connectCalls, _, _, _, _ := service.snapshot()
+	if connectCalls != 1 {
+		t.Fatalf("failed consumed connect effects=%d, want at-most-once 1", connectCalls)
 	}
 }
 
@@ -219,6 +320,70 @@ func TestOperatorAdminV1BridgeRoutesWindowConfirmAndCancelThroughCurrentCoordina
 			t.Fatal("cancel left a coordinator candidate")
 		}
 	})
+}
+
+func TestOperatorAdminV1BridgeCancelAfterTransientConfirmRevokesTargetWithoutDurableTrust(t *testing.T) {
+	fixture := newIssue60Fixture(t)
+	fixture.shipID()
+	bridge := newOperatorAdminV1Bridge(fixture.coordinator, newOperatorAdminV1BridgeServiceSpy(), &msp04cOrdinalReader{next: 960})
+	snapshot, failure := bridge.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, failure)
+	if len(snapshot.candidates) != 1 {
+		t.Fatalf("pre-confirm candidate rows=%d, want 1", len(snapshot.candidates))
+	}
+	candidate := snapshot.candidates[0].reference
+	confirmed, confirmFailure := bridge.confirmOperatorAdminV1(context.Background(), candidate, issue56SKIA)
+	requireOperatorAdminV1BridgeSuccess(t, confirmFailure)
+	if !confirmed.changed || confirmed.outcome != "transient_trusted" {
+		t.Fatalf("confirm transition=%#v, want transient_trusted changed", confirmed)
+	}
+	if fixture.service.registerCount() != 1 || fixture.coordinator.trusted(fixture.remote) {
+		t.Fatalf("transient confirm registers=%d durable-trusted=%t, want 1/false", fixture.service.registerCount(), fixture.coordinator.trusted(fixture.remote))
+	}
+	assertMSP04BCommitCount(t, fixture.base.store, 0)
+
+	cancelled, cancelFailure := bridge.cancelOperatorAdminV1(context.Background(), candidate)
+	requireOperatorAdminV1BridgeSuccess(t, cancelFailure)
+	if !cancelled.changed || cancelled.outcome != "cancelled" {
+		t.Fatalf("targeted post-confirm cancel transition=%#v, want cancelled changed", cancelled)
+	}
+	if fixture.service.unregisterCount() != 1 {
+		t.Fatalf("transient post-confirm cancel unregistrations=%d, want 1", fixture.service.unregisterCount())
+	}
+	if fixture.coordinator.trusted(fixture.remote) {
+		t.Fatal("post-confirm cancel published durable trust")
+	}
+	if _, _, _, _, _, _, ok := fixture.coordinator.candidate(); ok {
+		t.Fatal("post-confirm cancel retained the transient candidate")
+	}
+	assertMSP04BCommitCount(t, fixture.base.store, 0)
+}
+
+func TestOperatorAdminV1BridgeMapsEveryReleasedTrustedRemoteRetryError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "invalid remote SKI", err: shipapi.ErrInvalidRemoteSKI, want: "invalid_request"},
+		{name: "retry unavailable", err: shipapi.ErrTrustedRemoteRetryUnavailable, want: "discovery_unavailable"},
+		{name: "not trusted", err: shipapi.ErrTrustedRemoteRetryNotTrusted, want: "trust_denied"},
+		{name: "already connected", err: shipapi.ErrTrustedRemoteRetryConnected, want: "candidate_busy"},
+		{name: "retry busy", err: shipapi.ErrTrustedRemoteRetryBusy, want: "candidate_busy"},
+		{name: "observation stale", err: shipapi.ErrTrustedRemoteObservationStale, want: "observation_stale"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, err := range []error{test.err, fmt.Errorf("released retry error: %w", test.err)} {
+				if got := mapOperatorAdminV1RetryError(err); got != test.want {
+					t.Fatalf("mapOperatorAdminV1RetryError(%v)=%q, want closed category %q", err, got, test.want)
+				}
+			}
+		})
+	}
+	if got := mapOperatorAdminV1RetryError(errors.New("future retry failure")); got != "unknown_state" {
+		t.Fatalf("unknown retry error mapping=%q, want fail-closed unknown_state", got)
+	}
 }
 
 func TestOperatorAdminV1BridgeSnapshotIsBoundedSanitizedAndNeverPartial(t *testing.T) {

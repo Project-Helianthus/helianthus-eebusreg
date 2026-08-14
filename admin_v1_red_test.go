@@ -3,6 +3,9 @@ package eebusruntime
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -231,7 +234,8 @@ func TestAdminV1ReducerLifecycleAndExactSnapshotViews(t *testing.T) {
 	trusted, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
 	requireAdminV1Success(t, failure)
 	assertOperatorAdminV1ViewLengths(t, trusted, 1, 0, 0, 0)
-	if trusted.StateRevision != 1 || adminV1HandleField[PartnerHandleV1](t, trusted.Trusted[0], "Partner") == (PartnerHandleV1{}) {
+	if trusted.StateRevision != 1 || adminV1HandleField[PartnerHandleV1](t, trusted.Trusted[0], "Partner") == (PartnerHandleV1{}) ||
+		!adminV1TimeField(t, trusted, "CapturedAt").Equal(operatorAdminV1TestFacts().capturedAt) {
 		t.Fatalf("trusted snapshot = %#v, want revision 1 with one partner handle", trusted)
 	}
 
@@ -296,9 +300,11 @@ func TestAdminV1ReducerAsyncFactsAdvanceRevisionAndInvalidateHandles(t *testing.
 	changed := cloneOperatorAdminV1TestFacts(facts)
 	changed.discovered = []operatorAdminV1DiscoveredFact{{
 		reference: "observation-replacement", ski: operatorAdminV1TestSKI, endpoint: "192.0.2.21:4712",
+		expiresAt: clock.Now().Add(time.Minute),
 	}}
 	changed.candidates = []operatorAdminV1CandidateFact{{
 		reference: "candidate-replacement", ski: operatorAdminV1TestSKI,
+		expiresAt: clock.Now().Add(time.Minute),
 	}}
 	backend.setFacts(changed)
 
@@ -329,6 +335,368 @@ func TestAdminV1ReducerAsyncFactsAdvanceRevisionAndInvalidateHandles(t *testing.
 	requireAdminV1Success(t, selectFailure)
 	if selected.StateRevision != 3 || backend.calls("select") != 1 {
 		t.Fatalf("current observation selection = %#v calls=%d, want revision 3 and one effect", selected, backend.calls("select"))
+	}
+}
+
+func TestAdminV1ReducerDiscoveryRevisionChangeReplacesSameIdentityObservation(t *testing.T) {
+	clock := newOperatorAdminV1TestClock()
+	facts := operatorAdminV1TestFacts()
+	backend := newOperatorAdminV1TestBackend(facts)
+	admin := newOperatorAdminV1Reducer(
+		clock.Now,
+		newOperatorAdminV1TestEntropy(),
+		newOperatorAdminV1TestLifecycle(true, true, false),
+		backend,
+	)
+
+	first, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Discovered})
+	requireAdminV1Success(t, failure)
+	oldObservation := adminV1HandleField[ObservationHandleV1](t, first.Discovered[0], "Observation")
+
+	newDiscoveryRevision := cloneOperatorAdminV1TestFacts(facts)
+	newDiscoveryRevision.discovered[0].reference = "observation-reference-revision-2"
+	backend.setFacts(newDiscoveryRevision)
+	second, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Discovered})
+	requireAdminV1Success(t, failure)
+	newObservation := adminV1HandleField[ObservationHandleV1](t, second.Discovered[0], "Observation")
+	if second.StateRevision != first.StateRevision+1 {
+		t.Fatalf("same-identity discovery revision changed root revision %d -> %d, want exactly +1", first.StateRevision, second.StateRevision)
+	}
+	if second.Discovered[0].SKI != first.Discovered[0].SKI || second.Discovered[0].Endpoint != first.Discovered[0].Endpoint {
+		t.Fatalf("fixture changed owner identity/endpoint across discovery revisions: first=%#v second=%#v", first.Discovered[0], second.Discovered[0])
+	}
+	if newObservation == (ObservationHandleV1{}) || newObservation == oldObservation {
+		t.Fatal("new discovery revision retained the old observation capability")
+	}
+
+	_, staleFailure := admin.Select(context.Background(), SelectRequestV1{
+		MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "old-discovery-revision", ExpectedStateRevision: second.StateRevision},
+		Observation:            oldObservation,
+		ExpectedSKI:            operatorAdminV1TestSKI,
+	})
+	if staleFailure == nil || backend.calls("select") != 0 {
+		t.Fatal("old same-identity discovery revision reached the selection effect")
+	}
+
+	selected, selectFailure := admin.Select(context.Background(), SelectRequestV1{
+		MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "new-discovery-revision", ExpectedStateRevision: second.StateRevision},
+		Observation:            newObservation,
+		ExpectedSKI:            operatorAdminV1TestSKI,
+	})
+	requireAdminV1Success(t, selectFailure)
+	if selected.StateRevision != second.StateRevision+1 || backend.calls("select") != 1 {
+		t.Fatalf("current discovery revision selection=%#v effects=%d, want one effect and revision +1", selected, backend.calls("select"))
+	}
+}
+
+func TestAdminV1CapabilitiesRequestsResultsAndSnapshotsRenderFailClosed(t *testing.T) {
+	clock := newOperatorAdminV1TestClock()
+	backend := newOperatorAdminV1TestBackend(operatorAdminV1TestFacts())
+	admin := newOperatorAdminV1Reducer(
+		clock.Now,
+		newOperatorAdminV1TestEntropy(),
+		newOperatorAdminV1TestLifecycle(true, true, false),
+		backend,
+	)
+
+	trusted, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
+	requireAdminV1Success(t, failure)
+	partner := adminV1HandleField[PartnerHandleV1](t, trusted.Trusted[0], "Partner")
+	connected, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Connected})
+	requireAdminV1Success(t, failure)
+	discovered, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Discovered})
+	requireAdminV1Success(t, failure)
+	observation := adminV1HandleField[ObservationHandleV1](t, discovered.Discovered[0], "Observation")
+	candidateSnapshot, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Candidate})
+	requireAdminV1Success(t, failure)
+	candidate := adminV1HandleField[CandidateHandleV1](t, candidateSnapshot.Candidates[0], "Candidate")
+	selectionResult, failure := admin.Select(context.Background(), SelectRequestV1{
+		MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "render-selection", ExpectedStateRevision: discovered.StateRevision},
+		Observation:            observation,
+		ExpectedSKI:            operatorAdminV1TestSKI,
+	})
+	requireAdminV1Success(t, failure)
+
+	secrets := []string{
+		operatorAdminV1TestSKI,
+		"render-request",
+		"render-selection",
+		"secret-outcome",
+		"192.0.2.10:4712",
+		"192.0.2.20:4712",
+		adminV1HandleTokenHex(t, partner),
+		adminV1HandleTokenHex(t, observation),
+		adminV1HandleTokenHex(t, selectionResult.Selection),
+		adminV1HandleTokenHex(t, candidate),
+	}
+	precondition := MutationPreconditionV1{IdempotencyKey: "render-request", ExpectedStateRevision: selectionResult.StateRevision}
+	values := []struct {
+		name  string
+		value any
+	}{
+		{name: "partner capability", value: partner},
+		{name: "observation capability", value: observation},
+		{name: "selection capability", value: selectionResult.Selection},
+		{name: "candidate capability", value: candidate},
+		{name: "snapshot request", value: AdminSnapshotRequestV1{View: AdminViewV1Discovered}},
+		{name: "open request", value: OpenPairingWindowRequestV1{MutationPreconditionV1: precondition, Duration: time.Minute}},
+		{name: "close request", value: ClosePairingWindowRequestV1{MutationPreconditionV1: precondition}},
+		{name: "select request", value: SelectRequestV1{MutationPreconditionV1: precondition, Observation: observation, ExpectedSKI: operatorAdminV1TestSKI}},
+		{name: "connect request", value: ConnectRequestV1{MutationPreconditionV1: precondition, Selection: selectionResult.Selection}},
+		{name: "confirm request", value: ConfirmRequestV1{MutationPreconditionV1: precondition, Candidate: candidate, ExpectedSKI: operatorAdminV1TestSKI}},
+		{name: "cancel request", value: CancelRequestV1{MutationPreconditionV1: precondition, Candidate: candidate}},
+		{name: "retry request", value: RetryTrustedRequestV1{MutationPreconditionV1: precondition, Partner: partner}},
+		{name: "untrust request", value: UntrustRequestV1{MutationPreconditionV1: precondition, Partner: partner}},
+		{name: "mutation result", value: AdminMutationResultV1{StateRevision: 7, Outcome: AdminOutcomeV1("secret-outcome"), Replayed: true}},
+		{name: "selection result", value: selectionResult},
+		{name: "trusted snapshot", value: trusted},
+		{name: "connected snapshot", value: connected},
+		{name: "discovered snapshot", value: discovered},
+		{name: "candidate snapshot", value: candidateSnapshot},
+	}
+	for _, value := range values {
+		t.Run(value.name, func(t *testing.T) {
+			requireAdminV1GenericRenderingRedacted(t, value.value, secrets)
+		})
+	}
+}
+
+func TestAdminV1ReducerFactsCoverOwnerStatusDeadlinesAndExactRows(t *testing.T) {
+	base := operatorAdminV1TestFacts()
+	changes := []struct {
+		name   string
+		change func(*operatorAdminV1SnapshotFacts)
+	}{
+		{name: "status", change: func(facts *operatorAdminV1SnapshotFacts) { facts.status = "degraded" }},
+		{name: "window", change: func(facts *operatorAdminV1SnapshotFacts) { facts.window = "closed" }},
+		{name: "window deadline", change: func(facts *operatorAdminV1SnapshotFacts) {
+			facts.windowDeadline = facts.windowDeadline.Add(time.Second)
+		}},
+		{name: "listener", change: func(facts *operatorAdminV1SnapshotFacts) { facts.listener = "degraded" }},
+		{name: "discovery", change: func(facts *operatorAdminV1SnapshotFacts) { facts.discovery = "degraded" }},
+		{name: "trusted row reference", change: func(facts *operatorAdminV1SnapshotFacts) { facts.trusted[0].reference = "partner-reference-2" }},
+		{name: "trusted row SKI", change: func(facts *operatorAdminV1SnapshotFacts) { facts.trusted[0].ski = strings.Repeat("a", 40) }},
+		{name: "connected row SKI", change: func(facts *operatorAdminV1SnapshotFacts) { facts.connected[0].ski = strings.Repeat("a", 40) }},
+		{name: "connected row endpoint", change: func(facts *operatorAdminV1SnapshotFacts) { facts.connected[0].endpoint = "192.0.2.11:4712" }},
+		{name: "discovered row reference", change: func(facts *operatorAdminV1SnapshotFacts) {
+			facts.discovered[0].reference = "observation-row-revision-2"
+		}},
+		{name: "discovered row SKI", change: func(facts *operatorAdminV1SnapshotFacts) { facts.discovered[0].ski = strings.Repeat("a", 40) }},
+		{name: "discovered row endpoint", change: func(facts *operatorAdminV1SnapshotFacts) { facts.discovered[0].endpoint = "192.0.2.21:4712" }},
+		{name: "discovered row deadline", change: func(facts *operatorAdminV1SnapshotFacts) {
+			facts.discovered[0].expiresAt = facts.discovered[0].expiresAt.Add(time.Second)
+		}},
+		{name: "candidate row reference", change: func(facts *operatorAdminV1SnapshotFacts) { facts.candidates[0].reference = "candidate-row-revision-2" }},
+		{name: "candidate row SKI", change: func(facts *operatorAdminV1SnapshotFacts) { facts.candidates[0].ski = strings.Repeat("a", 40) }},
+		{name: "candidate row deadline", change: func(facts *operatorAdminV1SnapshotFacts) {
+			facts.candidates[0].expiresAt = facts.candidates[0].expiresAt.Add(time.Second)
+		}},
+	}
+	t.Run("capture time is required but is not state equality", func(t *testing.T) {
+		clock := newOperatorAdminV1TestClock()
+		backend := newOperatorAdminV1TestBackend(base)
+		admin := newOperatorAdminV1Reducer(clock.Now, newOperatorAdminV1TestEntropy(), newOperatorAdminV1TestLifecycle(true, true, false), backend)
+		first, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
+		requireAdminV1Success(t, failure)
+		laterCapture := cloneOperatorAdminV1TestFacts(base)
+		laterCapture.capturedAt = laterCapture.capturedAt.Add(time.Second)
+		backend.setFacts(laterCapture)
+		second, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
+		requireAdminV1Success(t, failure)
+		if second.StateRevision != first.StateRevision || adminV1HandleField[PartnerHandleV1](t, second.Trusted[0], "Partner") != adminV1HandleField[PartnerHandleV1](t, first.Trusted[0], "Partner") {
+			t.Fatalf("capture-time-only read changed state revision/handle: first=%#v second=%#v", first, second)
+		}
+		if got := adminV1TimeField(t, second, "CapturedAt"); !got.Equal(laterCapture.capturedAt) {
+			t.Fatalf("snapshot capture time=%s, want latest validated %s", got, laterCapture.capturedAt)
+		}
+
+		invalidCapture := cloneOperatorAdminV1TestFacts(base)
+		invalidCapture.capturedAt = time.Time{}
+		backend.setFacts(invalidCapture)
+		partial, invalidFailure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
+		requireAdminV1Code(t, invalidFailure, AdminErrorCodeV1AdminBoundaryUnavailable)
+		if !reflect.DeepEqual(partial, AdminSnapshotV1{}) {
+			t.Fatalf("invalid capture time returned partial snapshot %#v", partial)
+		}
+	})
+	for _, change := range changes {
+		t.Run(change.name, func(t *testing.T) {
+			clock := newOperatorAdminV1TestClock()
+			backend := newOperatorAdminV1TestBackend(base)
+			admin := newOperatorAdminV1Reducer(clock.Now, newOperatorAdminV1TestEntropy(), newOperatorAdminV1TestLifecycle(true, true, false), backend)
+			first, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
+			requireAdminV1Success(t, failure)
+			changed := cloneOperatorAdminV1TestFacts(base)
+			change.change(&changed)
+			backend.setFacts(changed)
+			second, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
+			requireAdminV1Success(t, failure)
+			if second.StateRevision != first.StateRevision+1 {
+				t.Fatalf("%s change revision = %d -> %d, want exactly +1", change.name, first.StateRevision, second.StateRevision)
+			}
+		})
+	}
+}
+
+func TestAdminV1ReducerExpiryAndFailedConsumedStateAdvanceRevision(t *testing.T) {
+	t.Run("target expiry caps observation and candidate handles", func(t *testing.T) {
+		clock := newOperatorAdminV1TestClock()
+		facts := operatorAdminV1TestFacts()
+		facts.discovered[0].expiresAt = clock.Now().Add(30 * time.Second)
+		facts.candidates[0].expiresAt = clock.Now().Add(30 * time.Second)
+		backend := newOperatorAdminV1TestBackend(facts)
+		admin := newOperatorAdminV1Reducer(clock.Now, newOperatorAdminV1TestEntropy(), newOperatorAdminV1TestLifecycle(true, true, false), backend)
+		first, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Discovered})
+		requireAdminV1Success(t, failure)
+		observation := adminV1HandleField[ObservationHandleV1](t, first.Discovered[0], "Observation")
+		candidateSnapshot, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Candidate})
+		requireAdminV1Success(t, failure)
+		candidate := adminV1HandleField[CandidateHandleV1](t, candidateSnapshot.Candidates[0], "Candidate")
+
+		clock.Advance(30 * time.Second)
+		_, expired := admin.Select(context.Background(), SelectRequestV1{
+			MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "target-expired", ExpectedStateRevision: first.StateRevision},
+			Observation:            observation,
+			ExpectedSKI:            operatorAdminV1TestSKI,
+		})
+		if expired == nil || backend.calls("select") != 0 {
+			t.Fatal("observation handle outlived its 30-second discovery target")
+		}
+		_, expiredCandidate := admin.Cancel(context.Background(), CancelRequestV1{
+			MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "candidate-target-expired", ExpectedStateRevision: first.StateRevision},
+			Candidate:              candidate,
+		})
+		if expiredCandidate == nil || backend.calls("cancel") != 0 {
+			t.Fatal("candidate handle outlived its 30-second candidate target")
+		}
+	})
+
+	t.Run("async window expiry advances revision without row change", func(t *testing.T) {
+		clock := newOperatorAdminV1TestClock()
+		facts := operatorAdminV1TestFacts()
+		facts.window = "open"
+		facts.windowDeadline = clock.Now().Add(time.Minute)
+		backend := newOperatorAdminV1TestBackend(facts)
+		admin := newOperatorAdminV1Reducer(clock.Now, newOperatorAdminV1TestEntropy(), newOperatorAdminV1TestLifecycle(true, true, false), backend)
+		first, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
+		requireAdminV1Success(t, failure)
+		oldPartner := adminV1HandleField[PartnerHandleV1](t, first.Trusted[0], "Partner")
+
+		clock.Advance(time.Minute)
+		expiredFacts := cloneOperatorAdminV1TestFacts(facts)
+		expiredFacts.window = "closed"
+		expiredFacts.windowDeadline = time.Time{}
+		backend.setFacts(expiredFacts)
+		second, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
+		requireAdminV1Success(t, failure)
+		if second.StateRevision != first.StateRevision+1 || len(second.Trusted) != len(first.Trusted) {
+			t.Fatalf("async window expiry snapshot=%#v, want revision +1 with exact rows unchanged", second)
+		}
+		_, stalePartner := admin.RetryTrusted(context.Background(), RetryTrustedRequestV1{
+			MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "pre-window-expiry-partner", ExpectedStateRevision: second.StateRevision},
+			Partner:                oldPartner,
+		})
+		if stalePartner == nil || backend.calls("retry") != 0 {
+			t.Fatal("async window expiry retained a pre-expiry handle")
+		}
+	})
+
+	t.Run("select failure consumes internal observation", func(t *testing.T) {
+		clock := newOperatorAdminV1TestClock()
+		facts := operatorAdminV1TestFacts()
+		backend := newOperatorAdminV1TestBackend(facts)
+		admin := newOperatorAdminV1Reducer(clock.Now, newOperatorAdminV1TestEntropy(), newOperatorAdminV1TestLifecycle(true, true, false), backend)
+		first, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Discovered})
+		requireAdminV1Success(t, failure)
+		observation := adminV1HandleField[ObservationHandleV1](t, first.Discovered[0], "Observation")
+		postFailure := cloneOperatorAdminV1TestFacts(facts)
+		postFailure.discovered = nil
+		backend.setEffect("select", operatorAdminV1Transition{}, AdminErrorCodeV1UnknownState, postFailure)
+		_, selectFailure := admin.Select(context.Background(), SelectRequestV1{
+			MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "failed-select-consumed", ExpectedStateRevision: first.StateRevision},
+			Observation:            observation,
+			ExpectedSKI:            operatorAdminV1TestSKI,
+		})
+		requireAdminV1Code(t, selectFailure, AdminErrorCodeV1UnknownState)
+		after, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Discovered})
+		requireAdminV1Success(t, failure)
+		if after.StateRevision != first.StateRevision+1 || len(after.Discovered) != 0 || backend.calls("select") != 1 {
+			t.Fatalf("failed consumed select snapshot=%#v effects=%d, want revision +1 and one effect", after, backend.calls("select"))
+		}
+	})
+
+	t.Run("connect failure consumes internal selection", func(t *testing.T) {
+		clock := newOperatorAdminV1TestClock()
+		facts := operatorAdminV1TestFacts()
+		backend := newOperatorAdminV1TestBackend(facts)
+		admin := newOperatorAdminV1Reducer(clock.Now, newOperatorAdminV1TestEntropy(), newOperatorAdminV1TestLifecycle(true, true, false), backend)
+		first, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Discovered})
+		requireAdminV1Success(t, failure)
+		selection, failure := admin.Select(context.Background(), SelectRequestV1{
+			MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "selection-for-failed-connect", ExpectedStateRevision: first.StateRevision},
+			Observation:            adminV1HandleField[ObservationHandleV1](t, first.Discovered[0], "Observation"),
+			ExpectedSKI:            operatorAdminV1TestSKI,
+		})
+		requireAdminV1Success(t, failure)
+		postFailure := cloneOperatorAdminV1TestFacts(facts)
+		postFailure.status = "connect-attempt-consumed"
+		backend.setEffect("connect", operatorAdminV1Transition{}, AdminErrorCodeV1Disconnected, postFailure)
+		_, connectFailure := admin.Connect(context.Background(), ConnectRequestV1{
+			MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "failed-connect-consumed", ExpectedStateRevision: selection.StateRevision},
+			Selection:              selection.Selection,
+		})
+		requireAdminV1Code(t, connectFailure, AdminErrorCodeV1Disconnected)
+		after, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Connected})
+		requireAdminV1Success(t, failure)
+		if after.StateRevision != selection.StateRevision+1 || backend.calls("connect") != 1 {
+			t.Fatalf("failed consumed connect revision=%d effects=%d, want %d/1", after.StateRevision, backend.calls("connect"), selection.StateRevision+1)
+		}
+	})
+}
+
+func TestAdminV1ReducerCompletedMutationsRollReplayCapacityWithoutReexecution(t *testing.T) {
+	clock := newOperatorAdminV1TestClock()
+	backend := newOperatorAdminV1TestBackend(operatorAdminV1TestFacts())
+	admin := newOperatorAdminV1Reducer(clock.Now, newOperatorAdminV1TestEntropy(), newOperatorAdminV1TestLifecycle(true, true, false), backend)
+	first, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
+	requireAdminV1Success(t, failure)
+	revision := first.StateRevision
+	var liveRequest ClosePairingWindowRequestV1
+	var liveResult AdminMutationResultV1
+	for index := 0; index < 160; index++ {
+		request := ClosePairingWindowRequestV1{MutationPreconditionV1: MutationPreconditionV1{
+			IdempotencyKey:        fmt.Sprintf("completed-%03d", index),
+			ExpectedStateRevision: revision,
+		}}
+		result, callFailure := admin.ClosePairingWindow(context.Background(), request)
+		requireAdminV1Success(t, callFailure)
+		if result.StateRevision != revision+1 || result.Replayed {
+			t.Fatalf("completed mutation %d result=%#v, want fresh revision %d", index, result, revision+1)
+		}
+		revision = result.StateRevision
+		if index == 140 {
+			liveRequest = request
+			liveResult = result
+		}
+	}
+	if backend.calls("close") != 160 {
+		t.Fatalf("completed mutation effects=%d, want 160", backend.calls("close"))
+	}
+	replayed, replayFailure := admin.ClosePairingWindow(context.Background(), liveRequest)
+	requireAdminV1Success(t, replayFailure)
+	if !replayed.Replayed || replayed.StateRevision != liveResult.StateRevision || replayed.Outcome != liveResult.Outcome {
+		t.Fatalf("live replay=%#v, want logical terminal result %#v with Replayed=true", replayed, liveResult)
+	}
+	if backend.calls("close") != 160 {
+		t.Fatalf("live replay re-executed effect: calls=%d, want 160", backend.calls("close"))
+	}
+	_, conflict := admin.OpenPairingWindow(context.Background(), OpenPairingWindowRequestV1{
+		MutationPreconditionV1: liveRequest.MutationPreconditionV1,
+		Duration:               time.Minute,
+	})
+	requireAdminV1Code(t, conflict, AdminErrorCodeV1IdempotencyConflict)
+	if backend.calls("open") != 0 {
+		t.Fatalf("live replay conflict executed open effect %d times", backend.calls("open"))
 	}
 }
 
@@ -618,10 +986,22 @@ type operatorAdminV1TestBackend struct {
 	entered    chan struct{}
 	release    chan struct{}
 	enterOnce  sync.Once
+	effects    map[string]operatorAdminV1TestEffect
+}
+
+type operatorAdminV1TestEffect struct {
+	transition operatorAdminV1Transition
+	failure    AdminErrorCodeV1
+	facts      operatorAdminV1SnapshotFacts
 }
 
 func newOperatorAdminV1TestBackend(facts operatorAdminV1SnapshotFacts) *operatorAdminV1TestBackend {
-	return &operatorAdminV1TestBackend{facts: facts, callsByOp: make(map[string]int), references: make(map[string]string)}
+	return &operatorAdminV1TestBackend{
+		facts:      cloneOperatorAdminV1TestFacts(facts),
+		callsByOp:  make(map[string]int),
+		references: make(map[string]string),
+		effects:    make(map[string]operatorAdminV1TestEffect),
+	}
 }
 
 func (backend *operatorAdminV1TestBackend) snapshotOperatorAdminV1(context.Context) (operatorAdminV1SnapshotFacts, *AdminErrorV1) {
@@ -676,12 +1056,37 @@ func (backend *operatorAdminV1TestBackend) effect(operation, reference string) (
 	blocked := backend.blockOp == operation
 	entered := backend.entered
 	release := backend.release
+	override, overridden := backend.effects[operation]
+	if overridden {
+		backend.facts = cloneOperatorAdminV1TestFacts(override.facts)
+	}
 	backend.mu.Unlock()
 	if blocked {
 		backend.enterOnce.Do(func() { close(entered) })
 		<-release
 	}
+	if overridden {
+		if override.failure != "" {
+			return override.transition, &AdminErrorV1{Code: override.failure}
+		}
+		return override.transition, nil
+	}
 	return operatorAdminV1Transition{outcome: AdminOutcomeV1(operation + "_complete"), changed: true}, nil
+}
+
+func (backend *operatorAdminV1TestBackend) setEffect(
+	operation string,
+	transition operatorAdminV1Transition,
+	failure AdminErrorCodeV1,
+	facts operatorAdminV1SnapshotFacts,
+) {
+	backend.mu.Lock()
+	backend.effects[operation] = operatorAdminV1TestEffect{
+		transition: transition,
+		failure:    failure,
+		facts:      cloneOperatorAdminV1TestFacts(facts),
+	}
+	backend.mu.Unlock()
 }
 
 func (backend *operatorAdminV1TestBackend) block(operation string) (<-chan struct{}, chan struct{}) {
@@ -720,14 +1125,24 @@ func (backend *operatorAdminV1TestBackend) setFacts(facts operatorAdminV1Snapsho
 
 func operatorAdminV1TestFacts() operatorAdminV1SnapshotFacts {
 	return operatorAdminV1SnapshotFacts{
-		trusted: []operatorAdminV1TrustedFact{{reference: "partner-reference", ski: operatorAdminV1TestSKI}},
+		capturedAt:     time.Unix(2_000_000_000, 0),
+		status:         "ready",
+		window:         "open",
+		windowDeadline: time.Unix(2_000_000_000, 0).Add(time.Minute),
+		listener:       "ready",
+		discovery:      "ready",
+		trusted:        []operatorAdminV1TrustedFact{{reference: "partner-reference", ski: operatorAdminV1TestSKI}},
 		connected: []operatorAdminV1ConnectedFact{{
 			ski: operatorAdminV1TestSKI, endpoint: "192.0.2.10:4712",
 		}},
 		discovered: []operatorAdminV1DiscoveredFact{{
 			reference: "observation-reference", ski: operatorAdminV1TestSKI, endpoint: "192.0.2.20:4712",
+			expiresAt: time.Unix(2_000_000_000, 0).Add(time.Minute),
 		}},
-		candidates: []operatorAdminV1CandidateFact{{reference: "candidate-reference", ski: operatorAdminV1TestSKI}},
+		candidates: []operatorAdminV1CandidateFact{{
+			reference: "candidate-reference", ski: operatorAdminV1TestSKI,
+			expiresAt: time.Unix(2_000_000_000, 0).Add(time.Minute),
+		}},
 	}
 }
 
@@ -738,9 +1153,73 @@ func operatorAdminV1TestDiscoveredFacts(count int) []operatorAdminV1DiscoveredFa
 			reference: "observation-" + strings.Repeat("x", index/26) + string(rune('a'+index%26)),
 			ski:       operatorAdminV1TestSKI,
 			endpoint:  "192.0.2.20:4712",
+			expiresAt: time.Unix(2_000_000_000, 0).Add(time.Minute),
 		}
 	}
 	return result
+}
+
+func adminV1HandleTokenHex[T any](t *testing.T, handle T) string {
+	t.Helper()
+	value := reflect.ValueOf(handle)
+	if value.Kind() != reflect.Struct || value.NumField() != 1 {
+		t.Fatalf("%T is not a sealed one-field handle", handle)
+	}
+	token := value.Field(0)
+	if token.Kind() != reflect.Array || token.Type().Elem().Kind() != reflect.Uint8 {
+		t.Fatalf("%T token field has type %s, want byte array", handle, token.Type())
+	}
+	raw := make([]byte, token.Len())
+	for index := range raw {
+		raw[index] = byte(token.Index(index).Uint())
+	}
+	if len(raw) == 0 {
+		t.Fatalf("%T has an empty token", handle)
+	}
+	return hex.EncodeToString(raw)
+}
+
+func requireAdminV1GenericRenderingRedacted(t *testing.T, value any, secrets []string) {
+	t.Helper()
+	stringer, ok := value.(fmt.Stringer)
+	if !ok {
+		t.Fatalf("%T lacks fail-closed String", value)
+	}
+	goStringer, ok := value.(fmt.GoStringer)
+	if !ok {
+		t.Fatalf("%T lacks fail-closed GoString", value)
+	}
+	renderings := []string{stringer.String(), goStringer.GoString()}
+	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q"} {
+		renderings = append(renderings,
+			fmt.Sprintf(format, value),
+			fmt.Sprintf(format, []any{value}),
+			fmt.Sprintf(format, struct{ Value any }{Value: value}),
+			fmt.Sprintf(format, map[string]any{"value": value}),
+		)
+	}
+	for _, rendered := range renderings {
+		lower := strings.ToLower(rendered)
+		if !strings.Contains(lower, "redacted") {
+			t.Fatalf("%T generic rendering %q is not explicitly fail-closed", value, rendered)
+		}
+		for _, secret := range secrets {
+			if secret != "" && strings.Contains(lower, strings.ToLower(secret)) {
+				t.Fatalf("%T generic rendering leaked %q in %q", value, secret, rendered)
+			}
+		}
+	}
+	for _, jsonValue := range []any{value, []any{value}, struct{ Value any }{Value: value}, map[string]any{"value": value}} {
+		payload, err := json.Marshal(jsonValue)
+		if err == nil {
+			t.Fatalf("%T generic JSON unexpectedly succeeded with %s", value, payload)
+		}
+		for _, secret := range secrets {
+			if secret != "" && strings.Contains(strings.ToLower(string(payload)), strings.ToLower(secret)) {
+				t.Fatalf("%T failed JSON leaked %q in %s", value, secret, payload)
+			}
+		}
+	}
 }
 
 func cloneOperatorAdminV1TestFacts(source operatorAdminV1SnapshotFacts) operatorAdminV1SnapshotFacts {
@@ -802,6 +1281,19 @@ func adminV1StringField(t *testing.T, row any, name string) string {
 		t.Fatalf("%T lacks string field %s", row, name)
 	}
 	return field.String()
+}
+
+func adminV1TimeField(t *testing.T, row any, name string) time.Time {
+	t.Helper()
+	field := reflect.ValueOf(row).FieldByName(name)
+	if !field.IsValid() || !field.CanInterface() {
+		t.Fatalf("%T lacks exported time field %s", row, name)
+	}
+	value, ok := field.Interface().(time.Time)
+	if !ok {
+		t.Fatalf("%T.%s = %s, want time.Time", row, name, field.Type())
+	}
+	return value
 }
 
 func waitOperatorAdminV1Signal(t *testing.T, signal <-chan struct{}, label string) {
