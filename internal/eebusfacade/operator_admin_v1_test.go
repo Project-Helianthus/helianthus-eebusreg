@@ -88,6 +88,51 @@ func TestOperatorAdminV1BridgeSelectReservesWithoutDialAndConnectsAtMostOnce(t *
 	}
 }
 
+func TestOperatorAdminV1BridgeTerminalCandidateLifecycleRetiresSelections(t *testing.T) {
+	fixture := newMSP04BFixture(t, "commit_durable")
+	coordinator := fixture.coordinator.(*firstTrustCoordinator)
+	service := newOperatorAdminV1BridgeServiceSpy()
+	bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 9_000})
+
+	for index := 0; index <= operatorAdminV1BridgeMaximumReferences; index++ {
+		if transition, failure := bridge.openOperatorAdminV1(context.Background(), time.Second); failure != "" || !transition.changed {
+			t.Fatalf("cycle %d open = %#v/%q", index, transition, failure)
+		}
+		candidateRef := fmt.Sprintf("terminal-candidate-%03d", index)
+		coordinator.visiblePairingCandidatesUpdated([]shipapi.PairingCandidateRef{{
+			CandidateRef: candidateRef,
+			SKI:          operatorAdminV1BridgeTestSKI,
+		}})
+		snapshot, failure := bridge.snapshotOperatorAdminV1(context.Background())
+		requireOperatorAdminV1BridgeSuccess(t, failure)
+		if len(snapshot.discovered) != 1 {
+			t.Fatalf("cycle %d discovered rows = %d, want 1", index, len(snapshot.discovered))
+		}
+		selection, transition, failure := bridge.selectOperatorAdminV1(
+			context.Background(), snapshot.discovered[0].reference, operatorAdminV1BridgeTestSKI,
+		)
+		if failure != "" || !transition.changed || selection == "" {
+			t.Fatalf("cycle %d select = %q/%#v/%q", index, selection, transition, failure)
+		}
+		if transition, failure = bridge.connectOperatorAdminV1(context.Background(), selection); failure != "" || !transition.changed {
+			t.Fatalf("cycle %d connect = %#v/%q", index, transition, failure)
+		}
+
+		advanceMSP04BClock(fixture.clock, 2*time.Second)
+		if _, failure := bridge.snapshotOperatorAdminV1(context.Background()); failure != "" {
+			t.Fatalf("cycle %d terminal snapshot = %q", index, failure)
+		}
+		if retained := len(bridge.selections); retained != 0 {
+			t.Fatalf("cycle %d terminal lifecycle retained %d selections", index, retained)
+		}
+	}
+
+	selectCalls, connectCalls, _, _, _, _ := service.snapshot()
+	if selectCalls != operatorAdminV1BridgeMaximumReferences+1 || connectCalls != operatorAdminV1BridgeMaximumReferences+1 {
+		t.Fatalf("select/connect calls = %d/%d, want %d each", selectCalls, connectCalls, operatorAdminV1BridgeMaximumReferences+1)
+	}
+}
+
 func TestOperatorAdminV1BridgeDiscoveryRevisionReplacesSameCandidateIdentityObservation(t *testing.T) {
 	fixture := newMSP04BFixture(t, "commit_durable")
 	coordinator := fixture.coordinator.(*firstTrustCoordinator)

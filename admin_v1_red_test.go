@@ -88,6 +88,39 @@ func TestAdminV1SnapshotIsSanitizedAndHandlesAreOpaque(t *testing.T) {
 	}
 }
 
+func TestNewOperatorRuntimeV1AdminValueNeverFormatsOrSerializesFacts(t *testing.T) {
+	_, admin, err := NewOperatorRuntimeV1(Config{})
+	if err != nil {
+		t.Fatalf("NewOperatorRuntimeV1 disabled runtime: %v", err)
+	}
+	if admin == nil {
+		t.Fatal("NewOperatorRuntimeV1 returned nil AdminV1")
+	}
+
+	for _, rendered := range []string{
+		fmt.Sprintf("%v", admin),
+		fmt.Sprintf("%+v", admin),
+		fmt.Sprintf("%#v", admin),
+		fmt.Sprintf("admin=%v", []any{admin}),
+		fmt.Sprintf("admin=%v", map[string]any{"admin": admin}),
+	} {
+		if rendered != operatorAdminV1RedactedRendering &&
+			rendered != "admin="+operatorAdminV1RedactedRendering &&
+			rendered != "["+operatorAdminV1RedactedRendering+"]" &&
+			rendered != "map[admin:"+operatorAdminV1RedactedRendering+"]" {
+			t.Fatalf("AdminV1 formatting leaked concrete value: %q", rendered)
+		}
+		for _, forbidden := range []string{"ski", "endpoint", "handle", "replay", "idempotency", "token"} {
+			if strings.Contains(strings.ToLower(rendered), forbidden) {
+				t.Fatalf("AdminV1 formatting leaked %q in %q", forbidden, rendered)
+			}
+		}
+	}
+	if payload, marshalErr := json.Marshal(admin); marshalErr == nil || len(payload) != 0 {
+		t.Fatalf("AdminV1 JSON = %q/%v, want generic serialization refusal", payload, marshalErr)
+	}
+}
+
 func TestAdminV1ReducerSerializesOneEffectAndReplaysBeforeRevision(t *testing.T) {
 	clock := newOperatorAdminV1TestClock()
 	lifecycle := newOperatorAdminV1TestLifecycle(true, true, false)
