@@ -476,8 +476,6 @@ func (bridge *operatorAdminV1Bridge) connectOperatorAdminV1(ctx context.Context,
 		!bridge.coordinator.operatorAdminV1SelectionCurrent(binding.candidateRef, binding.ski) {
 		return operatorAdminV1BridgeTransition{}, "observation_stale"
 	}
-	// Retire the process-local connect authority before invoking the effect.
-	// This keeps a panic or returned error from reopening the same outbound dial.
 	delete(bridge.selections, reference)
 	if err := callOperatorAdminV1Connect(bridge.service, binding.reservation); err != nil {
 		return operatorAdminV1BridgeTransition{changed: true}, mapOperatorAdminV1ConnectError(err)
