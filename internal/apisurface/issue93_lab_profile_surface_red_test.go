@@ -14,7 +14,7 @@ func TestIssue93PublicLabProfileSurfaceIsAdditiveAndMethodSetsStayFrozen(t *test
 	root := issue85SymbolsByName(packages[modulePath].Symbols)
 	raw := issue85SymbolsByName(packages[modulePath+"/eebusraw"].Symbols)
 
-	const runtimeSignature = "type Runtime interface{ PairingState() ([]PairingObservationV1, error); RawFeatureRuntimeV1; Shutdown() error; Snapshot() (SnapshotV1, error); Start(context.Context) error }"
+	const runtimeSignature = "type Runtime interface{ AdminV1() AdminV1; PairingState() ([]PairingObservationV1, error); RawFeatureRuntimeV1; Shutdown() error; Snapshot() (SnapshotV1, error); Start(context.Context) error }"
 	if got := root["Runtime"].Signature; got != runtimeSignature {
 		t.Fatalf("Runtime signature = %q, want unchanged %q", got, runtimeSignature)
 	}

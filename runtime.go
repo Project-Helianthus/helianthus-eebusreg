@@ -24,6 +24,7 @@ var errRuntimeSnapshotUnavailable = errors.New("eebus runtime snapshot is unavai
 
 type Runtime interface {
 	RawFeatureRuntimeV1
+	AdminV1() AdminV1
 	Start(context.Context) error
 	Shutdown() error
 	Snapshot() (SnapshotV1, error)

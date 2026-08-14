@@ -79,7 +79,7 @@ func TestRootLifecycleSignaturesAreExact(t *testing.T) {
 	if got["New"] != "func New(Config) (Runtime, error)" {
 		t.Fatalf("New signature = %q", got["New"])
 	}
-	wantRuntime := "type Runtime interface{ PairingState() ([]PairingObservationV1, error); RawFeatureRuntimeV1; Shutdown() error; Snapshot() (SnapshotV1, error); Start(context.Context) error }"
+	wantRuntime := "type Runtime interface{ AdminV1() AdminV1; PairingState() ([]PairingObservationV1, error); RawFeatureRuntimeV1; Shutdown() error; Snapshot() (SnapshotV1, error); Start(context.Context) error }"
 	if got["Runtime"] != wantRuntime {
 		t.Fatalf("Runtime signature = %q", got["Runtime"])
 	}
