@@ -108,8 +108,8 @@ func TestIssue116AdminRetryOwnsAndReleasesVolatileAdmission(t *testing.T) {
 		if !service.armedAtCall || service.retrySKI != hex.EncodeToString(association.subject) {
 			t.Fatalf("service observed armed=%t ski=%q", service.armedAtCall, service.retrySKI)
 		}
-		if _, failure = bridge.retryTrustedOperatorAdminV1(context.Background(), partner); failure != "attempt_in_progress" {
-			t.Fatalf("duplicate retry failure=%q, want attempt_in_progress", failure)
+		if _, failure = bridge.retryTrustedOperatorAdminV1(context.Background(), partner); failure != "candidate_busy" {
+			t.Fatalf("duplicate retry failure=%q, want candidate_busy", failure)
 		}
 		if service.retryCalls != 1 {
 			t.Fatalf("retry service calls=%d, want exactly one", service.retryCalls)
