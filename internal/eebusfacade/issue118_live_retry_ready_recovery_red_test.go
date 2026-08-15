@@ -96,6 +96,19 @@ func TestIssue118PersistedRetryReadyRequiresOneExactTerminalReleaseReceipt(t *te
 				control.receipts[0].result = "repair_outcome_unknown"
 			},
 		},
+		{
+			name: "zero repair sequence with empty receipt ledger",
+			mutate: func(control *firstTrustControlRecord) {
+				control.repairSequence = 0
+				control.receipts = nil
+			},
+		},
+		{
+			name: "non-release repair receipt ledger",
+			mutate: func(control *firstTrustControlRecord) {
+				control.receipts[0].operationClass = "recover_unavailable_host_key"
+			},
+		},
 	}
 
 	for _, test := range tests {
