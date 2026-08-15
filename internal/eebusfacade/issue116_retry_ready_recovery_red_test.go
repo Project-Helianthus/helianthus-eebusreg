@@ -17,11 +17,18 @@ func TestIssue116RetryReadyRecoveryStartsBoundaryButNotAutomaticOutbound(t *test
 
 	t.Run("fresh discovery has no outbound authority before explicit retry", func(t *testing.T) {
 		coordinator, association, scope := issue116RetryReadyCoordinator(t, 116_010)
+		request := msp04cr2Request(association.subject, "peer.invalid", 4712, "/ship/")
 		coordinator.mu.Lock()
 		automaticEligible := coordinator.firstTrustOutgoingAttemptEligibleLocked(association.subject)
 		coordinator.mu.Unlock()
 		if automaticEligible {
 			t.Fatal("retry-ready recovery admitted automatic persisted-trusted reconnect")
+		}
+		if outcome := coordinator.authorizeRuntimeAttempt(association.subject); outcome != "attempt_denied" {
+			t.Fatalf("automatic runtime callback=%q, want attempt_denied", outcome)
+		}
+		if handle, outcome := coordinator.prepareOutgoingAttempt(context.Background(), request); handle != nil || outcome != "attempt_denied" {
+			t.Fatalf("automatic prepare=%q/%v, want attempt_denied/nil", outcome, handle)
 		}
 
 		if got := coordinator.admitRetry(context.Background(), scope); got != "retry_admitted" {
@@ -33,7 +40,20 @@ func TestIssue116RetryReadyRecoveryStartsBoundaryButNotAutomaticOutbound(t *test
 		if !explicitEligible {
 			t.Fatal("explicit identity-bound retry did not authorize the exact trusted remote")
 		}
-		coordinator.completeRetry(scope)
+		handle, outcome := coordinator.prepareOutgoingAttempt(context.Background(), request)
+		if handle == nil || outcome != "attempt_reserved" {
+			t.Fatalf("explicit prepare=%q/%v, want attempt_reserved/handle", outcome, handle)
+		}
+		permit, outcome := coordinator.authorizeOutgoingAttempt(context.Background(), handle)
+		if outcome != "attempt_permitted" || permit.decision != "PERMIT" {
+			t.Fatalf("explicit launch=%q/%#v, want attempt_permitted/PERMIT", outcome, permit)
+		}
+		if outcome := coordinator.authorizeRuntimeAttempt(association.subject); outcome != "reconnect_authorized" {
+			t.Fatalf("explicit runtime callback=%q, want reconnect_authorized", outcome)
+		}
+		if outcome := coordinator.completeOutgoingAttempt(context.Background(), handle.metadata, false); outcome != "attempt_failed" {
+			t.Fatalf("settle explicit retry=%q, want attempt_failed", outcome)
+		}
 		coordinator.mu.Lock()
 		eligibleAfterRelease := coordinator.firstTrustOutgoingAttemptEligibleLocked(association.subject)
 		coordinator.mu.Unlock()
