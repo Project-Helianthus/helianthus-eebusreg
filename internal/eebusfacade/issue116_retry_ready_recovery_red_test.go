@@ -184,7 +184,7 @@ func issue116RetryReadyCoordinator(
 		lastControlEpoch: coordinator.controlView.control.controlEpoch,
 	}
 	coordinator.mu.Lock()
-	coordinator.phase = firstTrustPairingClosed
+	coordinator.phase = firstTrustDisabled
 	coordinator.recovery = "QUARANTINED"
 	coordinator.recoveryReasonCode = "RETRYABLE_FAILURE"
 	coordinator.controlView.associations = []firstTrustAssociationRecord{association}
