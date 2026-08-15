@@ -67,6 +67,71 @@ func TestIssue118PersistedRetryReadyWithoutPendingUsesRecoveryOnlyProduct(t *tes
 	}
 }
 
+func TestIssue118PersistedRetryReadyRequiresOneExactTerminalReleaseReceipt(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*firstTrustControlRecord)
+	}{
+		{
+			name: "receipt missing",
+			mutate: func(control *firstTrustControlRecord) {
+				control.receipts = nil
+			},
+		},
+		{
+			name: "receipt duplicated",
+			mutate: func(control *firstTrustControlRecord) {
+				control.receipts = append(control.receipts, control.receipts[0])
+			},
+		},
+		{
+			name: "receipt non-terminal",
+			mutate: func(control *firstTrustControlRecord) {
+				control.receipts[0].terminal = false
+			},
+		},
+		{
+			name: "receipt mismatched",
+			mutate: func(control *firstTrustControlRecord) {
+				control.receipts[0].result = "repair_outcome_unknown"
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture, association, _ := issue118PersistedRetryReadyFixture(t)
+			test.mutate(&fixture.store.view.control)
+
+			coordinator := fixture.newCoordinator()
+			_ = coordinator.reopenWithRecovery(context.Background())
+
+			if got := coordinator.recoveryState(); got != "QUARANTINED" {
+				t.Fatalf("recovery=%q, want QUARANTINED", got)
+			}
+			if got := coordinator.recoveryReason(); got != "DURABILITY_UNKNOWN" {
+				t.Fatalf("recovery reason=%q, want DURABILITY_UNKNOWN", got)
+			}
+			if coordinator.runtimeStartAuthorized() {
+				t.Fatal("non-exact release receipt authorized startup transport")
+			}
+			coordinator.mu.Lock()
+			trustedRemotes := len(coordinator.trustedRemotes)
+			genericEligible := coordinator.firstTrustOutgoingAttemptEligibleLocked(association.subject)
+			coordinator.mu.Unlock()
+			if trustedRemotes != 0 {
+				t.Fatalf("non-exact release receipt loaded %d trusted remotes, want none", trustedRemotes)
+			}
+			if genericEligible {
+				t.Fatal("non-exact release receipt admitted generic reconnect")
+			}
+			if outcome := coordinator.authorizeRuntimeAttempt(association.subject); outcome != "attempt_denied" {
+				t.Fatalf("non-exact release receipt runtime callback=%q, want attempt_denied", outcome)
+			}
+		})
+	}
+}
+
 func TestIssue118PendingReopenKeepsEveryNonExactOutcomeFailClosed(t *testing.T) {
 	tests := []struct {
 		name               string
