@@ -159,6 +159,35 @@ func TestIssue116AdminRetryOwnsAndReleasesVolatileAdmission(t *testing.T) {
 	})
 }
 
+func TestIssue116PairedTrustedRetryKeepsConnectionOwnedAdmission(t *testing.T) {
+	fixture := newMSP04CFixture(t)
+	lineage := fixture.store.view.control.associationLineage
+	association := msp04cAssociation(116_400, lineage, true, true, true, true)
+	scope := firstTrustRuntimeRetryScope(firstTrustNormalizedSKI(association.subject))
+	fixture.store.view.associations = []firstTrustAssociationRecord{association}
+	fixture.store.view.control.quarantines = []firstTrustQuarantineRecord{
+		issue68RetryHold(scope, fixture.store.view.control.controlEpoch),
+	}
+	coordinator := fixture.newCoordinator()
+	if got := coordinator.reopen(context.Background()); got != "pairing_closed" {
+		t.Fatalf("paired coordinator reopen=%q", got)
+	}
+	if coordinator.recoveryState() != "PAIRED_TRUSTED" {
+		t.Fatalf("paired recovery=%q, want PAIRED_TRUSTED", coordinator.recoveryState())
+	}
+
+	service := newIssue116RetryService(coordinator, scope)
+	bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 116_410})
+	partner := issue116TrustedPartnerReference(t, bridge)
+	transition, failure := bridge.retryTrustedOperatorAdminV1(context.Background(), partner)
+	if failure != "" || !transition.changed {
+		t.Fatalf("paired retry transition=%#v failure=%q", transition, failure)
+	}
+	if service.armedAtCall {
+		t.Fatal("PAIRED_TRUSTED AdminV1 retry pre-armed recovery-only admission")
+	}
+}
+
 type issue116RetryService struct {
 	*operatorAdminV1BridgeServiceSpy
 	coordinator *firstTrustCoordinator
