@@ -381,6 +381,18 @@ func (coordinator *firstTrustCoordinator) authorizeRuntimeAttempt(remote []byte)
 		if coordinator.reconciliationRequiredLocked() || coordinator.recovery != "REVOKED" && firstTrustSubjectTombstoned(coordinator.controlView, remote) {
 			return "attempt_denied"
 		}
+		if coordinator.recovery == "QUARANTINED" {
+			association, scope, ok := coordinator.retryReadyRecoveryAssociationLocked()
+			attempt := coordinator.firstTrustOutgoingAttemptForScopeLocked(scope)
+			if !ok || !coordinator.retryInflight[scope] || !bytes.Equal(association.subject, remote) || attempt < 0 {
+				return "attempt_denied"
+			}
+			record := coordinator.controlView.control.attempts[attempt]
+			if record.state != firstTrustAttemptLaunchAuthorized || !bytes.Equal(record.remoteSKI, remote) {
+				return "attempt_denied"
+			}
+			return "reconnect_authorized"
+		}
 		if coordinator.recovery != "UNPAIRED_LOCKED" && coordinator.recovery != "PAIRED_TRUSTED" && coordinator.recovery != "REVOKED" {
 			return "attempt_denied"
 		}
@@ -423,7 +435,44 @@ func (coordinator *firstTrustCoordinator) runtimeStartAuthorized() bool {
 	if coordinator.reopening || coordinator.recoveryOperation != nil || coordinator.reconciliationRequiredLocked() {
 		return false
 	}
-	return coordinator.recovery == "UNPAIRED_LOCKED" || coordinator.recovery == "PAIRED_TRUSTED"
+	if coordinator.recovery == "UNPAIRED_LOCKED" || coordinator.recovery == "PAIRED_TRUSTED" {
+		return true
+	}
+	_, _, ok := coordinator.retryReadyRecoveryAssociationLocked()
+	return ok
+}
+
+func (coordinator *firstTrustCoordinator) retryReadyRecoveryAssociationLocked() (firstTrustAssociationRecord, [32]byte, bool) {
+	if coordinator.phase != firstTrustDisabled || coordinator.recovery != "QUARANTINED" ||
+		coordinator.recoveryReasonCode != "RETRYABLE_FAILURE" || len(coordinator.controlView.control.quarantines) != 1 {
+		return firstTrustAssociationRecord{}, [32]byte{}, false
+	}
+	retry := coordinator.controlView.control.quarantines[0]
+	if retry.state != "RETRY_READY" || retry.reason != "RETRYABLE_FAILURE" || retry.remainingDelay != 0 ||
+		!firstTrustQuarantineRecordValid(retry, coordinator.backoffPolicy) {
+		return firstTrustAssociationRecord{}, [32]byte{}, false
+	}
+
+	usable := 0
+	matched := 0
+	var result firstTrustAssociationRecord
+	for _, association := range coordinator.controlView.associations {
+		if !firstTrustAssociationUsable(association, coordinator.controlView.control.associationLineage) {
+			continue
+		}
+		usable++
+		if coordinator.firstTrustTombstonedLocked(association) || len(association.subject) != 20 || association.service == "" {
+			return firstTrustAssociationRecord{}, [32]byte{}, false
+		}
+		if retry.scope == firstTrustRuntimeRetryScope(firstTrustNormalizedSKI(association.subject)) {
+			matched++
+			result = association
+		}
+	}
+	if usable != 1 || matched != 1 {
+		return firstTrustAssociationRecord{}, [32]byte{}, false
+	}
+	return result, retry.scope, true
 }
 
 func (coordinator *firstTrustCoordinator) phaseNameLocked() string {
