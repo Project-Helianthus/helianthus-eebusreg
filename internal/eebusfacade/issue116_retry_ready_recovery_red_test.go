@@ -238,6 +238,7 @@ func issue116RetryReadyCoordinator(
 	coordinator.recoveryReasonCode = "RETRYABLE_FAILURE"
 	coordinator.controlView.associations = []firstTrustAssociationRecord{association}
 	coordinator.controlView.control.quarantines = []firstTrustQuarantineRecord{retry}
+	coordinator.controlView.control.repairSequence = 1
 	coordinator.controlView.control.receipts = []firstTrustDurableReceipt{{
 		operationID:    msp04cOrdinal(ordinal + 1),
 		operationClass: "release_retry_quarantine",
