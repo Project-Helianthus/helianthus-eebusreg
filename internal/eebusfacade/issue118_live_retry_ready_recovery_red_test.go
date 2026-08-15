@@ -130,5 +130,12 @@ func issue118PersistedRetryReadyFixture(t *testing.T) (*msp04cFixture, firstTrus
 		retentionBudget:  firstTrustQuarantineRetention,
 		lastControlEpoch: fixture.store.view.control.controlEpoch,
 	}}
+	fixture.store.view.control.receipts = []firstTrustDurableReceipt{{
+		operationID:    msp04cOrdinal(118_010),
+		operationClass: "release_retry_quarantine",
+		bindingSHA256:  msp04cDigest(118_011),
+		result:         "repaired_unpaired",
+		terminal:       true,
+	}}
 	return fixture, association, scope
 }
