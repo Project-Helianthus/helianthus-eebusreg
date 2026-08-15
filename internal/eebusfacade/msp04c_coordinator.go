@@ -46,8 +46,9 @@ func (coordinator *firstTrustCoordinator) reopenWithRecovery(ctx context.Context
 	coordinator.retryInflight = make(map[[32]byte]bool)
 	coordinator.trustedRemotes = make(map[string]string)
 	coordinator.cancelAllOutgoingAttemptContextsLocked()
+	_, _, retryReadyRecordAtReload := coordinator.persistedRetryReadyRecordAssociationLocked()
 	coordinator.reconcileTrustedRetryQuarantinesLocked(ctx, storeOutcome, anchorOutcome)
-	prechargeState, prechargeReason := coordinator.classifyFirstTrustStartupLocked(storeOutcome, anchorOutcome)
+	prechargeState, prechargeReason := coordinator.classifyFirstTrustStartupLocked(storeOutcome, anchorOutcome, retryReadyRecordAtReload)
 	chargeAllowed := prechargeState == "PAIRED_TRUSTED" || prechargeState == "UNPAIRED_LOCKED" ||
 		prechargeState == "QUARANTINED" && prechargeReason != "DURABILITY_UNKNOWN" && prechargeReason != "HOST_BINDING_MISMATCH" &&
 			prechargeReason != "CLONE_DETECTED" && prechargeReason != "MANIFEST_GENERATION_ROLLBACK" && prechargeReason != "CONTROL_EPOCH_ROLLBACK"
@@ -69,7 +70,7 @@ func (coordinator *firstTrustCoordinator) reopenWithRecovery(ctx context.Context
 		return storeOutcome
 	}
 
-	state, reason := coordinator.classifyFirstTrustStartupLocked(storeOutcome, anchorOutcome)
+	state, reason := coordinator.classifyFirstTrustStartupLocked(storeOutcome, anchorOutcome, retryReadyRecordAtReload)
 	coordinator.recovery, coordinator.recoveryReasonCode = state, reason
 	if state == "UNPAIRED_LOCKED" || state == "PAIRED_TRUSTED" || state == "REVOKED" {
 		coordinator.phase = firstTrustPairingClosed
@@ -159,7 +160,10 @@ func (coordinator *firstTrustCoordinator) reconcileTrustedRetryQuarantinesLocked
 	coordinator.recoveryOperation = nil
 }
 
-func (coordinator *firstTrustCoordinator) classifyFirstTrustStartupLocked(storeOutcome, anchorOutcome string) (string, string) {
+func (coordinator *firstTrustCoordinator) classifyFirstTrustStartupLocked(
+	storeOutcome, anchorOutcome string,
+	retryReadyRecordAtReload bool,
+) (string, string) {
 	if reason := firstTrustStructuralStoreOutcome(storeOutcome); reason != "" {
 		return "CORRUPT_STORE", reason
 	}
@@ -206,8 +210,17 @@ func (coordinator *firstTrustCoordinator) classifyFirstTrustStartupLocked(storeO
 		}
 	}
 	if trustedCurrentLineage {
-		if _, _, retryReady := coordinator.persistedRetryReadyAssociationLocked(); retryReady {
-			return "QUARANTINED", "RETRYABLE_FAILURE"
+		if retryReadyRecordAtReload {
+			repairReceiptCount := coordinator.persistedRepairReceiptCountLocked()
+			if uint64(repairReceiptCount) != coordinator.controlView.control.repairSequence {
+				return "QUARANTINED", "DURABILITY_UNKNOWN"
+			}
+			if releasePresent, releaseExact := coordinator.persistedRetryReadyReleaseReceiptLocked(); releasePresent {
+				if releaseExact {
+					return "QUARANTINED", "RETRYABLE_FAILURE"
+				}
+				return "QUARANTINED", "DURABILITY_UNKNOWN"
+			}
 		}
 		return "PAIRED_TRUSTED", ""
 	}
@@ -480,7 +493,17 @@ func (coordinator *firstTrustCoordinator) retryReadyRecoveryAssociationLocked() 
 }
 
 func (coordinator *firstTrustCoordinator) persistedRetryReadyAssociationLocked() (firstTrustAssociationRecord, [32]byte, bool) {
-	if len(coordinator.controlView.control.quarantines) != 1 || !coordinator.persistedRetryReadyReleaseReceiptLocked() {
+	association, scope, ok := coordinator.persistedRetryReadyRecordAssociationLocked()
+	_, releaseExact := coordinator.persistedRetryReadyReleaseReceiptLocked()
+	if !ok || uint64(coordinator.persistedRepairReceiptCountLocked()) != coordinator.controlView.control.repairSequence ||
+		!releaseExact {
+		return firstTrustAssociationRecord{}, [32]byte{}, false
+	}
+	return association, scope, true
+}
+
+func (coordinator *firstTrustCoordinator) persistedRetryReadyRecordAssociationLocked() (firstTrustAssociationRecord, [32]byte, bool) {
+	if len(coordinator.controlView.control.quarantines) != 1 {
 		return firstTrustAssociationRecord{}, [32]byte{}, false
 	}
 	retry := coordinator.controlView.control.quarantines[0]
@@ -511,14 +534,29 @@ func (coordinator *firstTrustCoordinator) persistedRetryReadyAssociationLocked()
 	return result, retry.scope, true
 }
 
-func (coordinator *firstTrustCoordinator) persistedRetryReadyReleaseReceiptLocked() bool {
+func (coordinator *firstTrustCoordinator) persistedRepairReceiptCountLocked() int {
+	count := 0
 	for _, receipt := range coordinator.controlView.control.receipts {
-		if receipt.terminal && receipt.operationID != [32]byte{} && receipt.bindingSHA256 != [32]byte{} &&
-			receipt.operationClass == "release_retry_quarantine" && receipt.result == "repaired_unpaired" {
-			return true
+		if firstTrustRepairKindAllowed(receipt.operationClass) {
+			count++
 		}
 	}
-	return false
+	return count
+}
+
+func (coordinator *firstTrustCoordinator) persistedRetryReadyReleaseReceiptLocked() (bool, bool) {
+	found := false
+	for _, receipt := range coordinator.controlView.control.receipts {
+		if receipt.operationClass != "release_retry_quarantine" {
+			continue
+		}
+		if found || !receipt.terminal || receipt.operationID == [32]byte{} || receipt.bindingSHA256 == [32]byte{} ||
+			receipt.result != "repaired_unpaired" {
+			return true, false
+		}
+		found = true
+	}
+	return found, found
 }
 
 func (coordinator *firstTrustCoordinator) phaseNameLocked() string {
