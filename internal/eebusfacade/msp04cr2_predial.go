@@ -94,7 +94,12 @@ func (coordinator *firstTrustCoordinator) prepareOutgoingAttemptLocked(
 		coordinator.mu.Unlock()
 		return nil, "attempt_denied"
 	}
-	if coordinator.retryInflight[scope] != (failed != nil) {
+	explicitRecoveryRetry := false
+	if failed == nil && coordinator.recovery == "QUARANTINED" {
+		_, recoveryScope, recoveryReady := coordinator.retryReadyRecoveryAssociationLocked()
+		explicitRecoveryRetry = recoveryReady && recoveryScope == scope
+	}
+	if coordinator.retryInflight[scope] != (failed != nil || explicitRecoveryRetry) {
 		coordinator.mu.Unlock()
 		return nil, "attempt_denied"
 	}
@@ -719,9 +724,16 @@ func (coordinator *firstTrustCoordinator) rebindOutgoingAttemptCandidateGenerati
 
 func (coordinator *firstTrustCoordinator) firstTrustOutgoingAttemptEligibleLocked(remote []byte) bool {
 	if len(remote) != 20 || coordinator.recoveryStore == nil || coordinator.anchor == nil || coordinator.reopening ||
-		coordinator.recoveryOperation != nil || coordinator.reconciliationRequiredLocked() || coordinator.phase == firstTrustDisabled ||
-		coordinator.recovery == "REVOKED" || coordinator.recovery == "QUARANTINED" || coordinator.recovery == "CORRUPT_STORE" ||
+		coordinator.recoveryOperation != nil || coordinator.reconciliationRequiredLocked() ||
+		coordinator.recovery == "REVOKED" || coordinator.recovery == "CORRUPT_STORE" ||
 		coordinator.recovery == "NO_LOCAL_IDENTITY" {
+		return false
+	}
+	if coordinator.recovery == "QUARANTINED" {
+		association, scope, ok := coordinator.retryReadyRecoveryAssociationLocked()
+		return ok && coordinator.retryInflight[scope] && bytes.Equal(association.subject, remote)
+	}
+	if coordinator.phase == firstTrustDisabled {
 		return false
 	}
 	for _, association := range coordinator.controlView.associations {
