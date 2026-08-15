@@ -51,8 +51,8 @@ func TestIssue116RetryReadyRecoveryStartsBoundaryButNotAutomaticOutbound(t *test
 		if outcome := coordinator.authorizeRuntimeAttempt(association.subject); outcome != "reconnect_authorized" {
 			t.Fatalf("explicit runtime callback=%q, want reconnect_authorized", outcome)
 		}
-		if outcome := coordinator.completeOutgoingAttempt(context.Background(), handle.metadata, false); outcome != "attempt_failed" {
-			t.Fatalf("settle explicit retry=%q, want attempt_failed", outcome)
+		if outcome := coordinator.completeOutgoingAttempt(context.Background(), handle.metadata, false); outcome != "backoff_active" {
+			t.Fatalf("settle explicit retry=%q, want backoff_active", outcome)
 		}
 		coordinator.mu.Lock()
 		eligibleAfterRelease := coordinator.firstTrustOutgoingAttemptEligibleLocked(association.subject)
