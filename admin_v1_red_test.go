@@ -59,6 +59,71 @@ func TestIssue122ConnectPINIsOpaqueAndCannotBeRenderedOrSerialized(t *testing.T)
 	}
 }
 
+func TestIssue122InvalidConnectPINFailsBeforeSelectionOrServiceEffect(t *testing.T) {
+	clock := newOperatorAdminV1TestClock()
+	lifecycle := newOperatorAdminV1TestLifecycle(true, true, false)
+	backend := newOperatorAdminV1TestBackend(operatorAdminV1TestFacts())
+	admin := newOperatorAdminV1Reducer(clock.Now, newOperatorAdminV1TestEntropy(), lifecycle, backend)
+
+	snapshot, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
+	requireAdminV1Success(t, failure)
+	for _, pin := range [][]byte{
+		{},                         // empty-but-present
+		[]byte("a1b2c3d"),          // seven bytes
+		[]byte("a1b2c3d4e5f607182"), // seventeen bytes
+		[]byte("a1b2c3dg"),         // non-hex
+		[]byte("a1b2 c3d"),         // whitespace
+		[]byte("a1b2c3d\xc2\xa0"), // non-ASCII whitespace
+	} {
+		_, failure := admin.Connect(context.Background(), ConnectRequestV1{
+			MutationPreconditionV1: MutationPreconditionV1{
+				IdempotencyKey:        "invalid-pin-" + hex.EncodeToString(pin),
+				ExpectedStateRevision: snapshot.StateRevision,
+			},
+			PIN: pin,
+		})
+		if failure == nil || failure.Code != AdminErrorCodeV1InvalidRequest {
+			t.Fatalf("PIN %q failure = %#v, want invalid_request", pin, failure)
+		}
+	}
+	if backend.calls("select") != 0 || backend.calls("connect") != 0 {
+		t.Fatalf("invalid PIN reached selection/connect effects = %d/%d, want 0/0", backend.calls("select"), backend.calls("connect"))
+	}
+
+	// A nil PIN remains omission, not an invalid supplied value.
+	_, failure = admin.Connect(context.Background(), ConnectRequestV1{
+		MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "pin-omitted", ExpectedStateRevision: snapshot.StateRevision},
+		PIN:                     nil,
+	})
+	if failure == nil || failure.Code == AdminErrorCodeV1InvalidRequest {
+		t.Fatalf("omitted PIN failure = %#v, must not be invalid_request", failure)
+	}
+}
+
+func TestIssue122TransientPINOwnsAndClearsMutableBytesWithoutRendering(t *testing.T) {
+	raw := []byte("a1b2c3d4")
+	pin, ok := newOperatorAdminV1TransientPIN(raw)
+	if !ok {
+		t.Fatal("valid transient PIN was rejected")
+	}
+	raw[0] = 'f'
+	if pin.cleared() {
+		t.Fatal("fresh transient PIN is unexpectedly cleared")
+	}
+	for _, rendered := range []string{fmt.Sprint(pin), fmt.Sprintf("%+v", pin), fmt.Sprintf("%#v", pin)} {
+		if strings.Contains(rendered, "a1b2c3d4") || strings.Contains(rendered, "f1b2c3d4") {
+			t.Fatalf("transient PIN formatting leaked secret: %q", rendered)
+		}
+	}
+	if payload, err := json.Marshal(pin); err == nil || len(payload) != 0 {
+		t.Fatalf("transient PIN JSON = %q/%v, want refusal", payload, err)
+	}
+	pin.clear()
+	if !pin.cleared() {
+		t.Fatal("transient PIN did not clear owned bytes")
+	}
+}
+
 func TestAdminV1SnapshotIsSanitizedAndHandlesAreOpaque(t *testing.T) {
 	for _, view := range []reflect.Type{
 		reflect.TypeOf(AdminSnapshotV1{}),
