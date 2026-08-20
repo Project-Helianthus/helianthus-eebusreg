@@ -143,6 +143,8 @@ type CandidateHandleV1 struct{ token [32]byte }
 type AdminSnapshotV1 struct {
 	StateRevision   uint64
 	CapturedAt      time.Time
+	LocalSKI        string
+	LocalSHIPID     string
 	Status          string
 	Window          string
 	WindowDeadline  time.Time
@@ -161,11 +163,21 @@ type AdminSnapshotV1 struct {
 }
 
 type TrustedPartnerV1 struct {
-	Partner    PartnerHandleV1
-	SKI        string
-	TrustState string
-	SHIPID     string
-	LastSeen   time.Time
+	Partner         PartnerHandleV1
+	SKI             string
+	Endpoint        string
+	TrustState      string
+	ConnectionState string
+	SHIPID          string
+	LastSeen        time.Time
+	Name            string
+	Identifier      string
+	Brand           string
+	Type            string
+	Model           string
+	RetryState      string
+	RetryDeadline   time.Time
+	RetryAdmitted   bool
 }
 
 type ConnectedPartnerV1 struct {
@@ -175,6 +187,11 @@ type ConnectedPartnerV1 struct {
 	ConnectionState string
 	SHIPID          string
 	LastSeen        time.Time
+	Name            string
+	Identifier      string
+	Brand           string
+	Type            string
+	Model           string
 }
 
 type DiscoveredPartnerV1 struct {
@@ -357,6 +374,8 @@ type operatorAdminV1Transition struct {
 
 type operatorAdminV1SnapshotFacts struct {
 	capturedAt     time.Time
+	localSKI       string
+	localSHIPID    string
 	status         string
 	window         string
 	windowDeadline time.Time
@@ -371,11 +390,21 @@ type operatorAdminV1SnapshotFacts struct {
 }
 
 type operatorAdminV1TrustedFact struct {
-	reference  string
-	ski        string
-	trustState string
-	shipID     string
-	lastSeen   time.Time
+	reference       string
+	ski             string
+	endpoint        string
+	trustState      string
+	connectionState string
+	shipID          string
+	lastSeen        time.Time
+	name            string
+	identifier      string
+	brand           string
+	typeName        string
+	model           string
+	retryState      string
+	retryDeadline   time.Time
+	retryAdmitted   bool
 }
 
 type operatorAdminV1ConnectedFact struct {
@@ -385,6 +414,11 @@ type operatorAdminV1ConnectedFact struct {
 	connectionState string
 	shipID          string
 	lastSeen        time.Time
+	name            string
+	identifier      string
+	brand           string
+	typeName        string
+	model           string
 }
 
 type operatorAdminV1DiscoveredFact struct {
@@ -794,6 +828,8 @@ func (admin *operatorAdminV1Reducer) snapshotLocked(view AdminViewV1) (AdminSnap
 	snapshot := AdminSnapshotV1{
 		StateRevision:   admin.revision,
 		CapturedAt:      admin.facts.capturedAt,
+		LocalSKI:        admin.facts.localSKI,
+		LocalSHIPID:     admin.facts.localSHIPID,
 		Status:          admin.facts.status,
 		Window:          admin.facts.window,
 		WindowDeadline:  admin.facts.windowDeadline,
@@ -819,8 +855,11 @@ func (admin *operatorAdminV1Reducer) snapshotLocked(view AdminViewV1) (AdminSnap
 		snapshot.Trusted = make([]TrustedPartnerV1, len(admin.facts.trusted))
 		for index, fact := range admin.facts.trusted {
 			snapshot.Trusted[index] = TrustedPartnerV1{
-				Partner: PartnerHandleV1{token: tokens[index]}, SKI: fact.ski, TrustState: fact.trustState,
-				SHIPID: fact.shipID, LastSeen: fact.lastSeen,
+				Partner: PartnerHandleV1{token: tokens[index]}, SKI: fact.ski, Endpoint: fact.endpoint,
+				TrustState: fact.trustState, ConnectionState: fact.connectionState,
+				SHIPID: fact.shipID, LastSeen: fact.lastSeen, Name: fact.name, Identifier: fact.identifier,
+				Brand: fact.brand, Type: fact.typeName, Model: fact.model,
+				RetryState: fact.retryState, RetryDeadline: fact.retryDeadline, RetryAdmitted: fact.retryAdmitted,
 			}
 		}
 	case AdminViewV1Connected:
@@ -829,6 +868,7 @@ func (admin *operatorAdminV1Reducer) snapshotLocked(view AdminViewV1) (AdminSnap
 			snapshot.Connected[index] = ConnectedPartnerV1{
 				SKI: fact.ski, Endpoint: fact.endpoint, TrustState: fact.trustState,
 				ConnectionState: fact.connectionState, SHIPID: fact.shipID, LastSeen: fact.lastSeen,
+				Name: fact.name, Identifier: fact.identifier, Brand: fact.brand, Type: fact.typeName, Model: fact.model,
 			}
 		}
 	case AdminViewV1Discovered:
@@ -1102,7 +1142,9 @@ func validateOperatorAdminV1Precondition(precondition MutationPreconditionV1) *A
 }
 
 func validateOperatorAdminV1Facts(facts operatorAdminV1SnapshotFacts) *AdminErrorV1 {
-	if facts.capturedAt.IsZero() || !validOperatorAdminV1Status(facts.status) ||
+	if facts.capturedAt.IsZero() || !validOperatorAdminV1SKI(facts.localSKI) ||
+		facts.localSHIPID == "" || !validOperatorAdminV1OptionalText(facts.localSHIPID) ||
+		!validOperatorAdminV1Status(facts.status) ||
 		!validOperatorAdminV1Status(facts.window) || !validOperatorAdminV1Status(facts.register) ||
 		!validOperatorAdminV1Status(facts.listener) || !validOperatorAdminV1Status(facts.discovery) ||
 		facts.window == "open" && facts.windowDeadline.IsZero() || !validOperatorAdminV1DegradedCode(facts.degraded) {
@@ -1117,7 +1159,11 @@ func validateOperatorAdminV1Facts(facts operatorAdminV1SnapshotFacts) *AdminErro
 	seenTrusted := make(map[string]struct{}, len(facts.trusted))
 	for _, fact := range facts.trusted {
 		if !validOperatorAdminV1Reference(fact.reference) || !validOperatorAdminV1SKI(fact.ski) ||
-			!validOperatorAdminV1Status(fact.trustState) || !validOperatorAdminV1OptionalText(fact.shipID) {
+			!validOperatorAdminV1Endpoint(fact.endpoint) || !validOperatorAdminV1Status(fact.trustState) ||
+			!validOperatorAdminV1Status(fact.connectionState) || !validOperatorAdminV1OptionalText(fact.shipID) ||
+			!validOperatorAdminV1OptionalText(fact.name) || !validOperatorAdminV1OptionalText(fact.identifier) ||
+			!validOperatorAdminV1OptionalText(fact.brand) || !validOperatorAdminV1OptionalText(fact.typeName) ||
+			!validOperatorAdminV1OptionalText(fact.model) || !validOperatorAdminV1RetryFact(facts.capturedAt, fact) {
 			return newAdminBoundaryUnavailableV1()
 		}
 		if _, duplicate := seenTrusted[fact.reference]; duplicate {
@@ -1128,7 +1174,9 @@ func validateOperatorAdminV1Facts(facts operatorAdminV1SnapshotFacts) *AdminErro
 	for _, fact := range facts.connected {
 		if !validOperatorAdminV1SKI(fact.ski) || !validOperatorAdminV1Endpoint(fact.endpoint) ||
 			!validOperatorAdminV1Status(fact.connectionState) || !validOperatorAdminV1Status(fact.trustState) ||
-			!validOperatorAdminV1OptionalText(fact.shipID) {
+			!validOperatorAdminV1OptionalText(fact.shipID) || !validOperatorAdminV1OptionalText(fact.name) ||
+			!validOperatorAdminV1OptionalText(fact.identifier) || !validOperatorAdminV1OptionalText(fact.brand) ||
+			!validOperatorAdminV1OptionalText(fact.typeName) || !validOperatorAdminV1OptionalText(fact.model) {
 			return newAdminBoundaryUnavailableV1()
 		}
 	}
@@ -1158,6 +1206,21 @@ func validateOperatorAdminV1Facts(facts operatorAdminV1SnapshotFacts) *AdminErro
 		seenCandidates[fact.reference] = struct{}{}
 	}
 	return nil
+}
+
+func validOperatorAdminV1RetryFact(capturedAt time.Time, fact operatorAdminV1TrustedFact) bool {
+	switch fact.retryState {
+	case "":
+		return fact.retryDeadline.IsZero() && !fact.retryAdmitted
+	case "RETRY_READY":
+		return fact.retryDeadline.IsZero()
+	case "BACKOFF_ACTIVE":
+		return !fact.retryDeadline.IsZero() && !fact.retryDeadline.Before(capturedAt) && !fact.retryAdmitted
+	case "ADMIN_HOLD":
+		return fact.retryDeadline.IsZero() && !fact.retryAdmitted
+	default:
+		return false
+	}
 }
 
 func validOperatorAdminV1Status(value string) bool {
@@ -1217,6 +1280,7 @@ func cloneOperatorAdminV1Facts(source operatorAdminV1SnapshotFacts) operatorAdmi
 
 func equalOperatorAdminV1Facts(left, right operatorAdminV1SnapshotFacts) bool {
 	if left.status != right.status || left.window != right.window || !left.windowDeadline.Equal(right.windowDeadline) ||
+		left.localSKI != right.localSKI || left.localSHIPID != right.localSHIPID ||
 		left.register != right.register || left.listener != right.listener || left.discovery != right.discovery ||
 		left.degraded != right.degraded {
 		return false

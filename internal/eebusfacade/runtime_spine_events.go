@@ -90,15 +90,19 @@ func (handler *runtimeServiceHandler) HandleEvent(payload spineapi.EventPayload)
 		return
 	}
 	remote := service.LocalDevice().RemoteDeviceForSki(ski)
-	if !sameRuntimeRemoteDevice(remote, payload.Device) {
-		return
+	if payload.EventType != spineapi.EventTypeDeviceChange || payload.ChangeType != spineapi.ElementChangeRemove {
+		if !sameRuntimeRemoteDevice(remote, payload.Device) {
+			return
+		}
 	}
 	devices, err := runtimeDevicesForRemoteDevice(remote, ski)
 	if err != nil {
 		handler.report(err)
 		return
 	}
-	if len(devices) == 0 {
+	devices, err = exactRuntimeDeviceCollection(devices)
+	if err != nil {
+		handler.report(err)
 		return
 	}
 	handler.enqueueSPINERefresh(ski, runtimeSPINERefresh{
@@ -110,7 +114,8 @@ func runtimeTopologyEvent(payload spineapi.EventPayload) bool {
 	switch payload.EventType {
 	case spineapi.EventTypeDeviceChange:
 		return payload.ChangeType == spineapi.ElementChangeAdd ||
-			payload.ChangeType == spineapi.ElementChangeUpdate
+			payload.ChangeType == spineapi.ElementChangeUpdate ||
+			payload.ChangeType == spineapi.ElementChangeRemove
 	case spineapi.EventTypeEntityChange:
 		return true
 	case spineapi.EventTypeDataChange:
@@ -142,17 +147,6 @@ func (handler *runtimeServiceHandler) enqueueSPINERefresh(ski string, refresh ru
 		observation.SessionIndex != refresh.sessionIndex {
 		handler.mu.Unlock()
 		return
-	}
-	if pending, exists := handler.spinePending[ski]; exists &&
-		pending.generation == refresh.generation &&
-		pending.sessionIndex == refresh.sessionIndex {
-		merged, err := mergeRuntimeDeviceCollections(pending.devices, refresh.devices)
-		if err != nil {
-			handler.mu.Unlock()
-			handler.report(err)
-			return
-		}
-		refresh.devices = merged
 	}
 	handler.spinePending[ski] = refresh
 	wake := handler.spineWake
@@ -217,13 +211,13 @@ func (handler *runtimeServiceHandler) updateRemoteFromSPINEEvent(
 		handler.mu.Unlock()
 		return
 	}
-	merged, err := mergeRuntimeDeviceCollections(observation.Devices, devices)
+	exact, err := exactRuntimeDeviceCollection(devices)
 	if err != nil {
 		handler.mu.Unlock()
 		handler.report(err)
 		return
 	}
-	observation.Devices = merged
+	observation.Devices = exact
 	observation.Since = handler.timestamp()
 	if err := handler.reducer.Replace(observation); err != nil {
 		handler.mu.Unlock()

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
 
 	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
@@ -93,6 +94,7 @@ type firstTrustFacade struct {
 	pairingRegistration bool
 	connections         map[string]*firstTrustConnection
 	withdrawals         map[string]chan struct{}
+	remoteMetadata      map[string]operatorAdminV1BridgeRawMetadata
 
 	pairingRegistrationFault bool
 }
@@ -101,10 +103,11 @@ var _ eebusapi.ServiceReaderInterface = (*firstTrustFacade)(nil)
 
 func newFirstTrustFacade(service firstTrustService, coordinator firstTrustEventSink) (*firstTrustFacade, error) {
 	facade := &firstTrustFacade{
-		service:     service,
-		coordinator: coordinator,
-		connections: make(map[string]*firstTrustConnection),
-		withdrawals: make(map[string]chan struct{}),
+		service:        service,
+		coordinator:    coordinator,
+		connections:    make(map[string]*firstTrustConnection),
+		withdrawals:    make(map[string]chan struct{}),
+		remoteMetadata: make(map[string]operatorAdminV1BridgeRawMetadata),
 	}
 	if service != nil {
 		service.SetAutoAccept(false)
@@ -343,7 +346,30 @@ func (facade *firstTrustFacade) acknowledgeBlockedDisconnect(normalized string) 
 	return true
 }
 
-func (*firstTrustFacade) VisibleRemoteServicesUpdated(eebusapi.ServiceInterface, []shipapi.RemoteService) {
+func (facade *firstTrustFacade) VisibleRemoteServicesUpdated(_ eebusapi.ServiceInterface, services []shipapi.RemoteService) {
+	if facade == nil || len(services) > operatorAdminV1BridgeMaximumRows {
+		return
+	}
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	if facade.remoteMetadata == nil {
+		facade.remoteMetadata = make(map[string]operatorAdminV1BridgeRawMetadata)
+	}
+	for _, service := range services {
+		ski := strings.ToLower(strings.TrimSpace(service.Ski))
+		if !validOperatorAdminV1BridgeSKI(ski) {
+			continue
+		}
+		metadata := facade.remoteMetadata[ski]
+		mergeOperatorAdminV1BridgeMetadata(&metadata, operatorAdminV1BridgeRawMetadata{
+			name: strings.TrimSpace(service.Name), identifier: strings.TrimSpace(service.Identifier),
+			brand: strings.TrimSpace(service.Brand), typeName: strings.TrimSpace(service.Type),
+			model: strings.TrimSpace(service.Model),
+		})
+		if validOperatorAdminV1BridgeMetadata(metadata) {
+			facade.remoteMetadata[ski] = metadata
+		}
+	}
 }
 
 func (facade *firstTrustFacade) VisiblePairingCandidatesUpdated(_ eebusapi.ServiceInterface, candidates []shipapi.PairingCandidateRef) {
@@ -659,9 +685,23 @@ func (facade *firstTrustFacade) operatorAdminV1ConnectedSnapshot() []operatorAdm
 		}
 		connected = append(connected, operatorAdminV1BridgeRawConnected{
 			ski: normalized, trustState: trustState, connectionState: "connected", shipID: connection.shipID,
+			metadata: facade.remoteMetadata[normalized],
 		})
 	}
 	return connected
+}
+
+func (facade *firstTrustFacade) operatorAdminV1MetadataSnapshot() map[string]operatorAdminV1BridgeRawMetadata {
+	if facade == nil {
+		return nil
+	}
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	result := make(map[string]operatorAdminV1BridgeRawMetadata, len(facade.remoteMetadata))
+	for ski, metadata := range facade.remoteMetadata {
+		result[ski] = metadata
+	}
+	return result
 }
 
 func (facade *firstTrustFacade) setWaiting(value bool) error {
@@ -801,6 +841,13 @@ func (facade *firstTrustFacade) disconnectRemote(remote []byte) (acknowledged <-
 	if facade.withdrawals[normalized] != nil {
 		facade.mu.Unlock()
 		return nil, false
+	}
+	connection := facade.connections[normalized]
+	if connection == nil || !connection.connected {
+		facade.mu.Unlock()
+		acknowledgment := make(chan struct{})
+		close(acknowledgment)
+		return acknowledgment, true
 	}
 	acknowledgment := make(chan struct{})
 	facade.withdrawals[normalized] = acknowledgment

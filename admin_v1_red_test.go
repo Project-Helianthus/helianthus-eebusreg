@@ -271,6 +271,7 @@ func TestAdminV1ReducerLifecycleAndExactSnapshotViews(t *testing.T) {
 	assertOperatorAdminV1ViewLengths(t, trusted, 1, 0, 0, 0)
 	if trusted.StateRevision != 1 || adminV1HandleField[PartnerHandleV1](t, trusted.Trusted[0], "Partner") == (PartnerHandleV1{}) ||
 		!adminV1TimeField(t, trusted, "CapturedAt").Equal(operatorAdminV1TestFacts().capturedAt) ||
+		trusted.LocalSKI != operatorAdminV1TestSKI || trusted.LocalSHIPID != "HLS-operator-admin-v1-test" ||
 		trusted.Status != "ready" || trusted.Window != "open" || trusted.WindowDeadline.IsZero() ||
 		trusted.Register != "enabled" || trusted.Listener != "ready" || trusted.Discovery != "ready" ||
 		trusted.DegradedCode != "" || trusted.TrustedCount != 1 || trusted.ConnectedCount != 1 ||
@@ -1244,6 +1245,8 @@ func (backend *operatorAdminV1TestBackend) setFacts(facts operatorAdminV1Snapsho
 func operatorAdminV1TestFacts() operatorAdminV1SnapshotFacts {
 	return operatorAdminV1SnapshotFacts{
 		capturedAt:     time.Unix(2_000_000_000, 0),
+		localSKI:       operatorAdminV1TestSKI,
+		localSHIPID:    "HLS-operator-admin-v1-test",
 		status:         "ready",
 		window:         "open",
 		windowDeadline: time.Unix(2_000_000_000, 0).Add(time.Minute),
@@ -1251,7 +1254,8 @@ func operatorAdminV1TestFacts() operatorAdminV1SnapshotFacts {
 		listener:       "ready",
 		discovery:      "ready",
 		trusted: []operatorAdminV1TrustedFact{{
-			reference: "partner-reference", ski: operatorAdminV1TestSKI, trustState: "trusted",
+			reference: "partner-reference", ski: operatorAdminV1TestSKI, trustState: "trusted", connectionState: "idle",
+			name: "owner peer", identifier: "owner-id", brand: "owner-brand", typeName: "owner-type", model: "owner-model",
 		}},
 		connected: []operatorAdminV1ConnectedFact{{
 			ski: operatorAdminV1TestSKI, endpoint: "192.0.2.10:4712", trustState: "trusted",
