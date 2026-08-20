@@ -28,4 +28,3 @@ func TestIssue122PINConnectFailuresExposeOnlyClosedCategories(t *testing.T) {
 		t.Fatalf("unrecognized error maps to %q, want secret-free unknown_state", got)
 	}
 }
-

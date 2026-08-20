@@ -28,8 +28,8 @@ func TestIssue83DependencyClosurePinsExactExecutorRelease(t *testing.T) {
 		got[requirement.Mod.Path] = requirement.Mod.Version
 	}
 	want := map[string]string{
-		"github.com/Project-Helianthus/helianthus-eebus-go": "v0.7.1-helianthus.17",
-		"github.com/Project-Helianthus/helianthus-ship-go":  "v0.6.1-helianthus.15",
+		"github.com/Project-Helianthus/helianthus-eebus-go": "v0.7.1-helianthus.18",
+		"github.com/Project-Helianthus/helianthus-ship-go":  "v0.6.1-helianthus.16",
 		"github.com/Project-Helianthus/helianthus-spine-go": "v0.7.1-helianthus.9",
 	}
 	for path, version := range want {

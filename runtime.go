@@ -551,6 +551,15 @@ func (backend *facadeRuntimeBackend) connectOperatorAdminV1(ctx context.Context,
 	return operatorAdminV1TransitionFromFacade(transition), operatorAdminV1FacadeFailure(failure)
 }
 
+func (backend *facadeRuntimeBackend) connectOperatorAdminV1WithPIN(ctx context.Context, reference string, provider operatorAdminV1PINProvider) (operatorAdminV1Transition, *AdminErrorV1) {
+	internal := backend.operatorAdminV1InternalBackend()
+	if internal == nil || provider == nil {
+		return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+	}
+	transition, failure := internal.OperatorAdminV1ConnectWithPIN(ctx, reference, provider)
+	return operatorAdminV1TransitionFromFacade(transition), operatorAdminV1FacadeFailure(failure)
+}
+
 func (backend *facadeRuntimeBackend) confirmOperatorAdminV1(ctx context.Context, reference, expectedSKI string) (operatorAdminV1Transition, *AdminErrorV1) {
 	internal := backend.operatorAdminV1InternalBackend()
 	if internal == nil {

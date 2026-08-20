@@ -68,12 +68,12 @@ func TestIssue122InvalidConnectPINFailsBeforeSelectionOrServiceEffect(t *testing
 	snapshot, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
 	requireAdminV1Success(t, failure)
 	for _, pin := range [][]byte{
-		{},                         // empty-but-present
-		[]byte("a1b2c3d"),          // seven bytes
+		{},                          // empty-but-present
+		[]byte("a1b2c3d"),           // seven bytes
 		[]byte("a1b2c3d4e5f607182"), // seventeen bytes
-		[]byte("a1b2c3dg"),         // non-hex
-		[]byte("a1b2 c3d"),         // whitespace
-		[]byte("a1b2c3d\xc2\xa0"), // non-ASCII whitespace
+		[]byte("a1b2c3dg"),          // non-hex
+		[]byte("a1b2 c3d"),          // whitespace
+		[]byte("a1b2c3d\xc2\xa0"),   // non-ASCII whitespace
 	} {
 		_, failure := admin.Connect(context.Background(), ConnectRequestV1{
 			MutationPreconditionV1: MutationPreconditionV1{
@@ -93,7 +93,7 @@ func TestIssue122InvalidConnectPINFailsBeforeSelectionOrServiceEffect(t *testing
 	// A nil PIN remains omission, not an invalid supplied value.
 	_, failure = admin.Connect(context.Background(), ConnectRequestV1{
 		MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "pin-omitted", ExpectedStateRevision: snapshot.StateRevision},
-		PIN:                     nil,
+		PIN:                    nil,
 	})
 	if failure == nil || failure.Code == AdminErrorCodeV1InvalidRequest {
 		t.Fatalf("omitted PIN failure = %#v, must not be invalid_request", failure)
@@ -118,9 +118,17 @@ func TestIssue122TransientPINOwnsAndClearsMutableBytesWithoutRendering(t *testin
 	if payload, err := json.Marshal(pin); err == nil || len(payload) != 0 {
 		t.Fatalf("transient PIN JSON = %q/%v, want refusal", payload, err)
 	}
-	pin.clear()
+	provided, err := pin.WithTransientPIN("", func(value []byte) error {
+		if string(value) != "a1b2c3d4" {
+			t.Fatalf("owned PIN = %q, want original copied value", value)
+		}
+		return nil
+	})
+	if !provided || err != nil {
+		t.Fatalf("one-shot PIN provider=%t/%v, want true/nil", provided, err)
+	}
 	if !pin.cleared() {
-		t.Fatal("transient PIN did not clear owned bytes")
+		t.Fatal("transient PIN did not clear owned bytes after consume")
 	}
 }
 
@@ -1233,6 +1241,13 @@ func (backend *operatorAdminV1TestBackend) selectOperatorAdminV1(_ context.Conte
 
 func (backend *operatorAdminV1TestBackend) connectOperatorAdminV1(_ context.Context, reference string) (operatorAdminV1Transition, *AdminErrorV1) {
 	return backend.effect("connect", reference)
+}
+
+func (backend *operatorAdminV1TestBackend) connectOperatorAdminV1WithPIN(_ context.Context, reference string, provider operatorAdminV1PINProvider) (operatorAdminV1Transition, *AdminErrorV1) {
+	if provider == nil {
+		return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+	}
+	return backend.effect("connect_pin", reference)
 }
 
 func (backend *operatorAdminV1TestBackend) confirmOperatorAdminV1(_ context.Context, reference, expectedSKI string) (operatorAdminV1Transition, *AdminErrorV1) {

@@ -88,6 +88,52 @@ func TestOperatorAdminV1BridgeSelectReservesWithoutDialAndConnectsAtMostOnce(t *
 	}
 }
 
+func TestIssue122BridgeForwardsPINReservationAndProviderExactlyOnce(t *testing.T) {
+	fixture := newMSP04BFixture(t, "commit_durable")
+	coordinator := fixture.coordinator.(*firstTrustCoordinator)
+	service := newOperatorAdminV1BridgeServiceSpy()
+	bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 701})
+	if transition, failure := bridge.openOperatorAdminV1(context.Background(), time.Minute); failure != "" || !transition.changed {
+		t.Fatalf("open=%#v/%q", transition, failure)
+	}
+	coordinator.visiblePairingCandidatesUpdated([]shipapi.PairingCandidateRef{{
+		CandidateRef: "issue122-candidate", SKI: operatorAdminV1BridgeTestSKI,
+	}})
+	snapshot, failure := bridge.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, failure)
+	selection, transition, failure := bridge.selectOperatorAdminV1(context.Background(), snapshot.discovered[0].reference, operatorAdminV1BridgeTestSKI)
+	if failure != "" || !transition.changed || selection == "" {
+		t.Fatalf("select=%q/%#v/%q", selection, transition, failure)
+	}
+	provider := shipapi.TransientPINProviderFunc(func(_ string, consume func([]byte) error) (bool, error) {
+		return true, consume([]byte("a1b2c3d4"))
+	})
+	transition, failure = bridge.connectOperatorAdminV1WithPIN(context.Background(), selection, provider)
+	if failure != "" || !transition.changed || transition.outcome != "connection_started" {
+		t.Fatalf("connect with PIN=%#v/%q", transition, failure)
+	}
+	selectCalls, connectCalls, pinCalls, _, _, reservation, received := service.snapshotPIN()
+	if selectCalls != 1 || connectCalls != 0 || pinCalls != 1 || !reservation.Matches(service.reservation) || received == nil {
+		t.Fatalf("PIN forwarding=%d/%d/%d reservation=%#v provider=%#v, want select 1/plain 0/PIN 1/exact/opaque", selectCalls, connectCalls, pinCalls, reservation, received)
+	}
+	if _, failure = bridge.connectOperatorAdminV1WithPIN(context.Background(), selection, provider); failure == "" {
+		t.Fatal("consumed selection allowed a second PIN connect")
+	}
+	_, _, pinCalls, _, _, _, _ = service.snapshotPIN()
+	if pinCalls != 1 {
+		t.Fatalf("PIN connect calls=%d, want exactly one", pinCalls)
+	}
+
+	var typedNil *issue122PINProvider
+	if err := callOperatorAdminV1ConnectWithPIN(service, service.reservation, typedNil); !errors.Is(err, shipapi.ErrPINProviderInvalid) {
+		t.Fatalf("typed-nil provider error=%v, want %v", err, shipapi.ErrPINProviderInvalid)
+	}
+	_, _, pinCalls, _, _, _, _ = service.snapshotPIN()
+	if pinCalls != 1 {
+		t.Fatalf("typed-nil provider reached downstream PIN controller %d times", pinCalls)
+	}
+}
+
 func TestOperatorAdminV1BridgeTerminalCandidateLifecycleRetiresSelections(t *testing.T) {
 	fixture := newMSP04BFixture(t, "commit_durable")
 	coordinator := fixture.coordinator.(*firstTrustCoordinator)
@@ -594,11 +640,13 @@ type operatorAdminV1BridgeServiceSpy struct {
 
 	selectCalls  int
 	connectCalls int
+	pinCalls     int
 	retryCalls   int
 	selectedRef  string
 	selectedSKI  string
 	retrySKI     string
 	connected    shipapi.PairingCandidateReservation
+	pinProvider  shipapi.TransientPINProvider
 }
 
 func newOperatorAdminV1BridgeServiceSpy() *operatorAdminV1BridgeServiceSpy {
@@ -627,6 +675,18 @@ func (service *operatorAdminV1BridgeServiceSpy) ConnectPairingCandidate(reservat
 	return service.connectErr
 }
 
+func (service *operatorAdminV1BridgeServiceSpy) ConnectPairingCandidateWithPIN(reservation shipapi.PairingCandidateReservation, provider shipapi.TransientPINProvider) error {
+	service.mu.Lock()
+	service.pinCalls++
+	service.connected = reservation
+	service.pinProvider = provider
+	service.mu.Unlock()
+	if provider == nil {
+		return shipapi.ErrPINProviderInvalid
+	}
+	return service.connectErr
+}
+
 func (service *operatorAdminV1BridgeServiceSpy) RetryTrustedRemote(expectedSKI string) error {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -639,6 +699,18 @@ func (service *operatorAdminV1BridgeServiceSpy) snapshot() (int, int, int, strin
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	return service.selectCalls, service.connectCalls, service.retryCalls, service.selectedRef, service.selectedSKI, service.connected
+}
+
+func (service *operatorAdminV1BridgeServiceSpy) snapshotPIN() (int, int, int, string, string, shipapi.PairingCandidateReservation, shipapi.TransientPINProvider) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	return service.selectCalls, service.connectCalls, service.pinCalls, service.selectedRef, service.selectedSKI, service.connected, service.pinProvider
+}
+
+type issue122PINProvider struct{}
+
+func (*issue122PINProvider) WithTransientPIN(string, func([]byte) error) (bool, error) {
+	return false, nil
 }
 
 func requireOperatorAdminV1BridgeSuccess[T ~string](t *testing.T, failure T) {
