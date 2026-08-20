@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 )
@@ -44,6 +45,8 @@ type OperatorAdminV1Transition struct {
 
 type OperatorAdminV1Snapshot struct {
 	CapturedAt     time.Time
+	LocalSKI       string
+	LocalSHIPID    string
 	Status         string
 	Window         string
 	WindowDeadline time.Time
@@ -74,6 +77,9 @@ type OperatorAdminV1Fact struct {
 	State               string
 	ExpiresAt           time.Time
 	AssociationComplete bool
+	RetryState          string
+	RetryDeadline       time.Time
+	RetryAdmitted       bool
 }
 
 type operatorAdminV1BridgeTransition struct {
@@ -83,6 +89,8 @@ type operatorAdminV1BridgeTransition struct {
 
 type operatorAdminV1BridgeSnapshot struct {
 	capturedAt     time.Time
+	localSKI       string
+	localSHIPID    string
 	status         string
 	window         string
 	windowDeadline time.Time
@@ -113,6 +121,14 @@ type operatorAdminV1BridgeFact struct {
 	state               string
 	expiresAt           time.Time
 	associationComplete bool
+	retryState          string
+	retryDeadline       time.Time
+	retryAdmitted       bool
+}
+
+type operatorAdminV1BridgeLocalIdentity struct {
+	ski    string
+	shipID string
 }
 
 type operatorAdminV1BridgePartnerBinding struct {
@@ -150,6 +166,8 @@ type operatorAdminV1Bridge struct {
 	coordinator *firstTrustCoordinator
 	service     operatorAdminV1Service
 	random      io.Reader
+	localSKI    string
+	localSHIPID string
 	closed      bool
 
 	partners     map[string]operatorAdminV1BridgePartnerBinding
@@ -162,6 +180,8 @@ type operatorAdminV1Bridge struct {
 
 type operatorAdminV1BridgeRawSnapshot struct {
 	capturedAt     time.Time
+	localSKI       string
+	localSHIPID    string
 	status         string
 	window         string
 	windowDeadline time.Time
@@ -176,13 +196,19 @@ type operatorAdminV1BridgeRawSnapshot struct {
 }
 
 type operatorAdminV1BridgeRawPartner struct {
-	target      string
-	ski         string
-	association [32]byte
-	durable     bool
-	trustState  string
-	shipID      string
-	lastSeen    time.Time
+	target          string
+	ski             string
+	association     [32]byte
+	durable         bool
+	trustState      string
+	shipID          string
+	lastSeen        time.Time
+	endpoint        string
+	connectionState string
+	retryState      string
+	retryDeadline   time.Time
+	retryAdmitted   bool
+	metadata        operatorAdminV1BridgeRawMetadata
 }
 
 type operatorAdminV1BridgeRawConnected struct {
@@ -192,6 +218,15 @@ type operatorAdminV1BridgeRawConnected struct {
 	connectionState string
 	shipID          string
 	lastSeen        time.Time
+	metadata        operatorAdminV1BridgeRawMetadata
+}
+
+type operatorAdminV1BridgeRawMetadata struct {
+	name       string
+	identifier string
+	brand      string
+	typeName   string
+	model      string
 }
 
 type operatorAdminV1BridgeRawObservation struct {
@@ -212,8 +247,9 @@ func newOperatorAdminV1Bridge(
 	coordinator *firstTrustCoordinator,
 	service operatorAdminV1Service,
 	random io.Reader,
+	identities ...operatorAdminV1BridgeLocalIdentity,
 ) *operatorAdminV1Bridge {
-	return &operatorAdminV1Bridge{
+	bridge := &operatorAdminV1Bridge{
 		coordinator:  coordinator,
 		service:      service,
 		random:       random,
@@ -224,6 +260,12 @@ func newOperatorAdminV1Bridge(
 		operationIDs: make(map[[32]byte]struct{}),
 		operations:   make(map[string]struct{}),
 	}
+	if len(identities) == 1 && validOperatorAdminV1BridgeSKI(identities[0].ski) &&
+		validOperatorAdminV1BridgeText(identities[0].shipID) && identities[0].shipID != "" {
+		bridge.localSKI = identities[0].ski
+		bridge.localSHIPID = identities[0].shipID
+	}
+	return bridge
 }
 
 func (backend *serviceBackend) operatorAdminV1Bridge() *operatorAdminV1Bridge {
@@ -328,7 +370,8 @@ func exportOperatorAdminV1Transition(source operatorAdminV1BridgeTransition) Ope
 
 func exportOperatorAdminV1Snapshot(source operatorAdminV1BridgeSnapshot) OperatorAdminV1Snapshot {
 	return OperatorAdminV1Snapshot{
-		CapturedAt: source.capturedAt, Status: source.status, Window: source.window,
+		CapturedAt: source.capturedAt, LocalSKI: source.localSKI, LocalSHIPID: source.localSHIPID,
+		Status: source.status, Window: source.window,
 		WindowDeadline: source.windowDeadline, Register: source.register, Listener: source.listener,
 		Discovery: source.discovery, Degraded: source.degraded,
 		Trusted: exportOperatorAdminV1Facts(source.trusted), Connected: exportOperatorAdminV1Facts(source.connected),
@@ -348,6 +391,7 @@ func exportOperatorAdminV1Facts(source []operatorAdminV1BridgeFact) []OperatorAd
 			ObservationRevision: fact.observationRevision, Name: fact.name, Identifier: fact.identifier,
 			Brand: fact.brand, Type: fact.typeName, Model: fact.model, State: fact.state,
 			ExpiresAt: fact.expiresAt, AssociationComplete: fact.associationComplete,
+			RetryState: fact.retryState, RetryDeadline: fact.retryDeadline, RetryAdmitted: fact.retryAdmitted,
 		}
 	}
 	return result
@@ -665,7 +709,8 @@ func (bridge *operatorAdminV1Bridge) captureRawSnapshot() (operatorAdminV1Bridge
 		windowDeadline = coordinator.window.deadline
 	}
 	raw := operatorAdminV1BridgeRawSnapshot{
-		capturedAt: now, status: operatorAdminV1CoordinatorStatusLocked(coordinator), window: window,
+		capturedAt: now, localSKI: bridge.localSKI, localSHIPID: bridge.localSHIPID,
+		status: operatorAdminV1CoordinatorStatusLocked(coordinator), window: window,
 		windowDeadline: windowDeadline, register: register, listener: listener, discovery: discovery, degraded: degraded,
 	}
 	seenTrusted := make(map[string]struct{})
@@ -680,9 +725,11 @@ func (bridge *operatorAdminV1Bridge) captureRawSnapshot() (operatorAdminV1Bridge
 			return operatorAdminV1BridgeRawSnapshot{}, "unknown_state"
 		}
 		seenTrusted[ski] = struct{}{}
+		retryState, retryDeadline, retryAdmitted := operatorAdminV1BridgeRetryStateLocked(coordinator, association.reference, ski, now)
 		raw.trusted = append(raw.trusted, operatorAdminV1BridgeRawPartner{
 			target: hex.EncodeToString(association.reference[:]), ski: ski, association: association.reference,
-			durable: true, trustState: "trusted", shipID: association.service,
+			durable: true, trustState: "trusted", shipID: association.service, connectionState: "idle",
+			retryState: retryState, retryDeadline: retryDeadline, retryAdmitted: retryAdmitted,
 		})
 	}
 	for _, candidate := range coordinator.discoveredCandidates {
@@ -722,6 +769,24 @@ func (bridge *operatorAdminV1Bridge) captureRawSnapshot() (operatorAdminV1Bridge
 
 	if facade, ok := effects.(*firstTrustFacade); ok {
 		raw.connected = facade.operatorAdminV1ConnectedSnapshot()
+		metadata := facade.operatorAdminV1MetadataSnapshot()
+		connectedBySKI := make(map[string]operatorAdminV1BridgeRawConnected, len(raw.connected))
+		for _, connected := range raw.connected {
+			connectedBySKI[connected.ski] = connected
+		}
+		for index := range raw.trusted {
+			partner := &raw.trusted[index]
+			partner.metadata = metadata[partner.ski]
+			if connected, exists := connectedBySKI[partner.ski]; exists {
+				partner.endpoint = connected.endpoint
+				partner.connectionState = connected.connectionState
+				partner.lastSeen = connected.lastSeen
+				if connected.shipID != "" {
+					partner.shipID = connected.shipID
+				}
+				mergeOperatorAdminV1BridgeMetadata(&partner.metadata, connected.metadata)
+			}
+		}
 	}
 	if len(raw.trusted) > operatorAdminV1BridgeMaximumRows || len(raw.connected) > operatorAdminV1BridgeMaximumRows ||
 		len(raw.discovered) > operatorAdminV1BridgeMaximumRows {
@@ -758,6 +823,33 @@ func operatorAdminV1CoordinatorStatusLocked(coordinator *firstTrustCoordinator) 
 	default:
 		return "DISABLED"
 	}
+}
+
+func operatorAdminV1BridgeRetryStateLocked(
+	coordinator *firstTrustCoordinator,
+	associationRef [32]byte,
+	ski string,
+	capturedAt time.Time,
+) (string, time.Time, bool) {
+	scope := firstTrustRuntimeRetryScope(ski)
+	_, record, exists := coordinator.firstTrustQuarantineLocked(scope)
+	if !exists || !firstTrustQuarantineRecordValid(record, coordinator.backoffPolicy) {
+		return "", time.Time{}, false
+	}
+	deadline := time.Time{}
+	if record.state == "BACKOFF_ACTIVE" {
+		remaining := record.remainingDelay
+		if arm, armed := coordinator.retryArms[scope]; armed && coordinator.monotonicNow != nil {
+			now := coordinator.monotonicNow()
+			remaining = 0
+			if now < arm.deadline {
+				remaining = arm.deadline - now
+			}
+		}
+		deadline = capturedAt.Add(remaining)
+	}
+	_, _, failure := coordinator.operatorAdminV1RetryResolutionLocked(associationRef, ski)
+	return record.state, deadline, failure == ""
 }
 
 func (bridge *operatorAdminV1Bridge) sanitizeSnapshot(raw operatorAdminV1BridgeRawSnapshot) (operatorAdminV1BridgeSnapshot, string) {
@@ -802,21 +894,28 @@ func (bridge *operatorAdminV1Bridge) sanitizeSnapshot(raw operatorAdminV1BridgeR
 	}
 
 	snapshot := operatorAdminV1BridgeSnapshot{
-		capturedAt: raw.capturedAt, status: raw.status, window: raw.window, windowDeadline: raw.windowDeadline,
+		capturedAt: raw.capturedAt, localSKI: raw.localSKI, localSHIPID: raw.localSHIPID,
+		status: raw.status, window: raw.window, windowDeadline: raw.windowDeadline,
 		register: raw.register, listener: raw.listener, discovery: raw.discovery, degraded: raw.degraded,
 		trusted: make([]operatorAdminV1BridgeFact, len(raw.trusted)), connected: make([]operatorAdminV1BridgeFact, len(raw.connected)),
 		discovered: make([]operatorAdminV1BridgeFact, len(raw.discovered)),
 	}
 	for index, partner := range raw.trusted {
 		snapshot.trusted[index] = operatorAdminV1BridgeFact{
-			reference: partnerRefs[partner.target], ski: partner.ski, trustState: partner.trustState,
+			reference: partnerRefs[partner.target], ski: partner.ski, endpoint: partner.endpoint,
+			trustState: partner.trustState, connectionState: partner.connectionState,
 			shipID: partner.shipID, lastSeen: partner.lastSeen,
+			name: partner.metadata.name, identifier: partner.metadata.identifier, brand: partner.metadata.brand,
+			typeName: partner.metadata.typeName, model: partner.metadata.model,
+			retryState: partner.retryState, retryDeadline: partner.retryDeadline, retryAdmitted: partner.retryAdmitted,
 		}
 	}
 	for index, connected := range raw.connected {
 		snapshot.connected[index] = operatorAdminV1BridgeFact{
 			ski: connected.ski, endpoint: connected.endpoint, trustState: connected.trustState,
 			connectionState: connected.connectionState, shipID: connected.shipID, lastSeen: connected.lastSeen,
+			name: connected.metadata.name, identifier: connected.metadata.identifier, brand: connected.metadata.brand,
+			typeName: connected.metadata.typeName, model: connected.metadata.model,
 		}
 	}
 	for index, observation := range raw.discovered {
@@ -1014,6 +1113,20 @@ func (coordinator *firstTrustCoordinator) operatorAdminV1RetryAdmission(
 	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
+	scope, recoveryAdmission, failure := coordinator.operatorAdminV1RetryResolutionLocked(associationRef, expectedSKI)
+	if failure != "" {
+		return [32]byte{}, false, failure
+	}
+	if recoveryAdmission {
+		coordinator.retryInflight[scope] = true
+	}
+	return scope, recoveryAdmission, ""
+}
+
+func (coordinator *firstTrustCoordinator) operatorAdminV1RetryResolutionLocked(
+	associationRef [32]byte,
+	expectedSKI string,
+) ([32]byte, bool, string) {
 	if coordinator.recoveryStore == nil || coordinator.anchor == nil || coordinator.reconciliationRequiredLocked() ||
 		coordinator.recoveryOperation != nil {
 		return [32]byte{}, false, "admin_boundary_unavailable"
@@ -1047,7 +1160,6 @@ func (coordinator *firstTrustCoordinator) operatorAdminV1RetryAdmission(
 		if coordinator.retryInflight[scope] {
 			return [32]byte{}, false, "candidate_busy"
 		}
-		coordinator.retryInflight[scope] = true
 		return scope, true, ""
 	case "BACKOFF_ACTIVE":
 		return [32]byte{}, false, "backoff_active"
@@ -1098,6 +1210,8 @@ func mapOperatorAdminV1CoordinatorOutcome(outcome string) string {
 		return "backoff_active"
 	case "commit_not_published", "commit_durability_unknown", "retry_state_failed_closed", "ready_transition_failed_closed", "revocation_withdrawal_incomplete":
 		return "persistence_failure"
+	case "disconnect_ack_timeout":
+		return "disconnect_ack_timeout"
 	case "already_trusted", "association_revoked", "revocation_conflict", "idempotency_expired":
 		return "trust_denied"
 	case "request_cancelled", "idempotency_conflict":
@@ -1208,6 +1322,40 @@ func operatorAdminV1BridgeContext(ctx context.Context) context.Context {
 func validOperatorAdminV1BridgeSKI(value string) bool {
 	decoded, normalized, ok := decodeFirstTrustSKI(value)
 	return ok && len(decoded) == 20 && normalized == value
+}
+
+func validOperatorAdminV1BridgeText(value string) bool {
+	return len(value) <= 256 && utf8.ValidString(value)
+}
+
+func validOperatorAdminV1BridgeMetadata(metadata operatorAdminV1BridgeRawMetadata) bool {
+	return validOperatorAdminV1BridgeText(metadata.name) && validOperatorAdminV1BridgeText(metadata.identifier) &&
+		validOperatorAdminV1BridgeText(metadata.brand) && validOperatorAdminV1BridgeText(metadata.typeName) &&
+		validOperatorAdminV1BridgeText(metadata.model)
+}
+
+func mergeOperatorAdminV1BridgeMetadata(
+	target *operatorAdminV1BridgeRawMetadata,
+	source operatorAdminV1BridgeRawMetadata,
+) {
+	if target == nil || !validOperatorAdminV1BridgeMetadata(source) {
+		return
+	}
+	if source.name != "" {
+		target.name = source.name
+	}
+	if source.identifier != "" {
+		target.identifier = source.identifier
+	}
+	if source.brand != "" {
+		target.brand = source.brand
+	}
+	if source.typeName != "" {
+		target.typeName = source.typeName
+	}
+	if source.model != "" {
+		target.model = source.model
+	}
 }
 
 func equalOperatorAdminV1CandidateBinding(left, right operatorAdminV1BridgeCandidateBinding) bool {

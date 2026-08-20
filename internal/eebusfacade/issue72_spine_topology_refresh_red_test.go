@@ -317,6 +317,7 @@ func TestIssue72TopologyEventsIncludeUseCaseDataAndExcludeDeviceRemoval(t *testi
 			payload: spineapi.EventPayload{
 				EventType: spineapi.EventTypeDeviceChange, ChangeType: spineapi.ElementChangeRemove,
 			},
+			want: true,
 		},
 	}
 	for _, test := range tests {

@@ -404,7 +404,12 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	var operatorAdmin *operatorAdminV1Bridge
 	if firstTrust != nil {
 		if adminService, ok := service.(operatorAdminV1Service); ok {
-			operatorAdmin = newOperatorAdminV1Bridge(firstTrust.coordinator, adminService, rand.Reader)
+			operatorAdmin = newOperatorAdminV1Bridge(
+				firstTrust.coordinator,
+				adminService,
+				rand.Reader,
+				operatorAdminV1BridgeLocalIdentity{ski: material.localSKI, shipID: canonicalRuntimeSHIPID(material.nodeToken)},
+			)
 		}
 	}
 	var rawMutations *eebusmutation.Coordinator
@@ -850,7 +855,7 @@ func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebu
 	if err != nil {
 		return nil, err
 	}
-	configuration.SetAlternateIdentifier("HLS-" + material.nodeToken)
+	configuration.SetAlternateIdentifier(canonicalRuntimeSHIPID(material.nodeToken))
 	configuration.SetAlternateMdnsServiceName("Helianthus EnergyManagementSystem eebusreg")
 	configuration.SetInterfaces([]string{config.Interface})
 	options := eebusservicebridge.ServiceOptions{
@@ -897,6 +902,10 @@ func canonicalRuntimeNodeToken(storeInstance [sha256.Size]byte) string {
 	_, _ = digest.Write([]byte("helianthus-eebus-node-v1\x00"))
 	_, _ = digest.Write(storeInstance[:])
 	return hex.EncodeToString(digest.Sum(nil)[:16])
+}
+
+func canonicalRuntimeSHIPID(nodeToken string) string {
+	return "HLS-" + nodeToken
 }
 
 func validRuntimeNodeToken(value string) bool {
@@ -989,6 +998,11 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		handler.report(err)
 		return
 	}
+	currentDevices, err := exactRuntimeDeviceCollection(devices)
+	if err != nil {
+		handler.report(err)
+		return
+	}
 	generation, allocationErr := handler.allocateRawFeatureConnectionGeneration(ski)
 	if allocationErr != nil {
 		handler.report(allocationErr)
@@ -1008,12 +1022,7 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		observation.SessionState = "connected"
 		observation.Visible = true
 		observation.Since = handler.timestamp()
-		merged, mergeErr := mergeRuntimeDeviceCollections(observation.Devices, devices)
-		if mergeErr != nil {
-			handler.report(mergeErr)
-			return
-		}
-		observation.Devices = merged
+		observation.Devices = currentDevices
 	})
 	handler.refreshRawFeatureRemote(ski)
 }
@@ -1048,6 +1057,7 @@ func (handler *runtimeServiceHandler) RemoteSKIDisconnected(_ eebusapi.ServiceIn
 		}
 		observation.SessionState = "disconnected"
 		observation.Since = handler.timestamp()
+		observation.Devices = nil
 	})
 	handler.retireRawFeatureRemote(ski)
 }
@@ -2173,6 +2183,10 @@ func mergeRuntimeDeviceCollections(
 		return result[left].ID < result[right].ID
 	})
 	return result, nil
+}
+
+func exactRuntimeDeviceCollection(source []runtimeDeviceObservation) ([]runtimeDeviceObservation, error) {
+	return mergeRuntimeDeviceCollections(nil, source)
 }
 
 func mergeRuntimeEntityObservations(left, right runtimeEntityObservation) (runtimeEntityObservation, error) {

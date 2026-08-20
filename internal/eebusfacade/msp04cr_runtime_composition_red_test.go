@@ -330,8 +330,8 @@ func TestMSP04CRRevocationReturnsOnlyAfterDurableDisconnectAndUnregister(t *test
 		if panicked {
 			t.Fatal("runtime withdrawal failure escaped the coordinator")
 		}
-		if result == "revoked" {
-			t.Fatal("runtime withdrawal failure reported revocation success")
+		if result != "disconnect_ack_timeout" {
+			t.Fatalf("runtime withdrawal failure = %q, want disconnect_ack_timeout", result)
 		}
 		backend.firstTrust.coordinator.mu.Lock()
 		terminalRevoked := slices.ContainsFunc(backend.firstTrust.coordinator.controlView.control.receipts, func(receipt firstTrustDurableReceipt) bool {

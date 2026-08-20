@@ -193,7 +193,7 @@ func (coordinator *firstTrustCoordinator) finishRevocationWithdrawal(
 	case <-timer.C:
 		withdrawal.cancelDisconnect(subject, acknowledgment)
 		coordinator.finishIncompleteRevocation()
-		return "revocation_withdrawal_incomplete"
+		return "disconnect_ack_timeout"
 	}
 	if !withdrawal.unregisterRemote(subject) {
 		coordinator.finishIncompleteRevocation()

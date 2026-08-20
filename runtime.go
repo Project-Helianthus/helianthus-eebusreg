@@ -506,7 +506,8 @@ func (backend *facadeRuntimeBackend) snapshotOperatorAdminV1(ctx context.Context
 		return operatorAdminV1SnapshotFacts{}, terminal
 	}
 	return operatorAdminV1SnapshotFacts{
-		capturedAt: snapshot.CapturedAt, status: snapshot.Status, window: snapshot.Window,
+		capturedAt: snapshot.CapturedAt, localSKI: snapshot.LocalSKI, localSHIPID: snapshot.LocalSHIPID,
+		status: snapshot.Status, window: snapshot.Window,
 		windowDeadline: snapshot.WindowDeadline, register: snapshot.Register, listener: snapshot.Listener,
 		discovery: snapshot.Discovery, degraded: AdminErrorCodeV1(snapshot.Degraded),
 		trusted: operatorAdminV1TrustedFactsFromFacade(snapshot.Trusted), connected: operatorAdminV1ConnectedFactsFromFacade(snapshot.Connected),
@@ -609,7 +610,10 @@ func operatorAdminV1TrustedFactsFromFacade(source []eebusfacade.OperatorAdminV1F
 	result := make([]operatorAdminV1TrustedFact, len(source))
 	for index, fact := range source {
 		result[index] = operatorAdminV1TrustedFact{
-			reference: fact.Reference, ski: fact.SKI, trustState: fact.TrustState, shipID: fact.SHIPID, lastSeen: fact.LastSeen,
+			reference: fact.Reference, ski: fact.SKI, endpoint: fact.Endpoint, trustState: fact.TrustState,
+			connectionState: fact.ConnectionState, shipID: fact.SHIPID, lastSeen: fact.LastSeen,
+			name: fact.Name, identifier: fact.Identifier, brand: fact.Brand, typeName: fact.Type, model: fact.Model,
+			retryState: fact.RetryState, retryDeadline: fact.RetryDeadline, retryAdmitted: fact.RetryAdmitted,
 		}
 	}
 	return result
@@ -621,6 +625,7 @@ func operatorAdminV1ConnectedFactsFromFacade(source []eebusfacade.OperatorAdminV
 		result[index] = operatorAdminV1ConnectedFact{
 			ski: fact.SKI, endpoint: fact.Endpoint, trustState: fact.TrustState,
 			connectionState: fact.ConnectionState, shipID: fact.SHIPID, lastSeen: fact.LastSeen,
+			name: fact.Name, identifier: fact.Identifier, brand: fact.Brand, typeName: fact.Type, model: fact.Model,
 		}
 	}
 	return result

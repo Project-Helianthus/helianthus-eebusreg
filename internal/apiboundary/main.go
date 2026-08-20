@@ -3026,7 +3026,7 @@ func checkExportedName(fset *token.FileSet, rel string, ident *ast.Ident, violat
 		return
 	}
 	for _, fragment := range forbiddenExportFragments {
-		if name == "SHIPID" && fragment == "SHIP" {
+		if (name == "SHIPID" || name == "LocalSHIPID") && fragment == "SHIP" {
 			continue
 		}
 		if name == "SourceLayerV1SpineRoundTrip" && fragment == "Spine" {

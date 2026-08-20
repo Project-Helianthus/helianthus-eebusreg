@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
 
 	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
@@ -80,6 +81,12 @@ type firstTrustConnection struct {
 	unregistered    bool
 }
 
+type firstTrustWithdrawal struct {
+	acknowledgment chan struct{}
+	connection     *firstTrustConnection
+	generation     uint64
+}
+
 type firstTrustFacade struct {
 	mu         sync.Mutex
 	attemptMu  sync.Mutex
@@ -92,7 +99,8 @@ type firstTrustFacade struct {
 	pairingEpoch        uint64
 	pairingRegistration bool
 	connections         map[string]*firstTrustConnection
-	withdrawals         map[string]chan struct{}
+	withdrawals         map[string]*firstTrustWithdrawal
+	remoteMetadata      map[string]operatorAdminV1BridgeRawMetadata
 
 	pairingRegistrationFault bool
 }
@@ -101,10 +109,11 @@ var _ eebusapi.ServiceReaderInterface = (*firstTrustFacade)(nil)
 
 func newFirstTrustFacade(service firstTrustService, coordinator firstTrustEventSink) (*firstTrustFacade, error) {
 	facade := &firstTrustFacade{
-		service:     service,
-		coordinator: coordinator,
-		connections: make(map[string]*firstTrustConnection),
-		withdrawals: make(map[string]chan struct{}),
+		service:        service,
+		coordinator:    coordinator,
+		connections:    make(map[string]*firstTrustConnection),
+		withdrawals:    make(map[string]*firstTrustWithdrawal),
+		remoteMetadata: make(map[string]operatorAdminV1BridgeRawMetadata),
 	}
 	if service != nil {
 		service.SetAutoAccept(false)
@@ -295,9 +304,14 @@ func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterfac
 	var retryScope [32]byte
 	releaseRetry := false
 	facade.mu.Lock()
-	if acknowledgment := facade.withdrawals[normalized]; acknowledgment != nil {
+	if withdrawal := facade.withdrawals[normalized]; withdrawal != nil {
+		connection := facade.connections[normalized]
+		if connection != withdrawal.connection || connection == nil || connection.generation != withdrawal.generation {
+			facade.mu.Unlock()
+			return
+		}
 		delete(facade.withdrawals, normalized)
-		close(acknowledgment)
+		close(withdrawal.acknowledgment)
 	}
 	connection := facade.connections[normalized]
 	if connection != nil && (connection.registered && !connection.transient || connection.attemptClass == "reconnect_authorized") {
@@ -332,9 +346,10 @@ func (facade *firstTrustFacade) acknowledgeBlockedDisconnect(normalized string) 
 	if connection == nil || !connection.cancelled || !connection.blocked {
 		return false
 	}
-	if acknowledgment := facade.withdrawals[normalized]; acknowledgment != nil {
+	if withdrawal := facade.withdrawals[normalized]; withdrawal != nil &&
+		withdrawal.connection == connection && withdrawal.generation == connection.generation {
 		delete(facade.withdrawals, normalized)
-		close(acknowledgment)
+		close(withdrawal.acknowledgment)
 	}
 	connection.connected = false
 	if !facade.pairingRegistration || connection.pairingEpoch != facade.pairingEpoch {
@@ -343,7 +358,33 @@ func (facade *firstTrustFacade) acknowledgeBlockedDisconnect(normalized string) 
 	return true
 }
 
-func (*firstTrustFacade) VisibleRemoteServicesUpdated(eebusapi.ServiceInterface, []shipapi.RemoteService) {
+func (facade *firstTrustFacade) VisibleRemoteServicesUpdated(_ eebusapi.ServiceInterface, services []shipapi.RemoteService) {
+	if facade == nil || len(services) > operatorAdminV1BridgeMaximumRows {
+		return
+	}
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	if facade.remoteMetadata == nil {
+		facade.remoteMetadata = make(map[string]operatorAdminV1BridgeRawMetadata)
+	}
+	for _, service := range services {
+		ski := strings.ToLower(strings.TrimSpace(service.Ski))
+		if !validOperatorAdminV1BridgeSKI(ski) {
+			continue
+		}
+		if _, exists := facade.remoteMetadata[ski]; !exists && len(facade.remoteMetadata) >= operatorAdminV1BridgeMaximumRows {
+			continue
+		}
+		metadata := facade.remoteMetadata[ski]
+		mergeOperatorAdminV1BridgeMetadata(&metadata, operatorAdminV1BridgeRawMetadata{
+			name: strings.TrimSpace(service.Name), identifier: strings.TrimSpace(service.Identifier),
+			brand: strings.TrimSpace(service.Brand), typeName: strings.TrimSpace(service.Type),
+			model: strings.TrimSpace(service.Model),
+		})
+		if validOperatorAdminV1BridgeMetadata(metadata) {
+			facade.remoteMetadata[ski] = metadata
+		}
+	}
 }
 
 func (facade *firstTrustFacade) VisiblePairingCandidatesUpdated(_ eebusapi.ServiceInterface, candidates []shipapi.PairingCandidateRef) {
@@ -659,9 +700,23 @@ func (facade *firstTrustFacade) operatorAdminV1ConnectedSnapshot() []operatorAdm
 		}
 		connected = append(connected, operatorAdminV1BridgeRawConnected{
 			ski: normalized, trustState: trustState, connectionState: "connected", shipID: connection.shipID,
+			metadata: facade.remoteMetadata[normalized],
 		})
 	}
 	return connected
+}
+
+func (facade *firstTrustFacade) operatorAdminV1MetadataSnapshot() map[string]operatorAdminV1BridgeRawMetadata {
+	if facade == nil {
+		return nil
+	}
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	result := make(map[string]operatorAdminV1BridgeRawMetadata, len(facade.remoteMetadata))
+	for ski, metadata := range facade.remoteMetadata {
+		result[ski] = metadata
+	}
+	return result
 }
 
 func (facade *firstTrustFacade) setWaiting(value bool) error {
@@ -789,11 +844,7 @@ func (facade *firstTrustFacade) finalizeTransientRemoteSKI(remote []byte, genera
 }
 
 func (facade *firstTrustFacade) disconnectRemote(remote []byte) (acknowledged <-chan struct{}, started bool) {
-	if facade.service == nil || len(remote) != 20 {
-		return nil, false
-	}
-	service, ok := facade.service.(firstTrustWithdrawalService)
-	if !ok {
+	if len(remote) != 20 {
 		return nil, false
 	}
 	normalized := hex.EncodeToString(remote)
@@ -802,13 +853,30 @@ func (facade *firstTrustFacade) disconnectRemote(remote []byte) (acknowledged <-
 		facade.mu.Unlock()
 		return nil, false
 	}
+	connection := facade.connections[normalized]
+	if connection == nil || !connection.connected {
+		facade.mu.Unlock()
+		acknowledgment := make(chan struct{})
+		close(acknowledgment)
+		return acknowledgment, true
+	}
+	service, ok := facade.service.(firstTrustWithdrawalService)
+	if !ok {
+		facade.mu.Unlock()
+		return nil, false
+	}
 	acknowledgment := make(chan struct{})
-	facade.withdrawals[normalized] = acknowledgment
+	withdrawal := &firstTrustWithdrawal{
+		acknowledgment: acknowledgment,
+		connection:     connection,
+		generation:     connection.generation,
+	}
+	facade.withdrawals[normalized] = withdrawal
 	facade.mu.Unlock()
 	defer func() {
 		if recover() != nil {
 			facade.mu.Lock()
-			if facade.withdrawals[normalized] == acknowledgment {
+			if facade.withdrawals[normalized] == withdrawal {
 				delete(facade.withdrawals, normalized)
 			}
 			facade.mu.Unlock()
@@ -826,7 +894,8 @@ func (facade *firstTrustFacade) cancelDisconnect(remote []byte, acknowledgment <
 	}
 	normalized := hex.EncodeToString(remote)
 	facade.mu.Lock()
-	if facade.withdrawals[normalized] == acknowledgment {
+	withdrawal := facade.withdrawals[normalized]
+	if withdrawal != nil && withdrawal.acknowledgment == acknowledgment {
 		delete(facade.withdrawals, normalized)
 	}
 	facade.mu.Unlock()
