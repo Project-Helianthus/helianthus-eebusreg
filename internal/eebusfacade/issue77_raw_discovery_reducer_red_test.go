@@ -144,7 +144,7 @@ func TestIssue77PartialSPINEEventMergePreservesDetailedRawFacts(t *testing.T) {
 	}
 }
 
-func TestIssue77ReconnectAndSparseSameIDMergeRetainDetailedFacts(t *testing.T) {
+func TestIssue77SemanticLKGMergeRemainsSeparateFromExactReconnectTopology(t *testing.T) {
 	description := "feature description"
 	resolvedRole := "server"
 	version := "1.0.0"
@@ -199,10 +199,12 @@ func TestIssue77ReconnectAndSparseSameIDMergeRetainDetailedFacts(t *testing.T) {
 	handler.mu.Lock()
 	reconnected := cloneRuntimeGraphObservation(handler.observations[issue77ReducerRemoteSKI])
 	handler.mu.Unlock()
-	issue77AssertRichDeviceFacts(t, reconnected.Devices)
+	if len(reconnected.Devices) != 0 {
+		t.Fatalf("new connected generation retained prior raw SPINE topology: %+v", reconnected.Devices)
+	}
 }
 
-func TestIssue77PendingSPINERefreshMergesRichAndSparseInBothOrders(t *testing.T) {
+func TestIssue77PendingSPINERefreshKeepsLatestExactTopology(t *testing.T) {
 	description := "retained"
 	rich := runtimeSPINERefresh{
 		generation: 1, sessionIndex: 7,
@@ -211,16 +213,14 @@ func TestIssue77PendingSPINERefreshMergesRichAndSparseInBothOrders(t *testing.T)
 			Address: "device-1", Type: "gateway", Description: &description,
 		}},
 	}
-	sparse := runtimeSPINERefresh{
-		generation: 1, sessionIndex: 7,
-		devices: []runtimeDeviceObservation{{ID: "device-1"}},
-	}
+	empty := runtimeSPINERefresh{generation: 1, sessionIndex: 7}
 	for _, order := range []struct {
 		name          string
 		first, second runtimeSPINERefresh
+		wantDevices   int
 	}{
-		{name: "rich-then-sparse", first: rich, second: sparse},
-		{name: "sparse-then-rich", first: sparse, second: rich},
+		{name: "rich-then-empty", first: rich, second: empty, wantDevices: 0},
+		{name: "empty-then-rich", first: empty, second: rich, wantDevices: 1},
 	} {
 		t.Run(order.name, func(t *testing.T) {
 			handler, _ := issue77RawHandler(t)
@@ -234,10 +234,13 @@ func TestIssue77PendingSPINERefreshMergesRichAndSparseInBothOrders(t *testing.T)
 			handler.enqueueSPINERefresh(issue77ReducerRemoteSKI, order.first)
 			handler.enqueueSPINERefresh(issue77ReducerRemoteSKI, order.second)
 			got, ok := handler.takeSPINERefresh(issue77ReducerRemoteSKI)
-			if !ok || len(got.devices) != 1 || got.devices[0].Description == nil ||
+			if !ok || len(got.devices) != order.wantDevices {
+				t.Fatalf("pending refresh did not keep latest exact topology: ok=%t refresh=%+v", ok, got)
+			}
+			if order.wantDevices == 1 && (got.devices[0].Description == nil ||
 				*got.devices[0].Description != description || got.devices[0].Address != "device-1" ||
-				got.devices[0].Type != "gateway" {
-				t.Fatalf("pending refresh lost richer facts: ok=%t refresh=%+v", ok, got)
+				got.devices[0].Type != "gateway") {
+				t.Fatalf("latest rich topology was not preserved exactly: %+v", got)
 			}
 		})
 	}
