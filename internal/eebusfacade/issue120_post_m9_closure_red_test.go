@@ -181,6 +181,29 @@ func TestIssue120AdminBridgeSurfaceCarriesStableIdentityMetadataAndRetryAdmissio
 	})
 }
 
+func TestIssue120AdminBridgePublishesConfiguredStableLocalSHIPIdentity(t *testing.T) {
+	fixture := newMSP04CFixture(t)
+	service := newIssue120WithdrawalService()
+	coordinator := fixture.newCoordinator()
+	if got := coordinator.reopen(context.Background()); got != "pairing_closed" {
+		t.Fatalf("startup outcome = %q", got)
+	}
+	const localSKI = "1111111111111111111111111111111111111111"
+	const localSHIPID = "HLS-0123456789abcdef0123456789abcdef"
+	bridge := newOperatorAdminV1Bridge(
+		coordinator,
+		service,
+		&msp04cOrdinalReader{next: 1_350},
+		operatorAdminV1BridgeLocalIdentity{ski: localSKI, shipID: localSHIPID},
+	)
+	snapshot, failure := bridge.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, failure)
+	if snapshot.localSKI != localSKI || snapshot.localSHIPID != localSHIPID {
+		t.Fatalf("local SHIP identity = %q/%q, want %q/%q", snapshot.localSKI, snapshot.localSHIPID, localSKI, localSHIPID)
+	}
+	assertOperatorAdminV1BridgeSnapshotSanitized(t, snapshot)
+}
+
 func TestIssue120AdminBridgeReportsConnectedIdleAndRetryFSMStates(t *testing.T) {
 	tests := []struct {
 		name            string

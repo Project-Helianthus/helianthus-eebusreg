@@ -275,7 +275,10 @@ func TestAdminV1ReducerLifecycleAndExactSnapshotViews(t *testing.T) {
 		trusted.Status != "ready" || trusted.Window != "open" || trusted.WindowDeadline.IsZero() ||
 		trusted.Register != "enabled" || trusted.Listener != "ready" || trusted.Discovery != "ready" ||
 		trusted.DegradedCode != "" || trusted.TrustedCount != 1 || trusted.ConnectedCount != 1 ||
-		trusted.DiscoveredCount != 1 || trusted.CandidateCount != 1 || trusted.Trusted[0].TrustState != "trusted" {
+		trusted.DiscoveredCount != 1 || trusted.CandidateCount != 1 || trusted.Trusted[0].TrustState != "trusted" ||
+		trusted.Trusted[0].ConnectionState != "idle" || trusted.Trusted[0].Name != "owner peer" ||
+		trusted.Trusted[0].Identifier != "owner-id" || trusted.Trusted[0].Brand != "owner-brand" ||
+		trusted.Trusted[0].Type != "owner-type" || trusted.Trusted[0].Model != "owner-model" {
 		t.Fatalf("trusted snapshot = %#v, want revision 1 with one partner handle", trusted)
 	}
 

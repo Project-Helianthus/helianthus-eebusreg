@@ -360,6 +360,9 @@ func (facade *firstTrustFacade) VisibleRemoteServicesUpdated(_ eebusapi.ServiceI
 		if !validOperatorAdminV1BridgeSKI(ski) {
 			continue
 		}
+		if _, exists := facade.remoteMetadata[ski]; !exists && len(facade.remoteMetadata) >= operatorAdminV1BridgeMaximumRows {
+			continue
+		}
 		metadata := facade.remoteMetadata[ski]
 		mergeOperatorAdminV1BridgeMetadata(&metadata, operatorAdminV1BridgeRawMetadata{
 			name: strings.TrimSpace(service.Name), identifier: strings.TrimSpace(service.Identifier),
