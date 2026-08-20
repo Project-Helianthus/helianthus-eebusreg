@@ -181,6 +181,100 @@ func TestIssue120AdminBridgeSurfaceCarriesStableIdentityMetadataAndRetryAdmissio
 	})
 }
 
+func TestIssue120AdminBridgeReportsConnectedIdleAndRetryFSMStates(t *testing.T) {
+	tests := []struct {
+		name            string
+		connected       bool
+		retryState      string
+		retryAdmitted   bool
+		wantConnection  string
+		wantDeadlineSet bool
+	}{
+		{name: "trusted connected", connected: true, wantConnection: "connected"},
+		{name: "trusted idle", wantConnection: "idle"},
+		{name: "retry ready", retryState: "RETRY_READY", wantConnection: "idle"},
+		{name: "retry admitted", retryState: "RETRY_READY", retryAdmitted: true, wantConnection: "idle"},
+		{name: "backoff active", retryState: "BACKOFF_ACTIVE", wantConnection: "idle", wantDeadlineSet: true},
+		{name: "terminal quarantine", retryState: "ADMIN_HOLD", wantConnection: "idle"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newMSP04CFixture(t)
+			lineage := fixture.store.view.control.associationLineage
+			association := msp04cAssociation(1, lineage, true, true, true, true)
+			fixture.store.view.associations = []firstTrustAssociationRecord{association}
+			service := newIssue120WithdrawalService()
+			facade, err := newFirstTrustFacade(service, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			coordinator := issue120Coordinator(fixture, facade)
+			facade.coordinator = coordinator
+			if got := coordinator.reopen(context.Background()); got != "pairing_closed" {
+				t.Fatalf("startup outcome = %q", got)
+			}
+			ski := hex.EncodeToString(association.subject)
+			facade.VisibleRemoteServicesUpdated(nil, []shipapi.RemoteService{{
+				Ski: ski, Name: "myVaillant Connect", Identifier: "vr940-lab", Brand: "Vaillant", Type: "gateway", Model: "VR940f",
+			}})
+			if test.connected {
+				facade.mu.Lock()
+				facade.connections[ski] = &firstTrustConnection{
+					generation: 1, active: true, connected: true, registered: true, shipID: association.service,
+				}
+				facade.mu.Unlock()
+			}
+			if test.retryState != "" {
+				scope := firstTrustRuntimeRetryScope(ski)
+				remaining := time.Duration(0)
+				if test.retryState == "BACKOFF_ACTIVE" {
+					remaining = 3 * time.Second
+				}
+				coordinator.mu.Lock()
+				coordinator.controlView.control.quarantines = []firstTrustQuarantineRecord{{
+					scope: scope, reason: "RETRYABLE_FAILURE", state: test.retryState,
+					remainingDelay: remaining, retentionBudget: firstTrustQuarantineRetention,
+					lastControlEpoch: coordinator.controlView.control.controlEpoch,
+				}}
+				if test.retryState == "BACKOFF_ACTIVE" {
+					coordinator.retryArms[scope] = firstTrustRetryArm{
+						armedAt: fixture.clock.MonotonicNow(), deadline: fixture.clock.MonotonicNow() + 3*time.Second,
+					}
+				}
+				coordinator.retryInflight[scope] = test.retryAdmitted
+				coordinator.mu.Unlock()
+			}
+			bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 1_400})
+			snapshot, failure := bridge.snapshotOperatorAdminV1(context.Background())
+			requireOperatorAdminV1BridgeSuccess(t, failure)
+			if len(snapshot.trusted) != 1 {
+				t.Fatalf("trusted rows = %d, want 1", len(snapshot.trusted))
+			}
+			fact := reflect.ValueOf(snapshot.trusted[0])
+			if got := issue120ReflectedString(t, fact, "connectionState"); got != test.wantConnection {
+				t.Errorf("connection state = %q, want %q", got, test.wantConnection)
+			}
+			if got := issue120ReflectedString(t, fact, "retryState"); got != test.retryState {
+				t.Errorf("retry state = %q, want %q", got, test.retryState)
+			}
+			if got := issue120ReflectedBool(t, fact, "retryAdmitted"); got != test.retryAdmitted {
+				t.Errorf("retry admitted = %t, want %t", got, test.retryAdmitted)
+			}
+			deadline := issue120ReflectedField(t, fact, "retryDeadline")
+			if deadline.IsValid() && deadline.IsZero() == test.wantDeadlineSet {
+				t.Errorf("retry deadline zero = %t, want deadline set %t", deadline.IsZero(), test.wantDeadlineSet)
+			}
+			for field, want := range map[string]string{
+				"name": "myVaillant Connect", "identifier": "vr940-lab", "brand": "Vaillant", "typeName": "gateway", "model": "VR940f",
+			} {
+				if got := issue120ReflectedString(t, fact, field); got != want {
+					t.Errorf("partner %s = %q, want %q", field, got, want)
+				}
+			}
+		})
+	}
+}
+
 func issue120Coordinator(fixture *msp04cFixture, effects firstTrustEffects) *firstTrustCoordinator {
 	return newFirstTrustCoordinatorWithRecovery(
 		fixture.clock.WallNow,
@@ -252,6 +346,33 @@ func issue120RequireFields(t *testing.T, typ reflect.Type, fields map[string]ref
 			t.Errorf("%s.%s = %s, want %s", typ.Name(), name, field.Type, want)
 		}
 	}
+}
+
+func issue120ReflectedField(t *testing.T, value reflect.Value, name string) reflect.Value {
+	t.Helper()
+	field := value.FieldByName(name)
+	if !field.IsValid() {
+		t.Errorf("%s lacks required field %s", value.Type(), name)
+	}
+	return field
+}
+
+func issue120ReflectedString(t *testing.T, value reflect.Value, name string) string {
+	t.Helper()
+	field := issue120ReflectedField(t, value, name)
+	if !field.IsValid() || field.Kind() != reflect.String {
+		return ""
+	}
+	return field.String()
+}
+
+func issue120ReflectedBool(t *testing.T, value reflect.Value, name string) bool {
+	t.Helper()
+	field := issue120ReflectedField(t, value, name)
+	if !field.IsValid() || field.Kind() != reflect.Bool {
+		return false
+	}
+	return field.Bool()
 }
 
 type issue120WithdrawalService struct {
