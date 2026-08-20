@@ -125,6 +125,96 @@ func TestIssue120ConnectedAdminUntrustStillWaitsForBoundedDisconnectACK(t *testi
 	}
 }
 
+func TestIssue120ConnectedAdminUntrustTimeoutLeavesDurableTrustUnchanged(t *testing.T) {
+	fixture := newMSP04CFixture(t)
+	lineage := fixture.store.view.control.associationLineage
+	association := msp04cAssociation(1, lineage, true, true, true, true)
+	fixture.store.view.associations = []firstTrustAssociationRecord{association}
+	service := newIssue120WithdrawalService()
+	facade, err := newFirstTrustFacade(service, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := issue120Coordinator(fixture, facade)
+	facade.coordinator = coordinator
+	coordinator.withdrawalWait = 20 * time.Millisecond
+	if got := coordinator.reopen(context.Background()); got != "pairing_closed" {
+		t.Fatalf("startup outcome = %q", got)
+	}
+	normalized := hex.EncodeToString(association.subject)
+	facade.mu.Lock()
+	facade.connections[normalized] = &firstTrustConnection{
+		generation: 1, active: true, connected: true, registered: true, shipID: association.service,
+	}
+	facade.mu.Unlock()
+	before := cloneFirstTrustControlView(fixture.store.view)
+	bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 1_310})
+	snapshot, failure := bridge.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, failure)
+
+	transition, failure := bridge.untrustOperatorAdminV1(context.Background(), snapshot.trusted[0].reference)
+	if transition.changed || failure != "disconnect_ack_timeout" {
+		t.Errorf("unacknowledged connected untrust = %#v/%q, want unchanged disconnect_ack_timeout", transition, failure)
+	}
+	disconnects, unregisters := service.withdrawalCalls()
+	if disconnects != 1 || unregisters != 0 {
+		t.Fatalf("timed-out withdrawal calls disconnect/unregister = %d/%d, want 1/0", disconnects, unregisters)
+	}
+	if !reflect.DeepEqual(fixture.store.view, before) || fixture.store.calls() != 0 {
+		t.Fatalf("timed-out withdrawal mutated durable trust: calls=%d before=%#v after=%#v", fixture.store.calls(), before, fixture.store.view)
+	}
+
+	restarted := fixture.newCoordinator()
+	if got := restarted.reopen(context.Background()); got != "pairing_closed" {
+		t.Fatalf("restart outcome = %q", got)
+	}
+	if !restarted.trusted(association.subject) || restarted.recoveryState() != "PAIRED_TRUSTED" {
+		t.Fatalf("restart trust = %t state=%q, want trusted PAIRED_TRUSTED", restarted.trusted(association.subject), restarted.recoveryState())
+	}
+}
+
+func TestIssue120DisconnectACKRequiresExactAdmittedConnectionGeneration(t *testing.T) {
+	service := newIssue120WithdrawalService()
+	facade, err := newFirstTrustFacade(service, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := msp04cSubject(1_320)
+	normalized := hex.EncodeToString(remote)
+	exact := &firstTrustConnection{generation: 7, active: true, connected: true, registered: true}
+	facade.connections[normalized] = exact
+	acknowledgment, started := facade.disconnectRemote(remote)
+	if !started || acknowledgment == nil {
+		t.Fatal("exact connected withdrawal was not started")
+	}
+
+	reconnected := &firstTrustConnection{generation: 8, active: true, connected: true, registered: true}
+	facade.mu.Lock()
+	facade.connections[normalized] = reconnected
+	facade.mu.Unlock()
+	facade.RemoteSKIDisconnected(nil, normalized)
+	select {
+	case <-acknowledgment:
+		t.Fatal("different-generation callback acknowledged the admitted generation")
+	default:
+	}
+	facade.mu.Lock()
+	if facade.connections[normalized] != reconnected {
+		facade.mu.Unlock()
+		t.Fatal("stale disconnect callback retired the reconnected generation")
+	}
+	facade.connections[normalized] = exact
+	facade.mu.Unlock()
+
+	facade.RemoteSKIDisconnected(nil, normalized)
+	select {
+	case <-acknowledgment:
+	case <-time.After(time.Second):
+		t.Fatal("exact-generation disconnect callback did not acknowledge withdrawal")
+	}
+	facade.RemoteSKIDisconnected(nil, normalized)
+}
+
 func TestIssue120CurrentGenerationSPINETopologyExactlyRemovesAbsentFacts(t *testing.T) {
 	const remoteSKI = "0000000000000000000000000000000000000120"
 	handler, err := newRuntimeServiceHandler(
@@ -160,6 +250,33 @@ func TestIssue120CurrentGenerationSPINETopologyExactlyRemovesAbsentFacts(t *test
 	graph = handler.reducer.Snapshot()
 	if len(graph) != 1 || len(graph[0].Devices) != 0 {
 		t.Fatalf("empty current-generation topology retained removed devices: %+v", graph)
+	}
+}
+
+func TestIssue120DisconnectWithdrawsConnectionOwnedRawTopology(t *testing.T) {
+	const remoteSKI = "0000000000000000000000000000000000000120"
+	handler, err := newRuntimeServiceHandler(
+		RuntimeConfig{Remotes: []RuntimeRemote{{SKI: remoteSKI}}},
+		"0000000000000000000000000000000000000001",
+		func() time.Time { return time.Unix(2_100_000_000, 0).UTC() },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := handler.newRemoteObservation(remoteSKI)
+	observation.SessionID = "session:issue120:9"
+	observation.SessionState = "connected"
+	observation.SessionIndex = 9
+	observation.Devices = issue120RichTopology(remoteSKI)
+	if err := handler.reducer.Replace(observation); err != nil {
+		t.Fatal(err)
+	}
+	handler.observations[remoteSKI] = observation
+
+	handler.RemoteSKIDisconnected(nil, remoteSKI)
+	graph := handler.reducer.Snapshot()
+	if len(graph) != 1 || graph[0].SessionState != "disconnected" || len(graph[0].Devices) != 0 {
+		t.Fatalf("disconnect retained connection-owned raw topology: %+v", graph)
 	}
 }
 
@@ -295,6 +412,36 @@ func TestIssue120AdminBridgeReportsConnectedIdleAndRetryFSMStates(t *testing.T) 
 				}
 			}
 		})
+	}
+}
+
+func TestIssue120AdminRetryAdmissionMatchesExecutableEligibility(t *testing.T) {
+	coordinator, _, scope := issue116RetryReadyCoordinator(t, 120_500)
+	service := newIssue116RetryService(coordinator, scope)
+	bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 120_510})
+
+	snapshot, failure := bridge.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, failure)
+	if len(snapshot.trusted) != 1 || !snapshot.trusted[0].retryAdmitted || snapshot.trusted[0].retryState != "RETRY_READY" {
+		t.Fatalf("eligible retry-ready snapshot = %#v, want retry_admitted=true", snapshot.trusted)
+	}
+	partner := snapshot.trusted[0].reference
+
+	coordinator.mu.Lock()
+	coordinator.retryInflight[scope] = true
+	coordinator.mu.Unlock()
+	snapshot, failure = bridge.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, failure)
+	if len(snapshot.trusted) != 1 || snapshot.trusted[0].retryAdmitted {
+		t.Fatalf("busy retry-ready snapshot = %#v, want retry_admitted=false", snapshot.trusted)
+	}
+	transition, failure := bridge.retryTrustedOperatorAdminV1(context.Background(), partner)
+	if transition.changed || failure != "candidate_busy" {
+		t.Fatalf("busy retry = %#v/%q, want unchanged candidate_busy", transition, failure)
+	}
+	_, _, retryCalls, _, _, _ := service.snapshot()
+	if retryCalls != 0 {
+		t.Fatalf("non-admitted retry reached service %d times", retryCalls)
 	}
 }
 
