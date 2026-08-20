@@ -81,6 +81,12 @@ type firstTrustConnection struct {
 	unregistered    bool
 }
 
+type firstTrustWithdrawal struct {
+	acknowledgment chan struct{}
+	connection     *firstTrustConnection
+	generation     uint64
+}
+
 type firstTrustFacade struct {
 	mu         sync.Mutex
 	attemptMu  sync.Mutex
@@ -93,7 +99,7 @@ type firstTrustFacade struct {
 	pairingEpoch        uint64
 	pairingRegistration bool
 	connections         map[string]*firstTrustConnection
-	withdrawals         map[string]chan struct{}
+	withdrawals         map[string]*firstTrustWithdrawal
 	remoteMetadata      map[string]operatorAdminV1BridgeRawMetadata
 
 	pairingRegistrationFault bool
@@ -106,7 +112,7 @@ func newFirstTrustFacade(service firstTrustService, coordinator firstTrustEventS
 		service:        service,
 		coordinator:    coordinator,
 		connections:    make(map[string]*firstTrustConnection),
-		withdrawals:    make(map[string]chan struct{}),
+		withdrawals:    make(map[string]*firstTrustWithdrawal),
 		remoteMetadata: make(map[string]operatorAdminV1BridgeRawMetadata),
 	}
 	if service != nil {
@@ -298,9 +304,14 @@ func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterfac
 	var retryScope [32]byte
 	releaseRetry := false
 	facade.mu.Lock()
-	if acknowledgment := facade.withdrawals[normalized]; acknowledgment != nil {
+	if withdrawal := facade.withdrawals[normalized]; withdrawal != nil {
+		connection := facade.connections[normalized]
+		if connection != withdrawal.connection || connection == nil || connection.generation != withdrawal.generation {
+			facade.mu.Unlock()
+			return
+		}
 		delete(facade.withdrawals, normalized)
-		close(acknowledgment)
+		close(withdrawal.acknowledgment)
 	}
 	connection := facade.connections[normalized]
 	if connection != nil && (connection.registered && !connection.transient || connection.attemptClass == "reconnect_authorized") {
@@ -335,9 +346,10 @@ func (facade *firstTrustFacade) acknowledgeBlockedDisconnect(normalized string) 
 	if connection == nil || !connection.cancelled || !connection.blocked {
 		return false
 	}
-	if acknowledgment := facade.withdrawals[normalized]; acknowledgment != nil {
+	if withdrawal := facade.withdrawals[normalized]; withdrawal != nil &&
+		withdrawal.connection == connection && withdrawal.generation == connection.generation {
 		delete(facade.withdrawals, normalized)
-		close(acknowledgment)
+		close(withdrawal.acknowledgment)
 	}
 	connection.connected = false
 	if !facade.pairingRegistration || connection.pairingEpoch != facade.pairingEpoch {
@@ -832,11 +844,7 @@ func (facade *firstTrustFacade) finalizeTransientRemoteSKI(remote []byte, genera
 }
 
 func (facade *firstTrustFacade) disconnectRemote(remote []byte) (acknowledged <-chan struct{}, started bool) {
-	if facade.service == nil || len(remote) != 20 {
-		return nil, false
-	}
-	service, ok := facade.service.(firstTrustWithdrawalService)
-	if !ok {
+	if len(remote) != 20 {
 		return nil, false
 	}
 	normalized := hex.EncodeToString(remote)
@@ -852,13 +860,23 @@ func (facade *firstTrustFacade) disconnectRemote(remote []byte) (acknowledged <-
 		close(acknowledgment)
 		return acknowledgment, true
 	}
+	service, ok := facade.service.(firstTrustWithdrawalService)
+	if !ok {
+		facade.mu.Unlock()
+		return nil, false
+	}
 	acknowledgment := make(chan struct{})
-	facade.withdrawals[normalized] = acknowledgment
+	withdrawal := &firstTrustWithdrawal{
+		acknowledgment: acknowledgment,
+		connection:     connection,
+		generation:     connection.generation,
+	}
+	facade.withdrawals[normalized] = withdrawal
 	facade.mu.Unlock()
 	defer func() {
 		if recover() != nil {
 			facade.mu.Lock()
-			if facade.withdrawals[normalized] == acknowledgment {
+			if facade.withdrawals[normalized] == withdrawal {
 				delete(facade.withdrawals, normalized)
 			}
 			facade.mu.Unlock()
@@ -876,7 +894,8 @@ func (facade *firstTrustFacade) cancelDisconnect(remote []byte, acknowledgment <
 	}
 	normalized := hex.EncodeToString(remote)
 	facade.mu.Lock()
-	if facade.withdrawals[normalized] == acknowledgment {
+	withdrawal := facade.withdrawals[normalized]
+	if withdrawal != nil && withdrawal.acknowledgment == acknowledgment {
 		delete(facade.withdrawals, normalized)
 	}
 	facade.mu.Unlock()

@@ -132,8 +132,8 @@ func TestAcquireRuntimeUsesProtectedMaterialAndPublishesEEBusCallbacks(t *testin
 	if disconnected.Status.State != "degraded" || disconnected.Status.Degradation == nil || disconnected.Status.Degradation.Reason != "remote-disconnect" {
 		t.Fatalf("disconnected status = %+v", disconnected.Status)
 	}
-	if len(disconnected.Devices) != 1 {
-		t.Fatal("disconnect discarded the last observed feature graph")
+	if len(disconnected.Devices) != 0 || len(disconnected.Entities) != 0 || len(disconnected.Features) != 0 {
+		t.Fatal("disconnect retained connection-owned raw topology")
 	}
 
 	reconnectedService := eebusServiceWithFeatureGraph(t, remoteSKI)

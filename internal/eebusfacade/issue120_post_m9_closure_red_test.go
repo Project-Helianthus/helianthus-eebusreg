@@ -125,7 +125,7 @@ func TestIssue120ConnectedAdminUntrustStillWaitsForBoundedDisconnectACK(t *testi
 	}
 }
 
-func TestIssue120ConnectedAdminUntrustTimeoutLeavesDurableTrustUnchanged(t *testing.T) {
+func TestIssue120ConnectedAdminUntrustTimeoutKeepsDurableDenialAcrossRestart(t *testing.T) {
 	fixture := newMSP04CFixture(t)
 	lineage := fixture.store.view.control.associationLineage
 	association := msp04cAssociation(1, lineage, true, true, true, true)
@@ -147,7 +147,6 @@ func TestIssue120ConnectedAdminUntrustTimeoutLeavesDurableTrustUnchanged(t *test
 		generation: 1, active: true, connected: true, registered: true, shipID: association.service,
 	}
 	facade.mu.Unlock()
-	before := cloneFirstTrustControlView(fixture.store.view)
 	bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 1_310})
 	snapshot, failure := bridge.snapshotOperatorAdminV1(context.Background())
 	requireOperatorAdminV1BridgeSuccess(t, failure)
@@ -160,16 +159,20 @@ func TestIssue120ConnectedAdminUntrustTimeoutLeavesDurableTrustUnchanged(t *test
 	if disconnects != 1 || unregisters != 0 {
 		t.Fatalf("timed-out withdrawal calls disconnect/unregister = %d/%d, want 1/0", disconnects, unregisters)
 	}
-	if !reflect.DeepEqual(fixture.store.view, before) || fixture.store.calls() != 0 {
-		t.Fatalf("timed-out withdrawal mutated durable trust: calls=%d before=%#v after=%#v", fixture.store.calls(), before, fixture.store.view)
+	if fixture.store.calls() != 1 || len(fixture.store.view.control.tombstones) != 1 ||
+		len(fixture.store.view.control.receipts) != 1 || fixture.store.view.control.receipts[0].terminal ||
+		fixture.store.view.control.receipts[0].result != "revocation_withdrawal_incomplete" ||
+		len(fixture.store.view.associations) != 1 ||
+		firstTrustAssociationUsable(fixture.store.view.associations[0], lineage) {
+		t.Fatalf("timed-out withdrawal did not retain durable denial: calls=%d view=%#v", fixture.store.calls(), fixture.store.view)
 	}
 
 	restarted := fixture.newCoordinator()
 	if got := restarted.reopen(context.Background()); got != "pairing_closed" {
 		t.Fatalf("restart outcome = %q", got)
 	}
-	if !restarted.trusted(association.subject) || restarted.recoveryState() != "PAIRED_TRUSTED" {
-		t.Fatalf("restart trust = %t state=%q, want trusted PAIRED_TRUSTED", restarted.trusted(association.subject), restarted.recoveryState())
+	if restarted.trusted(association.subject) || restarted.recoveryState() != "REVOKED" {
+		t.Fatalf("restart trust = %t state=%q, want denied REVOKED", restarted.trusted(association.subject), restarted.recoveryState())
 	}
 }
 
@@ -326,14 +329,15 @@ func TestIssue120AdminBridgeReportsConnectedIdleAndRetryFSMStates(t *testing.T) 
 		name            string
 		connected       bool
 		retryState      string
-		retryAdmitted   bool
+		retryInflight   bool
 		wantConnection  string
 		wantDeadlineSet bool
+		wantAdmitted    bool
 	}{
 		{name: "trusted connected", connected: true, wantConnection: "connected"},
 		{name: "trusted idle", wantConnection: "idle"},
-		{name: "retry ready", retryState: "RETRY_READY", wantConnection: "idle"},
-		{name: "retry admitted", retryState: "RETRY_READY", retryAdmitted: true, wantConnection: "idle"},
+		{name: "retry ready", retryState: "RETRY_READY", wantConnection: "idle", wantAdmitted: true},
+		{name: "paired retry remains executable while connection owns admission", retryState: "RETRY_READY", retryInflight: true, wantConnection: "idle", wantAdmitted: true},
 		{name: "backoff active", retryState: "BACKOFF_ACTIVE", wantConnection: "idle", wantDeadlineSet: true},
 		{name: "terminal quarantine", retryState: "ADMIN_HOLD", wantConnection: "idle"},
 	}
@@ -381,7 +385,7 @@ func TestIssue120AdminBridgeReportsConnectedIdleAndRetryFSMStates(t *testing.T) 
 						armedAt: fixture.clock.MonotonicNow(), deadline: fixture.clock.MonotonicNow() + 3*time.Second,
 					}
 				}
-				coordinator.retryInflight[scope] = test.retryAdmitted
+				coordinator.retryInflight[scope] = test.retryInflight
 				coordinator.mu.Unlock()
 			}
 			bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 1_400})
@@ -397,8 +401,8 @@ func TestIssue120AdminBridgeReportsConnectedIdleAndRetryFSMStates(t *testing.T) 
 			if got := issue120ReflectedString(t, fact, "retryState"); got != test.retryState {
 				t.Errorf("retry state = %q, want %q", got, test.retryState)
 			}
-			if got := issue120ReflectedBool(t, fact, "retryAdmitted"); got != test.retryAdmitted {
-				t.Errorf("retry admitted = %t, want %t", got, test.retryAdmitted)
+			if got := issue120ReflectedBool(t, fact, "retryAdmitted"); got != test.wantAdmitted {
+				t.Errorf("retry admitted = %t, want %t", got, test.wantAdmitted)
 			}
 			deadline := issue120ReflectedField(t, fact, "retryDeadline")
 			if deadline.IsValid() && deadline.IsZero() == test.wantDeadlineSet {

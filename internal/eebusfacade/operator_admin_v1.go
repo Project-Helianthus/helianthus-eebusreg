@@ -725,7 +725,7 @@ func (bridge *operatorAdminV1Bridge) captureRawSnapshot() (operatorAdminV1Bridge
 			return operatorAdminV1BridgeRawSnapshot{}, "unknown_state"
 		}
 		seenTrusted[ski] = struct{}{}
-		retryState, retryDeadline, retryAdmitted := operatorAdminV1BridgeRetryStateLocked(coordinator, ski, now)
+		retryState, retryDeadline, retryAdmitted := operatorAdminV1BridgeRetryStateLocked(coordinator, association.reference, ski, now)
 		raw.trusted = append(raw.trusted, operatorAdminV1BridgeRawPartner{
 			target: hex.EncodeToString(association.reference[:]), ski: ski, association: association.reference,
 			durable: true, trustState: "trusted", shipID: association.service, connectionState: "idle",
@@ -827,6 +827,7 @@ func operatorAdminV1CoordinatorStatusLocked(coordinator *firstTrustCoordinator) 
 
 func operatorAdminV1BridgeRetryStateLocked(
 	coordinator *firstTrustCoordinator,
+	associationRef [32]byte,
 	ski string,
 	capturedAt time.Time,
 ) (string, time.Time, bool) {
@@ -847,7 +848,8 @@ func operatorAdminV1BridgeRetryStateLocked(
 		}
 		deadline = capturedAt.Add(remaining)
 	}
-	return record.state, deadline, coordinator.retryInflight[scope]
+	_, _, failure := coordinator.operatorAdminV1RetryResolutionLocked(associationRef, ski)
+	return record.state, deadline, failure == ""
 }
 
 func (bridge *operatorAdminV1Bridge) sanitizeSnapshot(raw operatorAdminV1BridgeRawSnapshot) (operatorAdminV1BridgeSnapshot, string) {
@@ -1111,6 +1113,20 @@ func (coordinator *firstTrustCoordinator) operatorAdminV1RetryAdmission(
 	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
+	scope, recoveryAdmission, failure := coordinator.operatorAdminV1RetryResolutionLocked(associationRef, expectedSKI)
+	if failure != "" {
+		return [32]byte{}, false, failure
+	}
+	if recoveryAdmission {
+		coordinator.retryInflight[scope] = true
+	}
+	return scope, recoveryAdmission, ""
+}
+
+func (coordinator *firstTrustCoordinator) operatorAdminV1RetryResolutionLocked(
+	associationRef [32]byte,
+	expectedSKI string,
+) ([32]byte, bool, string) {
 	if coordinator.recoveryStore == nil || coordinator.anchor == nil || coordinator.reconciliationRequiredLocked() ||
 		coordinator.recoveryOperation != nil {
 		return [32]byte{}, false, "admin_boundary_unavailable"
@@ -1144,7 +1160,6 @@ func (coordinator *firstTrustCoordinator) operatorAdminV1RetryAdmission(
 		if coordinator.retryInflight[scope] {
 			return [32]byte{}, false, "candidate_busy"
 		}
-		coordinator.retryInflight[scope] = true
 		return scope, true, ""
 	case "BACKOFF_ACTIVE":
 		return [32]byte{}, false, "backoff_active"
@@ -1195,6 +1210,8 @@ func mapOperatorAdminV1CoordinatorOutcome(outcome string) string {
 		return "backoff_active"
 	case "commit_not_published", "commit_durability_unknown", "retry_state_failed_closed", "ready_transition_failed_closed", "revocation_withdrawal_incomplete":
 		return "persistence_failure"
+	case "disconnect_ack_timeout":
+		return "disconnect_ack_timeout"
 	case "already_trusted", "association_revoked", "revocation_conflict", "idempotency_expired":
 		return "trust_denied"
 	case "request_cancelled", "idempotency_conflict":

@@ -1057,6 +1057,7 @@ func (handler *runtimeServiceHandler) RemoteSKIDisconnected(_ eebusapi.ServiceIn
 		}
 		observation.SessionState = "disconnected"
 		observation.Since = handler.timestamp()
+		observation.Devices = nil
 	})
 	handler.retireRawFeatureRemote(ski)
 }
