@@ -41,6 +41,24 @@ func TestAdminV1FacadeHasClosedRequestResultOperations(t *testing.T) {
 	}
 }
 
+func TestIssue122ConnectPINIsOpaqueAndCannotBeRenderedOrSerialized(t *testing.T) {
+	// A pairing PIN enters only at the operator-admin boundary. It is not a
+	// result field and no rendering/serialization path may retain it.
+	request := ConnectRequestV1{PIN: []byte("a1b2c3d4")}
+	for _, rendered := range []string{
+		fmt.Sprintf("%v", request),
+		fmt.Sprintf("%+v", request),
+		fmt.Sprintf("%#v", request),
+	} {
+		if strings.Contains(rendered, "a1b2c3d4") {
+			t.Fatalf("ConnectRequestV1 rendering leaked PIN: %q", rendered)
+		}
+	}
+	if payload, err := json.Marshal(request); err == nil || len(payload) != 0 {
+		t.Fatalf("ConnectRequestV1 JSON = %q/%v, want refusal", payload, err)
+	}
+}
+
 func TestAdminV1SnapshotIsSanitizedAndHandlesAreOpaque(t *testing.T) {
 	for _, view := range []reflect.Type{
 		reflect.TypeOf(AdminSnapshotV1{}),
