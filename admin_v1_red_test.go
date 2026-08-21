@@ -6,12 +6,79 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+type issue124ConnectBindingOwner interface {
+	connectBinding([32]byte, []byte) ([32]byte, *AdminErrorV1)
+}
+
+func TestIssue124ConnectBindingIsProcessLocalAndPresenceExact(t *testing.T) {
+	clock := newOperatorAdminV1TestClock()
+	backend := newOperatorAdminV1TestBackend(operatorAdminV1TestFacts())
+	newReducer := func(seed uint64) *operatorAdminV1Reducer {
+		return newOperatorAdminV1Reducer(
+			clock.Now,
+			newOperatorAdminV1TestEntropyFrom(seed),
+			newOperatorAdminV1TestLifecycle(true, true, false),
+			backend,
+		)
+	}
+	first := newReducer(10_000)
+	second := newReducer(20_000)
+	firstBinder, ok := any(first).(issue124ConnectBindingOwner)
+	if !ok {
+		t.Fatal("operator AdminV1 reducer has no process-local connect binding owner")
+	}
+	secondBinder, ok := any(second).(issue124ConnectBindingOwner)
+	if !ok {
+		t.Fatal("independent operator AdminV1 reducer has no process-local connect binding owner")
+	}
+
+	var selection [32]byte
+	selection[0] = 0x5a
+	pin := []byte("issue124-transient-pin")
+	firstBinding, failure := firstBinder.connectBinding(selection, pin)
+	if failure != nil {
+		t.Fatalf("first connect binding failure = %#v", failure)
+	}
+	repeatedBinding, failure := firstBinder.connectBinding(selection, append([]byte(nil), pin...))
+	if failure != nil || repeatedBinding != firstBinding {
+		t.Fatalf("same reducer/request binding = %x/%#v, want stable %x", repeatedBinding, failure, firstBinding)
+	}
+	independentBinding, failure := secondBinder.connectBinding(selection, pin)
+	if failure != nil || independentBinding == firstBinding {
+		t.Fatalf("independent reducer binding = %x/%#v, must differ from %x", independentBinding, failure, firstBinding)
+	}
+
+	omitted, failure := firstBinder.connectBinding(selection, nil)
+	if failure != nil {
+		t.Fatalf("omitted PIN binding failure = %#v", failure)
+	}
+	empty, failure := firstBinder.connectBinding(selection, []byte{})
+	if failure != nil {
+		t.Fatalf("present-empty PIN binding failure = %#v", failure)
+	}
+	changed, failure := firstBinder.connectBinding(selection, []byte("issue124-transient-pio"))
+	if failure != nil {
+		t.Fatalf("changed PIN binding failure = %#v", failure)
+	}
+	if omitted == empty || empty == firstBinding || changed == firstBinding {
+		t.Fatalf("connect binding aliases exact PIN presence/value: omitted=%x empty=%x original=%x changed=%x", omitted, empty, firstBinding, changed)
+	}
+	for index := range pin {
+		pin[index] = 0
+	}
+	afterCallerClear, failure := firstBinder.connectBinding(selection, []byte("issue124-transient-pin"))
+	if failure != nil || afterCallerClear != firstBinding {
+		t.Fatalf("caller clear changed reducer binding = %x/%#v, want %x", afterCallerClear, failure, firstBinding)
+	}
+}
 
 func TestAdminV1FacadeHasClosedRequestResultOperations(t *testing.T) {
 	admin := reflect.TypeOf((*AdminV1)(nil)).Elem()
@@ -20,7 +87,7 @@ func TestAdminV1FacadeHasClosedRequestResultOperations(t *testing.T) {
 		"OpenPairingWindow":  {request: "OpenPairingWindowRequestV1", result: "AdminMutationResultV1"},
 		"ClosePairingWindow": {request: "ClosePairingWindowRequestV1", result: "AdminMutationResultV1"},
 		"Select":             {request: "SelectRequestV1", result: "AdminSelectionResultV1"},
-		"Connect":            {request: "ConnectRequestV1", result: "AdminMutationResultV1"},
+		"Connect":            {request: "ConnectRequestV1", result: "ConnectResultV1"},
 		"Confirm":            {request: "ConfirmRequestV1", result: "AdminMutationResultV1"},
 		"Cancel":             {request: "CancelRequestV1", result: "AdminMutationResultV1"},
 		"RetryTrusted":       {request: "RetryTrustedRequestV1", result: "AdminMutationResultV1"},
@@ -56,6 +123,92 @@ func TestIssue122ConnectPINIsOpaqueAndCannotBeRenderedOrSerialized(t *testing.T)
 	}
 	if payload, err := json.Marshal(request); err == nil || len(payload) != 0 {
 		t.Fatalf("ConnectRequestV1 JSON = %q/%v, want refusal", payload, err)
+	}
+}
+
+func TestIssue124ConnectReturnsStableActionAndSnapshotIsIdentityFree(t *testing.T) {
+	clock := newOperatorAdminV1TestClock()
+	facts := operatorAdminV1TestFacts()
+	backend := newOperatorAdminV1TestBackend(facts)
+	admin := newOperatorAdminV1Reducer(
+		clock.Now,
+		newOperatorAdminV1TestEntropy(),
+		newOperatorAdminV1TestLifecycle(true, true, false),
+		backend,
+	)
+
+	discovered, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Discovered})
+	requireAdminV1Success(t, failure)
+	selected, failure := admin.Select(context.Background(), SelectRequestV1{
+		MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "issue124-select", ExpectedStateRevision: discovered.StateRevision},
+		Observation:            discovered.Discovered[0].Observation,
+		ExpectedSKI:            discovered.Discovered[0].SKI,
+	})
+	requireAdminV1Success(t, failure)
+
+	const actionID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	outcome := AdminOutcomeV1("pin_required")
+	post := cloneOperatorAdminV1TestFacts(facts)
+	post.activeAction = &operatorAdminV1ActiveActionFact{
+		actionID:  actionID,
+		kind:      "connect",
+		state:     "terminal",
+		outcome:   outcome,
+		retryable: true,
+		expiresAt: clock.Now().Add(time.Minute),
+	}
+	backend.setEffect("connect", operatorAdminV1Transition{
+		outcome: AdminOutcomeV1("connection_started"), changed: true, actionID: actionID,
+	}, "", post)
+
+	request := ConnectRequestV1{
+		MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "issue124-connect", ExpectedStateRevision: selected.StateRevision},
+		Selection:              selected.Selection,
+	}
+	connected, failure := admin.Connect(context.Background(), request)
+	requireAdminV1Success(t, failure)
+	if connected.ActionID != actionID || connected.Outcome != AdminOutcomeV1("connection_started") || connected.Replayed {
+		t.Fatalf("connect result = %#v, want accepted opaque action", connected)
+	}
+	replayed, failure := admin.Connect(context.Background(), request)
+	requireAdminV1Success(t, failure)
+	if replayed.ActionID != actionID || !replayed.Replayed || backend.calls("connect") != 1 {
+		t.Fatalf("replayed connect = %#v effects=%d, want same action/no relaunch", replayed, backend.calls("connect"))
+	}
+	changedPIN := request
+	changedPIN.PIN = []byte("a1b2c3d4")
+	if _, changedFailure := admin.Connect(context.Background(), changedPIN); changedFailure == nil || changedFailure.Code != AdminErrorCodeV1IdempotencyConflict {
+		t.Fatalf("changed PIN replay failure = %#v, want idempotency_conflict", changedFailure)
+	}
+	if backend.calls("connect_pin") != 0 {
+		t.Fatalf("changed PIN replay launched %d PIN effects", backend.calls("connect_pin"))
+	}
+
+	status, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
+	requireAdminV1Success(t, failure)
+	if status.ActiveAction == nil || status.ActiveAction.ActionID != actionID || status.ActiveAction.Kind != "connect" ||
+		status.ActiveAction.State != "terminal" || status.ActiveAction.Outcome == nil || *status.ActiveAction.Outcome != outcome ||
+		!status.ActiveAction.Retryable || status.ActiveAction.Expiry.IsZero() {
+		t.Fatalf("active action = %#v, want closed terminal action", status.ActiveAction)
+	}
+	forbiddenAdminV1Fields(t, reflect.TypeOf(ActiveActionV1{}))
+}
+
+func TestIssue124PinsTypedCallbackDependenciesExactly(t *testing.T) {
+	// This node consumes the two released typed-callback boundaries, not a
+	// local recreation or a pseudo-version. Keeping their pins explicit makes
+	// the source of every terminal action outcome auditable.
+	module, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	for _, want := range []string{
+		"github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.20",
+		"github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.18",
+	} {
+		if !strings.Contains(string(module), want) {
+			t.Errorf("go.mod missing required typed-callback dependency %q", want)
+		}
 	}
 }
 
@@ -1223,6 +1376,14 @@ func (backend *operatorAdminV1TestBackend) snapshotOperatorAdminV1(context.Conte
 	return cloneOperatorAdminV1TestFacts(backend.facts), nil
 }
 
+func (backend *operatorAdminV1TestBackend) observeOperatorAdminV1ActiveAction(_ context.Context, actionID string) {
+	backend.mu.Lock()
+	if backend.facts.activeAction != nil && backend.facts.activeAction.actionID == actionID {
+		backend.facts.activeAction = nil
+	}
+	backend.mu.Unlock()
+}
+
 func (backend *operatorAdminV1TestBackend) openOperatorAdminV1(context.Context, time.Duration) (operatorAdminV1Transition, *AdminErrorV1) {
 	return backend.effect("open", "")
 }
@@ -1291,7 +1452,11 @@ func (backend *operatorAdminV1TestBackend) effect(operation, reference string) (
 		}
 		return override.transition, nil
 	}
-	return operatorAdminV1Transition{outcome: AdminOutcomeV1(operation + "_complete"), changed: true}, nil
+	transition := operatorAdminV1Transition{outcome: AdminOutcomeV1(operation + "_complete"), changed: true}
+	if operation == "connect" || operation == "connect_pin" {
+		transition.actionID = strings.Repeat("c", 64)
+	}
+	return transition, nil
 }
 
 func (backend *operatorAdminV1TestBackend) setEffect(

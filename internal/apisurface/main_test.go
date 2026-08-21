@@ -104,7 +104,7 @@ func TestOperatorAdminV1RequestResultAndErrorSurfaceIsExact(t *testing.T) {
 	root := issue85SymbolsByName(packages[modulePath].Symbols)
 
 	wantSignatures := map[string]string{
-		"AdminV1":                     "type AdminV1 interface{ Cancel(context.Context, CancelRequestV1) (AdminMutationResultV1, *AdminErrorV1); ClosePairingWindow(context.Context, ClosePairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1); Confirm(context.Context, ConfirmRequestV1) (AdminMutationResultV1, *AdminErrorV1); Connect(context.Context, ConnectRequestV1) (AdminMutationResultV1, *AdminErrorV1); OpenPairingWindow(context.Context, OpenPairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1); RetryTrusted(context.Context, RetryTrustedRequestV1) (AdminMutationResultV1, *AdminErrorV1); Select(context.Context, SelectRequestV1) (AdminSelectionResultV1, *AdminErrorV1); Snapshot(context.Context, AdminSnapshotRequestV1) (AdminSnapshotV1, *AdminErrorV1); Untrust(context.Context, UntrustRequestV1) (AdminMutationResultV1, *AdminErrorV1) }",
+		"AdminV1":                     "type AdminV1 interface{ Cancel(context.Context, CancelRequestV1) (AdminMutationResultV1, *AdminErrorV1); ClosePairingWindow(context.Context, ClosePairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1); Confirm(context.Context, ConfirmRequestV1) (AdminMutationResultV1, *AdminErrorV1); Connect(context.Context, ConnectRequestV1) (ConnectResultV1, *AdminErrorV1); OpenPairingWindow(context.Context, OpenPairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1); RetryTrusted(context.Context, RetryTrustedRequestV1) (AdminMutationResultV1, *AdminErrorV1); Select(context.Context, SelectRequestV1) (AdminSelectionResultV1, *AdminErrorV1); Snapshot(context.Context, AdminSnapshotRequestV1) (AdminSnapshotV1, *AdminErrorV1); Untrust(context.Context, UntrustRequestV1) (AdminMutationResultV1, *AdminErrorV1) }",
 		"MutationPreconditionV1":      "type MutationPreconditionV1 struct{ IdempotencyKey string; ExpectedStateRevision uint64 }",
 		"AdminSnapshotRequestV1":      "type AdminSnapshotRequestV1 struct{ View AdminViewV1 }",
 		"OpenPairingWindowRequestV1":  "type OpenPairingWindowRequestV1 struct{ MutationPreconditionV1; Duration time.Duration }",
@@ -116,7 +116,9 @@ func TestOperatorAdminV1RequestResultAndErrorSurfaceIsExact(t *testing.T) {
 		"RetryTrustedRequestV1":       "type RetryTrustedRequestV1 struct{ MutationPreconditionV1; Partner PartnerHandleV1 }",
 		"UntrustRequestV1":            "type UntrustRequestV1 struct{ MutationPreconditionV1; Partner PartnerHandleV1 }",
 		"AdminMutationResultV1":       "type AdminMutationResultV1 struct{ StateRevision uint64; Outcome AdminOutcomeV1; Replayed bool }",
+		"ConnectResultV1":             "type ConnectResultV1 struct{ AdminMutationResultV1; ActionID string }",
 		"AdminSelectionResultV1":      "type AdminSelectionResultV1 struct{ AdminMutationResultV1; Selection SelectionHandleV1 }",
+		"ActiveActionV1":              "type ActiveActionV1 struct{ ActionID string; Kind string; State string; Outcome *AdminOutcomeV1; Retryable bool; Expiry time.Time }",
 		"AdminOutcomeV1":              "type AdminOutcomeV1 string",
 		"AdminViewV1":                 "type AdminViewV1 string",
 		"AdminErrorCodeV1":            "type AdminErrorCodeV1 string",
@@ -137,6 +139,8 @@ func TestOperatorAdminV1RequestResultAndErrorSurfaceIsExact(t *testing.T) {
 	}
 	if snapshot := root["AdminSnapshotV1"].Signature; !strings.Contains(snapshot, "StateRevision uint64") {
 		t.Errorf("AdminSnapshotV1 = %q, want non-zero operator StateRevision field", snapshot)
+	} else if !strings.Contains(snapshot, "ActiveAction *ActiveActionV1") {
+		t.Errorf("AdminSnapshotV1 = %q, want optional closed ActiveActionV1", snapshot)
 	}
 
 	wantHandles := []string{"CandidateHandleV1", "ObservationHandleV1", "PartnerHandleV1", "SelectionHandleV1"}
@@ -195,6 +199,12 @@ func operatorAdminV1ClosedConstants() map[string]string {
 		"AdminErrorCodeV1BackoffActive":            "backoff_active",
 		"AdminErrorCodeV1TerminalQuarantine":       "terminal_quarantine",
 		"AdminErrorCodeV1PersistenceFailure":       "persistence_failure",
+		"AdminErrorCodeV1PINRequired":              "pin_required",
+		"AdminErrorCodeV1PINOptional":              "pin_optional",
+		"AdminErrorCodeV1PINBusy":                  "pin_busy",
+		"AdminErrorCodeV1PINRejected":              "pin_rejected",
+		"AdminErrorCodeV1PINUnavailable":           "pin_unavailable",
+		"AdminErrorCodeV1PINProtocolError":         "pin_protocol_error",
 		"AdminErrorCodeV1UnknownState":             "unknown_state",
 	}
 }

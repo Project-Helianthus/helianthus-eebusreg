@@ -9,7 +9,7 @@ import (
 	"golang.org/x/mod/modfile"
 )
 
-const issue101SHIPRelease = "v0.6.1-helianthus.17"
+const issue101SHIPRelease = "v0.6.1-helianthus.18"
 
 func TestIssue101PinsReleasedReconnectCollisionSHIP(t *testing.T) {
 	// The exact module version is a reviewed supply-chain input; runtime tests

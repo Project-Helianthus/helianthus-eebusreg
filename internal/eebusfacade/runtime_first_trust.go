@@ -144,6 +144,19 @@ func (reader *runtimeServiceReader) ServicePairingDetailUpdate(ski string, detai
 	}
 }
 
+func (reader *runtimeServiceReader) servicePairingDetailUpdateForGeneration(
+	ski string,
+	generation uint64,
+	detail *shipapi.ConnectionStateDetail,
+) {
+	if facade := reader.trustFacade(); facade != nil {
+		facade.servicePairingDetailUpdateForGeneration(ski, generation, detail)
+	}
+	if reader.observation != nil {
+		reader.observation.ServicePairingDetailUpdate(ski, detail)
+	}
+}
+
 func openRuntimeAssociationBridge(root string, bindings []eebusstore.KeyProviderBinding) (runtimeAssociationBridge, string) {
 	bridge, outcome := eebusstore.OpenAssociationBridge(root, bindings)
 	if bridge == nil {

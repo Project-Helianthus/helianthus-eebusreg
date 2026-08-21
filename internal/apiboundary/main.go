@@ -275,7 +275,17 @@ const AdminErrorCodeV1Disconnected
 const AdminErrorCodeV1BackoffActive
 const AdminErrorCodeV1TerminalQuarantine
 const AdminErrorCodeV1PersistenceFailure
+const AdminErrorCodeV1PINRequired
+const AdminErrorCodeV1PINOptional
+const AdminErrorCodeV1PINBusy
+const AdminErrorCodeV1PINRejected
+const AdminErrorCodeV1PINUnavailable
+const AdminErrorCodeV1PINProtocolError
 const AdminErrorCodeV1UnknownState
+func ActiveActionV1.Format
+func ActiveActionV1.GoString
+func ActiveActionV1.MarshalJSON
+func ActiveActionV1.String
 func AdminErrorV1.Error
 func AdminMutationResultV1.Format
 func AdminMutationResultV1.GoString
@@ -317,6 +327,10 @@ func ConnectRequestV1.Format
 func ConnectRequestV1.GoString
 func ConnectRequestV1.MarshalJSON
 func ConnectRequestV1.String
+func ConnectResultV1.Format
+func ConnectResultV1.GoString
+func ConnectResultV1.MarshalJSON
+func ConnectResultV1.String
 func ConnectedPartnerV1.Format
 func ConnectedPartnerV1.GoString
 func ConnectedPartnerV1.MarshalJSON
@@ -371,6 +385,8 @@ type AdminSnapshotV1
 type AdminSnapshotRequestV1
 type AdminMutationResultV1
 type AdminSelectionResultV1
+type ActiveActionV1
+type ConnectResultV1
 type MutationPreconditionV1
 type OpenPairingWindowRequestV1
 type ClosePairingWindowRequestV1

@@ -7,9 +7,11 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	shipmodel "github.com/Project-Helianthus/helianthus-ship-go/model"
 )
 
 const firstTrustMaximumConnections = 128
@@ -87,6 +89,19 @@ type firstTrustWithdrawal struct {
 	generation     uint64
 }
 
+type firstTrustActiveAction struct {
+	actionID        string
+	target          string
+	kind            string
+	state           string
+	outcome         string
+	retryable       bool
+	expiresAt       time.Time
+	pinSupplied     bool
+	generation      uint64
+	generationFloor uint64
+}
+
 type firstTrustFacade struct {
 	mu         sync.Mutex
 	attemptMu  sync.Mutex
@@ -101,6 +116,7 @@ type firstTrustFacade struct {
 	connections         map[string]*firstTrustConnection
 	withdrawals         map[string]*firstTrustWithdrawal
 	remoteMetadata      map[string]operatorAdminV1BridgeRawMetadata
+	activeAction        *firstTrustActiveAction
 
 	pairingRegistrationFault bool
 }
@@ -314,6 +330,9 @@ func (facade *firstTrustFacade) RemoteSKIDisconnected(_ eebusapi.ServiceInterfac
 		close(withdrawal.acknowledgment)
 	}
 	connection := facade.connections[normalized]
+	if connection != nil {
+		facade.completeOperatorAdminV1ActiveActionLocked(normalized, connection.generation, "disconnected", true)
+	}
 	if connection != nil && (connection.registered && !connection.transient || connection.attemptClass == "reconnect_authorized") {
 		retryScope = connection.retryScope
 		releaseRetry = connection.retryAdmitted
@@ -426,6 +445,14 @@ func (facade *firstTrustFacade) ServiceShipIDUpdate(ski string, shipID string) {
 }
 
 func (facade *firstTrustFacade) ServicePairingDetailUpdate(ski string, detail *shipapi.ConnectionStateDetail) {
+	facade.servicePairingDetailUpdateForGeneration(ski, 0, detail)
+}
+
+func (facade *firstTrustFacade) servicePairingDetailUpdateForGeneration(
+	ski string,
+	generation uint64,
+	detail *shipapi.ConnectionStateDetail,
+) {
 	remote, normalized, ok := decodeFirstTrustSKI(ski)
 	if !ok || detail == nil {
 		return
@@ -444,6 +471,13 @@ func (facade *firstTrustFacade) ServicePairingDetailUpdate(ski string, detail *s
 		return
 	}
 	defer facade.callbackMu.Unlock()
+	if state == shipapi.ConnectionStatePin {
+		facade.beginAttempt(remote, normalized, false)
+	}
+	if generation != 0 && !facade.operatorAdminV1ConnectionGenerationCurrent(normalized, generation) {
+		return
+	}
+	facade.recordOperatorAdminV1PairingDetail(normalized, generation, detail)
 	switch state {
 	case shipapi.ConnectionStateQueued, shipapi.ConnectionStateInitiated, shipapi.ConnectionStateInProgress:
 		facade.beginAttempt(remote, normalized, false)
@@ -456,6 +490,13 @@ func (facade *firstTrustFacade) ServicePairingDetailUpdate(ski string, detail *s
 	case shipapi.ConnectionStateCompleted:
 		facade.handlePairingSuccess(remote, normalized, true)
 	}
+}
+
+func (facade *firstTrustFacade) operatorAdminV1ConnectionGenerationCurrent(target string, generation uint64) bool {
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	connection := facade.connections[target]
+	return connection != nil && connection.generation == generation
 }
 
 func (facade *firstTrustFacade) rejectBlockedPairingCallback(normalized string, state shipapi.ConnectionState) {
@@ -551,6 +592,7 @@ func (facade *firstTrustFacade) beginAttempt(remote []byte, normalized string, c
 	connection.attemptClass = attemptClass
 	connection.retryScope = firstTrustRuntimeRetryScope(normalized)
 	generation := connection.generation
+	facade.bindOperatorAdminV1ActiveActionLocked(normalized, generation)
 	scope := connection.retryScope
 	facade.mu.Unlock()
 
@@ -706,6 +748,211 @@ func (facade *firstTrustFacade) operatorAdminV1ConnectedSnapshot() []operatorAdm
 	return connected
 }
 
+func (facade *firstTrustFacade) armOperatorAdminV1ActiveAction(
+	actionID,
+	target string,
+	pinSupplied bool,
+	expiresAt time.Time,
+) bool {
+	if facade == nil || !validOperatorAdminV1BridgeActionID(actionID) || !validOperatorAdminV1BridgeSKI(target) || expiresAt.IsZero() {
+		return false
+	}
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	if facade.activeAction != nil && facade.activeAction.actionID == actionID {
+		return false
+	}
+	generation := uint64(0)
+	generationFloor := uint64(0)
+	if connection := facade.connections[target]; connection != nil && connection.active && connection.attemptStarted &&
+		!connection.cancelled && !connection.blocked && connection.pairingEpoch == facade.pairingEpoch {
+		generation = connection.generation
+		generationFloor = connection.generation
+	} else {
+		if facade.next == ^uint64(0) {
+			return false
+		}
+		generationFloor = facade.next + 1
+	}
+	facade.activeAction = &firstTrustActiveAction{
+		actionID: actionID, target: target, kind: "connect", state: "pending",
+		expiresAt: expiresAt, pinSupplied: pinSupplied, generation: generation, generationFloor: generationFloor,
+	}
+	return true
+}
+
+func (facade *firstTrustFacade) operatorAdminV1ActiveActionID(now time.Time) string {
+	if facade == nil {
+		return ""
+	}
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	facade.pruneOperatorAdminV1ActiveActionLocked(now)
+	if facade.activeAction == nil {
+		return ""
+	}
+	return facade.activeAction.actionID
+}
+
+func (facade *firstTrustFacade) operatorAdminV1ActiveActionSnapshot(now time.Time) *operatorAdminV1BridgeActiveAction {
+	if facade == nil {
+		return nil
+	}
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	facade.pruneOperatorAdminV1ActiveActionLocked(now)
+	if facade.activeAction == nil {
+		return nil
+	}
+	action := facade.activeAction
+	result := &operatorAdminV1BridgeActiveAction{
+		actionID: action.actionID, kind: action.kind, state: action.state,
+		outcome: action.outcome, retryable: action.retryable, expiresAt: action.expiresAt,
+	}
+	return result
+}
+
+func (facade *firstTrustFacade) clearOperatorAdminV1ActiveAction(actionID string) {
+	if facade == nil {
+		return
+	}
+	facade.mu.Lock()
+	if facade.activeAction != nil && (actionID == "" || facade.activeAction.actionID == actionID) {
+		facade.activeAction = nil
+	}
+	facade.mu.Unlock()
+}
+
+func (facade *firstTrustFacade) clearOperatorAdminV1ActiveActionGenerationLocked(target string, generation uint64) {
+	if facade.activeAction != nil && facade.activeAction.target == target && facade.activeAction.generation == generation &&
+		facade.activeAction.state != "terminal" {
+		facade.activeAction = nil
+	}
+}
+
+func (facade *firstTrustFacade) completeOperatorAdminV1ActiveActionLocked(
+	target string,
+	generation uint64,
+	outcome string,
+	retryable bool,
+) {
+	action := facade.activeAction
+	if action == nil || action.target != target || action.generation != generation || action.state == "terminal" {
+		return
+	}
+	action.state = "terminal"
+	action.outcome = outcome
+	action.retryable = retryable
+}
+
+func (facade *firstTrustFacade) pruneOperatorAdminV1ActiveActionLocked(now time.Time) {
+	if facade.activeAction != nil && (!now.IsZero() && !now.Before(facade.activeAction.expiresAt)) {
+		facade.activeAction = nil
+	}
+}
+
+func (facade *firstTrustFacade) bindOperatorAdminV1ActiveActionLocked(target string, generation uint64) {
+	action := facade.activeAction
+	if action == nil || action.target != target || generation < action.generationFloor {
+		return
+	}
+	if action.generation == 0 {
+		action.generation = generation
+		return
+	}
+	if action.generation != generation && action.state != "terminal" {
+		facade.activeAction = nil
+	}
+}
+
+func (facade *firstTrustFacade) recordOperatorAdminV1PairingDetail(
+	normalized string,
+	generation uint64,
+	detail *shipapi.ConnectionStateDetail,
+) {
+	if facade == nil || detail == nil {
+		return
+	}
+	facade.mu.Lock()
+	defer facade.mu.Unlock()
+	connection := facade.connections[normalized]
+	if connection == nil || generation != 0 && connection.generation != generation {
+		return
+	}
+	facade.bindOperatorAdminV1ActiveActionLocked(normalized, connection.generation)
+	action := facade.activeAction
+	if action == nil || action.target != normalized || action.generation != connection.generation || action.state == "terminal" {
+		return
+	}
+	outcome, retryable, terminal := operatorAdminV1ActionOutcomeForPairingDetail(detail, action.pinSupplied)
+	if !terminal {
+		return
+	}
+	action.state = "terminal"
+	action.outcome = outcome
+	action.retryable = retryable
+}
+
+func operatorAdminV1ActionOutcomeForPairingDetail(
+	detail *shipapi.ConnectionStateDetail,
+	pinSupplied bool,
+) (string, bool, bool) {
+	if detail == nil {
+		return "", false, false
+	}
+	state := detail.State()
+	if state == shipapi.ConnectionStateCompleted {
+		return "connection_completed", false, true
+	}
+	pin := detail.PINHandshakeDetail()
+	if pin != nil && pin.Category != nil {
+		switch *pin.Category {
+		case shipmodel.PINCategoryRequired:
+			if !pinSupplied && (pin.Phase == shipmodel.PINPhaseWaitingPeer || pin.Phase == shipmodel.PINPhaseFailed) {
+				return "pin_required", pin.Retryable, true
+			}
+		case shipmodel.PINCategoryOptional:
+			if !pinSupplied && pin.Phase == shipmodel.PINPhaseRestricted {
+				return "pin_optional", pin.Retryable, true
+			}
+		case shipmodel.PINCategoryBusy:
+			return "pin_busy", pin.Retryable, true
+		case shipmodel.PINCategoryRejected:
+			if pin.Phase == shipmodel.PINPhaseFailed || state == shipapi.ConnectionStateError {
+				return "pin_rejected", pin.Retryable, true
+			}
+		case shipmodel.PINCategoryUnavailable:
+			if pin.Phase == shipmodel.PINPhaseFailed || state == shipapi.ConnectionStateError {
+				return "pin_unavailable", pin.Retryable, true
+			}
+		case shipmodel.PINCategoryProtocol:
+			if pin.Phase == shipmodel.PINPhaseFailed || state == shipapi.ConnectionStateError {
+				return "pin_protocol_error", pin.Retryable, true
+			}
+		}
+	}
+	if state == shipapi.ConnectionStateRemoteDeniedTrust {
+		return "trust_denied", false, true
+	}
+	if state == shipapi.ConnectionStateError {
+		err := detail.Error()
+		var timeout interface{ Timeout() bool }
+		if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &timeout) && timeout.Timeout() {
+			return "attempt_timeout", true, true
+		}
+		return "unknown_state", false, true
+	}
+	return "", false, false
+}
+
+func validOperatorAdminV1BridgeActionID(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil && strings.ToLower(value) == value
+}
+
 func (facade *firstTrustFacade) operatorAdminV1MetadataSnapshot() map[string]operatorAdminV1BridgeRawMetadata {
 	if facade == nil {
 		return nil
@@ -736,6 +983,7 @@ func (facade *firstTrustFacade) setWaiting(value bool) error {
 			facade.pairingEpoch++
 		}
 	} else {
+		facade.activeAction = nil
 		for normalized, connection := range facade.connections {
 			if connection.cancelled && connection.blocked && !connection.connected {
 				delete(facade.connections, normalized)
@@ -926,6 +1174,7 @@ func (facade *firstTrustFacade) cancelGeneration(remote []byte, generation uint6
 		facade.mu.Unlock()
 		return
 	}
+	facade.clearOperatorAdminV1ActiveActionGenerationLocked(normalized, generation)
 	connection.cancelled = true
 	connection.active = false
 	connection.blocked = true
