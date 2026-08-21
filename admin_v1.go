@@ -17,7 +17,7 @@ type AdminV1 interface {
 	OpenPairingWindow(context.Context, OpenPairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1)
 	ClosePairingWindow(context.Context, ClosePairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1)
 	Select(context.Context, SelectRequestV1) (AdminSelectionResultV1, *AdminErrorV1)
-	Connect(context.Context, ConnectRequestV1) (AdminMutationResultV1, *AdminErrorV1)
+	Connect(context.Context, ConnectRequestV1) (ConnectResultV1, *AdminErrorV1)
 	Confirm(context.Context, ConfirmRequestV1) (AdminMutationResultV1, *AdminErrorV1)
 	Cancel(context.Context, CancelRequestV1) (AdminMutationResultV1, *AdminErrorV1)
 	RetryTrusted(context.Context, RetryTrustedRequestV1) (AdminMutationResultV1, *AdminErrorV1)
@@ -81,6 +81,11 @@ type AdminMutationResultV1 struct {
 	Replayed      bool
 }
 
+type ConnectResultV1 struct {
+	AdminMutationResultV1
+	ActionID string
+}
+
 type AdminSelectionResultV1 struct {
 	AdminMutationResultV1
 	Selection SelectionHandleV1
@@ -122,6 +127,12 @@ const (
 	AdminErrorCodeV1BackoffActive            AdminErrorCodeV1 = "backoff_active"
 	AdminErrorCodeV1TerminalQuarantine       AdminErrorCodeV1 = "terminal_quarantine"
 	AdminErrorCodeV1PersistenceFailure       AdminErrorCodeV1 = "persistence_failure"
+	AdminErrorCodeV1PINRequired              AdminErrorCodeV1 = "pin_required"
+	AdminErrorCodeV1PINOptional              AdminErrorCodeV1 = "pin_optional"
+	AdminErrorCodeV1PINBusy                  AdminErrorCodeV1 = "pin_busy"
+	AdminErrorCodeV1PINRejected              AdminErrorCodeV1 = "pin_rejected"
+	AdminErrorCodeV1PINUnavailable           AdminErrorCodeV1 = "pin_unavailable"
+	AdminErrorCodeV1PINProtocolError         AdminErrorCodeV1 = "pin_protocol_error"
 	AdminErrorCodeV1UnknownState             AdminErrorCodeV1 = "unknown_state"
 )
 
@@ -161,6 +172,16 @@ type AdminSnapshotV1 struct {
 	Connected       []ConnectedPartnerV1
 	Discovered      []DiscoveredPartnerV1
 	Candidates      []CandidateV1
+	ActiveAction    *ActiveActionV1
+}
+
+type ActiveActionV1 struct {
+	ActionID  string
+	Kind      string
+	State     string
+	Outcome   *AdminOutcomeV1
+	Retryable bool
+	Expiry    time.Time
 }
 
 type TrustedPartnerV1 struct {
@@ -305,6 +326,10 @@ func (AdminMutationResultV1) String() string                    { return operato
 func (AdminMutationResultV1) GoString() string                  { return operatorAdminV1String() }
 func (AdminMutationResultV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
 func (AdminMutationResultV1) MarshalJSON() ([]byte, error)      { return operatorAdminV1MarshalJSON() }
+func (ConnectResultV1) String() string                          { return operatorAdminV1String() }
+func (ConnectResultV1) GoString() string                        { return operatorAdminV1String() }
+func (ConnectResultV1) Format(state fmt.State, verb rune)       { operatorAdminV1Format(state, verb) }
+func (ConnectResultV1) MarshalJSON() ([]byte, error)            { return operatorAdminV1MarshalJSON() }
 func (AdminSelectionResultV1) String() string                   { return operatorAdminV1String() }
 func (AdminSelectionResultV1) GoString() string                 { return operatorAdminV1String() }
 func (AdminSelectionResultV1) Format(state fmt.State, verb rune) {
@@ -315,6 +340,10 @@ func (AdminSnapshotV1) String() string                      { return operatorAdm
 func (AdminSnapshotV1) GoString() string                    { return operatorAdminV1String() }
 func (AdminSnapshotV1) Format(state fmt.State, verb rune)   { operatorAdminV1Format(state, verb) }
 func (AdminSnapshotV1) MarshalJSON() ([]byte, error)        { return operatorAdminV1MarshalJSON() }
+func (ActiveActionV1) String() string                       { return operatorAdminV1String() }
+func (ActiveActionV1) GoString() string                     { return operatorAdminV1String() }
+func (ActiveActionV1) Format(state fmt.State, verb rune)    { operatorAdminV1Format(state, verb) }
+func (ActiveActionV1) MarshalJSON() ([]byte, error)         { return operatorAdminV1MarshalJSON() }
 
 func (TrustedPartnerV1) String() string                    { return operatorAdminV1String() }
 func (TrustedPartnerV1) GoString() string                  { return operatorAdminV1String() }
@@ -399,6 +428,7 @@ type operatorAdminV1PINProvider interface {
 
 type operatorAdminV1Backend interface {
 	snapshotOperatorAdminV1(context.Context) (operatorAdminV1SnapshotFacts, *AdminErrorV1)
+	observeOperatorAdminV1ActiveAction(context.Context, string)
 	openOperatorAdminV1(context.Context, time.Duration) (operatorAdminV1Transition, *AdminErrorV1)
 	closeOperatorAdminV1(context.Context) (operatorAdminV1Transition, *AdminErrorV1)
 	selectOperatorAdminV1(context.Context, string, string) (string, operatorAdminV1Transition, *AdminErrorV1)
@@ -411,8 +441,18 @@ type operatorAdminV1Backend interface {
 }
 
 type operatorAdminV1Transition struct {
-	outcome AdminOutcomeV1
-	changed bool
+	outcome  AdminOutcomeV1
+	changed  bool
+	actionID string
+}
+
+type operatorAdminV1ActiveActionFact struct {
+	actionID  string
+	kind      string
+	state     string
+	outcome   AdminOutcomeV1
+	retryable bool
+	expiresAt time.Time
 }
 
 type operatorAdminV1SnapshotFacts struct {
@@ -430,6 +470,7 @@ type operatorAdminV1SnapshotFacts struct {
 	connected      []operatorAdminV1ConnectedFact
 	discovered     []operatorAdminV1DiscoveredFact
 	candidates     []operatorAdminV1CandidateFact
+	activeAction   *operatorAdminV1ActiveActionFact
 }
 
 type operatorAdminV1TrustedFact struct {
@@ -506,6 +547,7 @@ type operatorAdminV1Replay struct {
 	binding   [32]byte
 	result    AdminMutationResultV1
 	selection SelectionHandleV1
+	actionID  string
 	failure   AdminErrorCodeV1
 	sequence  uint64
 }
@@ -575,12 +617,17 @@ func (admin *operatorAdminV1Reducer) Snapshot(ctx context.Context, request Admin
 	}
 
 	admin.mu.Lock()
-	defer admin.mu.Unlock()
 	if failure := admin.acceptFactsLocked(facts); failure != nil {
+		admin.mu.Unlock()
 		return AdminSnapshotV1{}, failure
 	}
 	admin.pruneHandlesLocked(admin.now())
-	return admin.snapshotLocked(request.View)
+	snapshot, snapshotFailure := admin.snapshotLocked(request.View)
+	admin.mu.Unlock()
+	if snapshotFailure == nil && snapshot.ActiveAction != nil && snapshot.ActiveAction.State == "terminal" {
+		admin.backend.observeOperatorAdminV1ActiveAction(ctx, snapshot.ActiveAction.ActionID)
+	}
+	return snapshot, snapshotFailure
 }
 
 func (admin *operatorAdminV1Reducer) OpenPairingWindow(ctx context.Context, request OpenPairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
@@ -589,7 +636,7 @@ func (admin *operatorAdminV1Reducer) OpenPairingWindow(ctx context.Context, requ
 		requestFailure = operatorAdminV1Error(AdminErrorCodeV1InvalidRequest)
 	}
 	binding := operatorAdminV1Binding("open", operatorAdminV1Uint64(uint64(request.Duration)))
-	result, _, failure := admin.execute(
+	result, _, _, failure := admin.execute(
 		ctx, request.MutationPreconditionV1, binding, requestFailure, nil,
 		func(ctx context.Context, _ string) (string, operatorAdminV1Transition, *AdminErrorV1) {
 			transition, failure := admin.backend.openOperatorAdminV1(ctx, request.Duration)
@@ -602,7 +649,7 @@ func (admin *operatorAdminV1Reducer) OpenPairingWindow(ctx context.Context, requ
 
 func (admin *operatorAdminV1Reducer) ClosePairingWindow(ctx context.Context, request ClosePairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
 	binding := operatorAdminV1Binding("close")
-	result, _, failure := admin.execute(
+	result, _, _, failure := admin.execute(
 		ctx, request.MutationPreconditionV1, binding, nil, nil,
 		func(ctx context.Context, _ string) (string, operatorAdminV1Transition, *AdminErrorV1) {
 			transition, failure := admin.backend.closeOperatorAdminV1(ctx)
@@ -619,7 +666,7 @@ func (admin *operatorAdminV1Reducer) Select(ctx context.Context, request SelectR
 		requestFailure = operatorAdminV1Error(AdminErrorCodeV1InvalidRequest)
 	}
 	binding := operatorAdminV1Binding("select", request.Observation.token[:], []byte(request.ExpectedSKI))
-	result, selection, failure := admin.execute(
+	result, selection, _, failure := admin.execute(
 		ctx, request.MutationPreconditionV1, binding, requestFailure,
 		func(now time.Time) (string, *AdminErrorV1) {
 			return admin.resolveHandleLocked(operatorAdminV1ObservationHandle, request.Observation.token, now)
@@ -635,7 +682,7 @@ func (admin *operatorAdminV1Reducer) Select(ctx context.Context, request SelectR
 	return AdminSelectionResultV1{AdminMutationResultV1: result, Selection: selection}, nil
 }
 
-func (admin *operatorAdminV1Reducer) Connect(ctx context.Context, request ConnectRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
+func (admin *operatorAdminV1Reducer) Connect(ctx context.Context, request ConnectRequestV1) (ConnectResultV1, *AdminErrorV1) {
 	var pin *operatorAdminV1TransientPIN
 	var requestFailure *AdminErrorV1
 	handedOff := false
@@ -652,8 +699,8 @@ func (admin *operatorAdminV1Reducer) Connect(ctx context.Context, request Connec
 			}()
 		}
 	}
-	binding := operatorAdminV1Binding("connect", request.Selection.token[:])
-	result, _, failure := admin.execute(
+	binding := operatorAdminV1Binding("connect", request.Selection.token[:], request.PIN)
+	result, _, actionID, failure := admin.execute(
 		ctx, request.MutationPreconditionV1, binding, requestFailure,
 		func(now time.Time) (string, *AdminErrorV1) {
 			return admin.resolveHandleLocked(operatorAdminV1SelectionHandle, request.Selection.token, now)
@@ -671,7 +718,13 @@ func (admin *operatorAdminV1Reducer) Connect(ctx context.Context, request Connec
 		},
 		false,
 	)
-	return result, failure
+	if failure != nil {
+		return ConnectResultV1{}, failure
+	}
+	if !validOperatorAdminV1ActionID(actionID) {
+		return ConnectResultV1{}, newAdminBoundaryUnavailableV1()
+	}
+	return ConnectResultV1{AdminMutationResultV1: result, ActionID: actionID}, nil
 }
 
 func (admin *operatorAdminV1Reducer) Confirm(ctx context.Context, request ConfirmRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
@@ -680,7 +733,7 @@ func (admin *operatorAdminV1Reducer) Confirm(ctx context.Context, request Confir
 		requestFailure = operatorAdminV1Error(AdminErrorCodeV1InvalidRequest)
 	}
 	binding := operatorAdminV1Binding("confirm", request.Candidate.token[:], []byte(request.ExpectedSKI))
-	result, _, failure := admin.execute(
+	result, _, _, failure := admin.execute(
 		ctx, request.MutationPreconditionV1, binding, requestFailure,
 		func(now time.Time) (string, *AdminErrorV1) {
 			return admin.resolveHandleLocked(operatorAdminV1CandidateHandle, request.Candidate.token, now)
@@ -696,7 +749,7 @@ func (admin *operatorAdminV1Reducer) Confirm(ctx context.Context, request Confir
 
 func (admin *operatorAdminV1Reducer) Cancel(ctx context.Context, request CancelRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
 	binding := operatorAdminV1Binding("cancel", request.Candidate.token[:])
-	result, _, failure := admin.execute(
+	result, _, _, failure := admin.execute(
 		ctx, request.MutationPreconditionV1, binding, nil,
 		func(now time.Time) (string, *AdminErrorV1) {
 			return admin.resolveHandleLocked(operatorAdminV1CandidateHandle, request.Candidate.token, now)
@@ -712,7 +765,7 @@ func (admin *operatorAdminV1Reducer) Cancel(ctx context.Context, request CancelR
 
 func (admin *operatorAdminV1Reducer) RetryTrusted(ctx context.Context, request RetryTrustedRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
 	binding := operatorAdminV1Binding("retry_trusted", request.Partner.token[:])
-	result, _, failure := admin.execute(
+	result, _, _, failure := admin.execute(
 		ctx, request.MutationPreconditionV1, binding, nil,
 		func(now time.Time) (string, *AdminErrorV1) {
 			return admin.resolveHandleLocked(operatorAdminV1PartnerHandle, request.Partner.token, now)
@@ -728,7 +781,7 @@ func (admin *operatorAdminV1Reducer) RetryTrusted(ctx context.Context, request R
 
 func (admin *operatorAdminV1Reducer) Untrust(ctx context.Context, request UntrustRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
 	binding := operatorAdminV1Binding("untrust", request.Partner.token[:])
-	result, _, failure := admin.execute(
+	result, _, _, failure := admin.execute(
 		ctx, request.MutationPreconditionV1, binding, nil,
 		func(now time.Time) (string, *AdminErrorV1) {
 			return admin.resolveHandleLocked(operatorAdminV1PartnerHandle, request.Partner.token, now)
@@ -753,20 +806,20 @@ func (admin *operatorAdminV1Reducer) execute(
 	resolve operatorAdminV1Resolver,
 	effect operatorAdminV1Effect,
 	selectionResult bool,
-) (AdminMutationResultV1, SelectionHandleV1, *AdminErrorV1) {
+) (AdminMutationResultV1, SelectionHandleV1, string, *AdminErrorV1) {
 	ctx = operatorAdminV1Context(ctx)
 	if failure := admin.acquire(ctx); failure != nil {
-		return AdminMutationResultV1{}, SelectionHandleV1{}, failure
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", failure
 	}
 	defer admin.release()
 	if failure := admin.available(); failure != nil {
-		return AdminMutationResultV1{}, SelectionHandleV1{}, failure
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", failure
 	}
 	if requestFailure != nil {
-		return AdminMutationResultV1{}, SelectionHandleV1{}, requestFailure
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", requestFailure
 	}
 	if failure := validateOperatorAdminV1Precondition(precondition); failure != nil {
-		return AdminMutationResultV1{}, SelectionHandleV1{}, failure
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", failure
 	}
 	binding = operatorAdminV1Binding(
 		"mutation",
@@ -778,37 +831,37 @@ func (admin *operatorAdminV1Reducer) execute(
 	if replay, exists := admin.replays[precondition.IdempotencyKey]; exists {
 		admin.mu.Unlock()
 		if replay.binding != binding {
-			return AdminMutationResultV1{}, SelectionHandleV1{}, operatorAdminV1Error(AdminErrorCodeV1IdempotencyConflict)
+			return AdminMutationResultV1{}, SelectionHandleV1{}, "", operatorAdminV1Error(AdminErrorCodeV1IdempotencyConflict)
 		}
 		if replay.failure != "" {
-			return AdminMutationResultV1{}, SelectionHandleV1{}, operatorAdminV1Error(replay.failure)
+			return AdminMutationResultV1{}, SelectionHandleV1{}, "", operatorAdminV1Error(replay.failure)
 		}
 		result := replay.result
 		result.Replayed = true
-		return result, replay.selection, nil
+		return result, replay.selection, replay.actionID, nil
 	}
 	admin.mu.Unlock()
 
 	facts, failure := admin.backend.snapshotOperatorAdminV1(ctx)
 	if failure != nil {
-		return AdminMutationResultV1{}, SelectionHandleV1{}, normalizeOperatorAdminV1Error(failure)
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", normalizeOperatorAdminV1Error(failure)
 	}
 	if failure := validateOperatorAdminV1Facts(facts); failure != nil {
-		return AdminMutationResultV1{}, SelectionHandleV1{}, failure
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", failure
 	}
 	if failure := admin.available(); failure != nil {
-		return AdminMutationResultV1{}, SelectionHandleV1{}, failure
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", failure
 	}
 
 	now := admin.now()
 	admin.mu.Lock()
 	if failure := admin.acceptFactsLocked(facts); failure != nil {
 		admin.mu.Unlock()
-		return AdminMutationResultV1{}, SelectionHandleV1{}, failure
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", failure
 	}
 	if precondition.ExpectedStateRevision != admin.revision {
 		admin.mu.Unlock()
-		return AdminMutationResultV1{}, SelectionHandleV1{}, operatorAdminV1Error(AdminErrorCodeV1StateConflict)
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", operatorAdminV1Error(AdminErrorCodeV1StateConflict)
 	}
 	admin.pruneHandlesLocked(now)
 	target := ""
@@ -817,23 +870,23 @@ func (admin *operatorAdminV1Reducer) execute(
 		target, resolveFailure = resolve(now)
 		if resolveFailure != nil {
 			admin.mu.Unlock()
-			return AdminMutationResultV1{}, SelectionHandleV1{}, resolveFailure
+			return AdminMutationResultV1{}, SelectionHandleV1{}, "", resolveFailure
 		}
 	}
 	if selectionResult && !admin.canIssueHandleLocked(operatorAdminV1SelectionHandle, 1) {
 		admin.mu.Unlock()
-		return AdminMutationResultV1{}, SelectionHandleV1{}, newAdminBoundaryUnavailableV1()
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", newAdminBoundaryUnavailableV1()
 	}
 	if !admin.reserveReplaySlotLocked() {
 		admin.mu.Unlock()
-		return AdminMutationResultV1{}, SelectionHandleV1{}, newAdminBoundaryUnavailableV1()
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", newAdminBoundaryUnavailableV1()
 	}
 	admin.mu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return AdminMutationResultV1{}, SelectionHandleV1{}, operatorAdminV1Error(AdminErrorCodeV1UnknownState)
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", operatorAdminV1Error(AdminErrorCodeV1UnknownState)
 	}
 	if failure := admin.available(); failure != nil {
-		return AdminMutationResultV1{}, SelectionHandleV1{}, failure
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", failure
 	}
 
 	selectionReference, transition, effectFailure := effect(ctx, target)
@@ -877,7 +930,7 @@ func (admin *operatorAdminV1Reducer) execute(
 	if admin.replaySequence == 0 {
 		admin.replaySequence++
 	}
-	replay := operatorAdminV1Replay{binding: binding, result: result, selection: selection, sequence: admin.replaySequence}
+	replay := operatorAdminV1Replay{binding: binding, result: result, selection: selection, actionID: transition.actionID, sequence: admin.replaySequence}
 	if effectFailure != nil {
 		replay.failure = effectFailure.Code
 	}
@@ -885,9 +938,9 @@ func (admin *operatorAdminV1Reducer) execute(
 	admin.mu.Unlock()
 
 	if effectFailure != nil {
-		return AdminMutationResultV1{}, SelectionHandleV1{}, effectFailure
+		return AdminMutationResultV1{}, SelectionHandleV1{}, "", effectFailure
 	}
-	return result, selection, nil
+	return result, selection, transition.actionID, nil
 }
 
 func (admin *operatorAdminV1Reducer) snapshotLocked(view AdminViewV1) (AdminSnapshotV1, *AdminErrorV1) {
@@ -907,6 +960,17 @@ func (admin *operatorAdminV1Reducer) snapshotLocked(view AdminViewV1) (AdminSnap
 		ConnectedCount:  uint16(len(admin.facts.connected)),
 		DiscoveredCount: uint16(len(admin.facts.discovered)),
 		CandidateCount:  uint16(len(admin.facts.candidates)),
+	}
+	if action := admin.facts.activeAction; action != nil {
+		projected := ActiveActionV1{
+			ActionID: action.actionID, Kind: action.kind, State: action.state,
+			Retryable: action.retryable, Expiry: action.expiresAt,
+		}
+		if action.outcome != "" {
+			outcome := action.outcome
+			projected.Outcome = &outcome
+		}
+		snapshot.ActiveAction = &projected
 	}
 	switch view {
 	case AdminViewV1Trusted:
@@ -1216,6 +1280,13 @@ func validateOperatorAdminV1Facts(facts operatorAdminV1SnapshotFacts) *AdminErro
 		facts.window == "open" && facts.windowDeadline.IsZero() || !validOperatorAdminV1DegradedCode(facts.degraded) {
 		return newAdminBoundaryUnavailableV1()
 	}
+	if action := facts.activeAction; action != nil &&
+		(!validOperatorAdminV1ActionID(action.actionID) || action.kind != "connect" ||
+			(action.state != "pending" && action.state != "terminal") || action.expiresAt.IsZero() ||
+			!facts.capturedAt.Before(action.expiresAt) || action.state == "pending" && action.outcome != "" ||
+			action.state == "terminal" && !validOperatorAdminV1ActionOutcome(action.outcome)) {
+		return newAdminBoundaryUnavailableV1()
+	}
 	if len(facts.trusted) > operatorAdminV1MaximumHandlesPerKind ||
 		len(facts.connected) > operatorAdminV1MaximumHandlesPerKind ||
 		len(facts.discovered) > operatorAdminV1MaximumHandlesPerKind ||
@@ -1338,6 +1409,30 @@ func validOperatorAdminV1PIN(value []byte) bool {
 	return true
 }
 
+func validOperatorAdminV1ActionID(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < '0' || value[index] > '9' {
+			if value[index] < 'a' || value[index] > 'f' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validOperatorAdminV1ActionOutcome(value AdminOutcomeV1) bool {
+	switch value {
+	case "connection_completed", "attempt_timeout", "disconnected", "trust_denied", "unknown_state",
+		"pin_required", "pin_optional", "pin_busy", "pin_rejected", "pin_unavailable", "pin_protocol_error":
+		return true
+	default:
+		return false
+	}
+}
+
 func validOperatorAdminV1View(view AdminViewV1) bool {
 	switch view {
 	case AdminViewV1Trusted, AdminViewV1Connected, AdminViewV1Discovered, AdminViewV1Candidate:
@@ -1353,6 +1448,10 @@ func cloneOperatorAdminV1Facts(source operatorAdminV1SnapshotFacts) operatorAdmi
 	result.connected = append([]operatorAdminV1ConnectedFact(nil), source.connected...)
 	result.discovered = append([]operatorAdminV1DiscoveredFact(nil), source.discovered...)
 	result.candidates = append([]operatorAdminV1CandidateFact(nil), source.candidates...)
+	if source.activeAction != nil {
+		action := *source.activeAction
+		result.activeAction = &action
+	}
 	return result
 }
 
@@ -1360,7 +1459,7 @@ func equalOperatorAdminV1Facts(left, right operatorAdminV1SnapshotFacts) bool {
 	if left.status != right.status || left.window != right.window || !left.windowDeadline.Equal(right.windowDeadline) ||
 		left.localSKI != right.localSKI || left.localSHIPID != right.localSHIPID ||
 		left.register != right.register || left.listener != right.listener || left.discovery != right.discovery ||
-		left.degraded != right.degraded {
+		left.degraded != right.degraded || !equalOperatorAdminV1ActiveActionFacts(left.activeAction, right.activeAction) {
 		return false
 	}
 	if len(left.trusted) != len(right.trusted) || len(left.connected) != len(right.connected) ||
@@ -1388,6 +1487,14 @@ func equalOperatorAdminV1Facts(left, right operatorAdminV1SnapshotFacts) bool {
 		}
 	}
 	return true
+}
+
+func equalOperatorAdminV1ActiveActionFacts(left, right *operatorAdminV1ActiveActionFact) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.actionID == right.actionID && left.kind == right.kind && left.state == right.state &&
+		left.outcome == right.outcome && left.retryable == right.retryable && left.expiresAt.Equal(right.expiresAt)
 }
 
 func operatorAdminV1Binding(operation string, parts ...[]byte) [32]byte {
@@ -1452,9 +1559,12 @@ func normalizeOperatorAdminV1Error(failure *AdminErrorV1) *AdminErrorV1 {
 		AdminErrorCodeV1BackoffActive,
 		AdminErrorCodeV1TerminalQuarantine,
 		AdminErrorCodeV1PersistenceFailure,
-		AdminErrorCodeV1("pin_unavailable"),
-		AdminErrorCodeV1("pin_rejected"),
-		AdminErrorCodeV1("pin_protocol"),
+		AdminErrorCodeV1PINRequired,
+		AdminErrorCodeV1PINOptional,
+		AdminErrorCodeV1PINBusy,
+		AdminErrorCodeV1PINUnavailable,
+		AdminErrorCodeV1PINRejected,
+		AdminErrorCodeV1PINProtocolError,
 		AdminErrorCodeV1UnknownState:
 		return operatorAdminV1Error(failure.Code)
 	default:
@@ -1495,6 +1605,12 @@ func (slot *operatorAdminV1BackendSlot) snapshotOperatorAdminV1(ctx context.Cont
 		return backend.snapshotOperatorAdminV1(ctx)
 	}
 	return operatorAdminV1SnapshotFacts{}, newAdminBoundaryUnavailableV1()
+}
+
+func (slot *operatorAdminV1BackendSlot) observeOperatorAdminV1ActiveAction(ctx context.Context, actionID string) {
+	if backend := slot.current(); backend != nil {
+		backend.observeOperatorAdminV1ActiveAction(ctx, actionID)
+	}
 }
 
 func (slot *operatorAdminV1BackendSlot) openOperatorAdminV1(ctx context.Context, duration time.Duration) (operatorAdminV1Transition, *AdminErrorV1) {

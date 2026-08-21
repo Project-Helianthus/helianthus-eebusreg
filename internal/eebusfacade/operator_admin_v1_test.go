@@ -12,13 +12,157 @@ import (
 	"time"
 
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	shipmodel "github.com/Project-Helianthus/helianthus-ship-go/model"
 )
+
+func TestIssue124TypedPairingActionOutcomeMatrix(t *testing.T) {
+	category := func(value shipmodel.PINCategory) *shipmodel.PINCategory {
+		return shipmodel.PINCategoryPointer(value)
+	}
+	tests := []struct {
+		name        string
+		state       shipapi.ConnectionState
+		err         error
+		pin         *shipmodel.PINHandshakeDetail
+		pinSupplied bool
+		outcome     string
+		retryable   bool
+		terminal    bool
+	}{
+		{name: "required omitted", state: shipapi.ConnectionStatePin, pin: &shipmodel.PINHandshakeDetail{Requirement: shipmodel.PINRequirementRequired, Phase: shipmodel.PINPhaseWaitingPeer, Category: category(shipmodel.PINCategoryRequired), Retryable: true}, outcome: "pin_required", retryable: true, terminal: true},
+		{name: "required supplied stays pending", state: shipapi.ConnectionStatePin, pin: &shipmodel.PINHandshakeDetail{Requirement: shipmodel.PINRequirementRequired, Phase: shipmodel.PINPhaseSubmitted, Category: category(shipmodel.PINCategoryRequired), Retryable: true}, pinSupplied: true},
+		{name: "optional restricted", state: shipapi.ConnectionStatePin, pin: &shipmodel.PINHandshakeDetail{Requirement: shipmodel.PINRequirementOptional, Phase: shipmodel.PINPhaseRestricted, Category: category(shipmodel.PINCategoryOptional)}, outcome: "pin_optional", terminal: true},
+		{name: "busy", state: shipapi.ConnectionStatePin, pin: &shipmodel.PINHandshakeDetail{Requirement: shipmodel.PINRequirementRequired, Phase: shipmodel.PINPhaseWaitingPeer, Category: category(shipmodel.PINCategoryBusy), Retryable: true}, outcome: "pin_busy", retryable: true, terminal: true},
+		{name: "rejected", state: shipapi.ConnectionStateError, pin: &shipmodel.PINHandshakeDetail{Requirement: shipmodel.PINRequirementRequired, Phase: shipmodel.PINPhaseFailed, Category: category(shipmodel.PINCategoryRejected)}, outcome: "pin_rejected", terminal: true},
+		{name: "unavailable", state: shipapi.ConnectionStateError, pin: &shipmodel.PINHandshakeDetail{Requirement: shipmodel.PINRequirementRequired, Phase: shipmodel.PINPhaseFailed, Category: category(shipmodel.PINCategoryUnavailable), Retryable: true}, outcome: "pin_unavailable", retryable: true, terminal: true},
+		{name: "protocol", state: shipapi.ConnectionStateError, pin: &shipmodel.PINHandshakeDetail{Requirement: shipmodel.PINRequirementUnknown, Phase: shipmodel.PINPhaseFailed, Category: category(shipmodel.PINCategoryProtocol)}, outcome: "pin_protocol_error", terminal: true},
+		{name: "completed", state: shipapi.ConnectionStateCompleted, outcome: "connection_completed", terminal: true},
+		{name: "timeout", state: shipapi.ConnectionStateError, err: context.DeadlineExceeded, outcome: "attempt_timeout", retryable: true, terminal: true},
+		{name: "untyped error", state: shipapi.ConnectionStateError, err: errors.New("peer-private-failure"), outcome: "unknown_state", terminal: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := shipapi.NewConnectionStateDetail(test.state, test.err)
+			detail.SetPINHandshakeDetail(test.pin)
+			outcome, retryable, terminal := operatorAdminV1ActionOutcomeForPairingDetail(detail, test.pinSupplied)
+			if outcome != test.outcome || retryable != test.retryable || terminal != test.terminal {
+				t.Fatalf("mapping = %q/%t/%t, want %q/%t/%t", outcome, retryable, terminal, test.outcome, test.retryable, test.terminal)
+			}
+			if strings.Contains(outcome, "peer-private") {
+				t.Fatalf("mapping leaked source error text in %q", outcome)
+			}
+		})
+	}
+}
+
+func TestIssue124ActiveActionRejectsStaleGenerationAndClearsAtBoundaries(t *testing.T) {
+	now := time.Unix(1_950_000_000, 0)
+	const target = operatorAdminV1BridgeTestSKI
+	const firstID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const secondID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	facade := &firstTrustFacade{connections: make(map[string]*firstTrustConnection)}
+
+	if !facade.armOperatorAdminV1ActiveAction(firstID, target, false, now.Add(time.Minute)) {
+		t.Fatal("first action was not armed")
+	}
+	facade.mu.Lock()
+	firstConnection := facade.newConnectionLocked(target, false)
+	firstGeneration := firstConnection.generation
+	facade.bindOperatorAdminV1ActiveActionLocked(target, firstGeneration)
+	facade.mu.Unlock()
+
+	if !facade.armOperatorAdminV1ActiveAction(secondID, target, true, now.Add(time.Minute)) {
+		t.Fatal("replacement action was not armed")
+	}
+	rejected := shipapi.NewConnectionStateDetail(shipapi.ConnectionStateError, shipapi.ErrPINRejected)
+	rejected.SetPINHandshakeDetail(&shipmodel.PINHandshakeDetail{
+		Requirement: shipmodel.PINRequirementRequired, Phase: shipmodel.PINPhaseFailed,
+		Category: shipmodel.PINCategoryPointer(shipmodel.PINCategoryRejected),
+	})
+	facade.recordOperatorAdminV1PairingDetail(target, firstGeneration, rejected)
+	if action := facade.operatorAdminV1ActiveActionSnapshot(now); action == nil || action.actionID != secondID || action.state != "pending" {
+		t.Fatalf("stale generation changed replacement action: %#v", action)
+	}
+
+	facade.mu.Lock()
+	delete(facade.connections, target)
+	secondConnection := facade.newConnectionLocked(target, false)
+	secondGeneration := secondConnection.generation
+	facade.bindOperatorAdminV1ActiveActionLocked(target, secondGeneration)
+	facade.mu.Unlock()
+	facade.recordOperatorAdminV1PairingDetail(target, firstGeneration, rejected)
+	completed := shipapi.NewConnectionStateDetail(shipapi.ConnectionStateCompleted, nil)
+	facade.recordOperatorAdminV1PairingDetail(target, secondGeneration, completed)
+	if action := facade.operatorAdminV1ActiveActionSnapshot(now); action == nil || action.actionID != secondID ||
+		action.state != "terminal" || action.outcome != "connection_completed" {
+		t.Fatalf("current generation terminal action = %#v", action)
+	}
+	facade.clearOperatorAdminV1ActiveAction(secondID)
+	if action := facade.operatorAdminV1ActiveActionSnapshot(now); action != nil {
+		t.Fatalf("terminal observation retained action %#v", action)
+	}
+
+	if !facade.armOperatorAdminV1ActiveAction(firstID, target, false, now.Add(time.Second)) {
+		t.Fatal("expiry action was not armed")
+	}
+	if action := facade.operatorAdminV1ActiveActionSnapshot(now.Add(time.Second)); action != nil {
+		t.Fatalf("expired action retained %#v", action)
+	}
+	if !facade.armOperatorAdminV1ActiveAction(secondID, target, false, now.Add(time.Minute)) {
+		t.Fatal("cancel action was not armed")
+	}
+	facade.clearOperatorAdminV1ActiveAction("")
+	if action := facade.operatorAdminV1ActiveActionSnapshot(now); action != nil {
+		t.Fatalf("explicit abandonment retained action %#v", action)
+	}
+}
+
+func TestIssue124ActiveActionCallbackSnapshotRaceIsLinearizable(t *testing.T) {
+	now := time.Unix(1_960_000_000, 0)
+	const actionID = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	facade := &firstTrustFacade{connections: make(map[string]*firstTrustConnection)}
+	if !facade.armOperatorAdminV1ActiveAction(actionID, operatorAdminV1BridgeTestSKI, true, now.Add(time.Minute)) {
+		t.Fatal("action was not armed")
+	}
+	facade.mu.Lock()
+	connection := facade.newConnectionLocked(operatorAdminV1BridgeTestSKI, false)
+	facade.bindOperatorAdminV1ActiveActionLocked(operatorAdminV1BridgeTestSKI, connection.generation)
+	generation := connection.generation
+	facade.mu.Unlock()
+
+	completed := shipapi.NewConnectionStateDetail(shipapi.ConnectionStateCompleted, nil)
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	for index := 0; index < 8; index++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			for attempt := 0; attempt < 64; attempt++ {
+				_ = facade.operatorAdminV1ActiveActionSnapshot(now)
+			}
+		}()
+	}
+	wait.Add(1)
+	go func() {
+		defer wait.Done()
+		<-start
+		facade.recordOperatorAdminV1PairingDetail(operatorAdminV1BridgeTestSKI, generation, completed)
+	}()
+	close(start)
+	wait.Wait()
+	action := facade.operatorAdminV1ActiveActionSnapshot(now)
+	if action == nil || action.actionID != actionID || action.state != "terminal" || action.outcome != "connection_completed" {
+		t.Fatalf("linearized action = %#v, want one terminal current-generation result", action)
+	}
+}
 
 func TestOperatorAdminV1BridgeSelectReservesWithoutDialAndConnectsAtMostOnce(t *testing.T) {
 	fixture := newMSP04BFixture(t, "commit_durable")
 	coordinator := fixture.coordinator.(*firstTrustCoordinator)
 	service := newOperatorAdminV1BridgeServiceSpy()
 	bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 700})
+	attachOperatorAdminV1TestActionFacade(bridge)
 
 	opened, failure := bridge.openOperatorAdminV1(context.Background(), time.Minute)
 	requireOperatorAdminV1BridgeSuccess(t, failure)
@@ -93,6 +237,7 @@ func TestIssue122BridgeForwardsPINReservationAndProviderExactlyOnce(t *testing.T
 	coordinator := fixture.coordinator.(*firstTrustCoordinator)
 	service := newOperatorAdminV1BridgeServiceSpy()
 	bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 701})
+	attachOperatorAdminV1TestActionFacade(bridge)
 	if transition, failure := bridge.openOperatorAdminV1(context.Background(), time.Minute); failure != "" || !transition.changed {
 		t.Fatalf("open=%#v/%q", transition, failure)
 	}
@@ -139,6 +284,7 @@ func TestOperatorAdminV1BridgeTerminalCandidateLifecycleRetiresSelections(t *tes
 	coordinator := fixture.coordinator.(*firstTrustCoordinator)
 	service := newOperatorAdminV1BridgeServiceSpy()
 	bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 9_000})
+	attachOperatorAdminV1TestActionFacade(bridge)
 
 	for index := 0; index <= operatorAdminV1BridgeMaximumReferences; index++ {
 		if transition, failure := bridge.openOperatorAdminV1(context.Background(), time.Second); failure != "" || !transition.changed {
@@ -276,6 +422,7 @@ func TestOperatorAdminV1BridgeConnectFailureReportsConsumedSelectionChange(t *te
 	service := newOperatorAdminV1BridgeServiceSpy()
 	service.connectErr = shipapi.ErrPairingCandidateReservationUnavailable
 	bridge := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 740})
+	attachOperatorAdminV1TestActionFacade(bridge)
 	if transition, failure := bridge.openOperatorAdminV1(context.Background(), time.Minute); failure != "" || !transition.changed {
 		t.Fatalf("open transition=%#v failure=%q", transition, failure)
 	}
@@ -629,6 +776,10 @@ func TestOperatorAdminV1BridgeSnapshotIsBoundedSanitizedAndNeverPartial(t *testi
 }
 
 const operatorAdminV1BridgeTestSKI = "0123456789abcdef0123456789abcdef01234567"
+
+func attachOperatorAdminV1TestActionFacade(bridge *operatorAdminV1Bridge) {
+	bridge.actionFacade = &firstTrustFacade{connections: make(map[string]*firstTrustConnection)}
+}
 
 type operatorAdminV1BridgeServiceSpy struct {
 	mu sync.Mutex

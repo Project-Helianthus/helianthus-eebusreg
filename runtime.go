@@ -512,7 +512,14 @@ func (backend *facadeRuntimeBackend) snapshotOperatorAdminV1(ctx context.Context
 		discovery: snapshot.Discovery, degraded: AdminErrorCodeV1(snapshot.Degraded),
 		trusted: operatorAdminV1TrustedFactsFromFacade(snapshot.Trusted), connected: operatorAdminV1ConnectedFactsFromFacade(snapshot.Connected),
 		discovered: operatorAdminV1DiscoveredFactsFromFacade(snapshot.Discovered), candidates: operatorAdminV1CandidateFactsFromFacade(snapshot.Candidates),
+		activeAction: operatorAdminV1ActiveActionFactFromFacade(snapshot.ActiveAction),
 	}, nil
+}
+
+func (backend *facadeRuntimeBackend) observeOperatorAdminV1ActiveAction(ctx context.Context, actionID string) {
+	if internal := backend.operatorAdminV1InternalBackend(); internal != nil {
+		internal.OperatorAdminV1ObserveAction(ctx, actionID)
+	}
 }
 
 func (backend *facadeRuntimeBackend) openOperatorAdminV1(ctx context.Context, duration time.Duration) (operatorAdminV1Transition, *AdminErrorV1) {
@@ -605,7 +612,17 @@ func (backend *facadeRuntimeBackend) operatorAdminV1InternalBackend() eebusfacad
 }
 
 func operatorAdminV1TransitionFromFacade(source eebusfacade.OperatorAdminV1Transition) operatorAdminV1Transition {
-	return operatorAdminV1Transition{outcome: AdminOutcomeV1(source.Outcome), changed: source.Changed}
+	return operatorAdminV1Transition{outcome: AdminOutcomeV1(source.Outcome), changed: source.Changed, actionID: source.ActionID}
+}
+
+func operatorAdminV1ActiveActionFactFromFacade(source *eebusfacade.OperatorAdminV1ActiveAction) *operatorAdminV1ActiveActionFact {
+	if source == nil {
+		return nil
+	}
+	return &operatorAdminV1ActiveActionFact{
+		actionID: source.ActionID, kind: source.Kind, state: source.State,
+		outcome: AdminOutcomeV1(source.Outcome), retryable: source.Retryable, expiresAt: source.Expiry,
+	}
 }
 
 func operatorAdminV1FacadeFailure(failure string) *AdminErrorV1 {

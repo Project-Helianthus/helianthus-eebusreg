@@ -13,7 +13,7 @@ func TestMSP05PCommandDefaultPinsReviewedEEBusGo(t *testing.T) {
 
 go 1.22.0
 
-require github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.19
+require github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.20
 `)
 	command := exec.Command("go", "run", ".", "-repo-root", root, "-max-go", "1.22")
 	command.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local")
@@ -21,7 +21,7 @@ require github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.19
 	if err != nil {
 		t.Fatalf("toolchain proof default rejected reviewed eebus-go: %v\n%s", err, output)
 	}
-	if !strings.Contains(string(output), "github.com/Project-Helianthus/helianthus-eebus-go@v0.7.1-helianthus.19") {
+	if !strings.Contains(string(output), "github.com/Project-Helianthus/helianthus-eebus-go@v0.7.1-helianthus.20") {
 		t.Fatalf("toolchain proof output omitted reviewed eebus-go pin:\n%s", output)
 	}
 }
@@ -40,12 +40,12 @@ func TestMSP05PToolchainScriptDeclaresReviewedRuntimeClosure(t *testing.T) {
 		{
 			name:    "eebus",
 			path:    "github.com/Project-Helianthus/helianthus-eebus-go",
-			version: "v0.7.1-helianthus.19",
+			version: "v0.7.1-helianthus.20",
 		},
 		{
 			name:    "ship",
 			path:    "github.com/Project-Helianthus/helianthus-ship-go",
-			version: "v0.6.1-helianthus.17",
+			version: "v0.6.1-helianthus.18",
 		},
 		{
 			name:    "spine",

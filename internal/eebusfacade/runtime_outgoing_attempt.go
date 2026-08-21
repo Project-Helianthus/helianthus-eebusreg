@@ -22,6 +22,10 @@ type firstTrustOutgoingAttemptLifecycle interface {
 	ServicePairingDetailUpdate(string, *shipapi.ConnectionStateDetail)
 }
 
+type firstTrustOutgoingAttemptGenerationLifecycle interface {
+	servicePairingDetailUpdateForGeneration(string, uint64, *shipapi.ConnectionStateDetail)
+}
+
 type firstTrustOutgoingAttemptTLSLifecycle interface {
 	outgoingAttemptTLSBound([]byte, uint64) bool
 }
@@ -284,6 +288,7 @@ func (bridge *firstTrustOutgoingAttemptBridge) OutgoingAttemptHandshakeStateUpda
 		})
 	}
 	bridge.recordHandshakeObservation(converted)
+	detail := runtimeOutgoingAttemptPairingDetail(state)
 	if stateName == "error" {
 		result := bridge.coordinator.completeOutgoingAttemptLocked(context.Background(), converted, remote, false)
 		if !firstTrustOutgoingAttemptCompletionDurable(result) {
@@ -291,15 +296,15 @@ func (bridge *firstTrustOutgoingAttemptBridge) OutgoingAttemptHandshakeStateUpda
 		}
 		bridge.clearPendingFailure(normalized, converted)
 		bridge.clearHandshakeObservation(converted)
+		bridge.publishPairingDetail(normalized, candidateConnection, detail)
 		if candidateConnection != 0 {
 			bridge.mutateTerminalLifecycle(func(lifecycle firstTrustOutgoingAttemptTerminalLifecycle) {
 				lifecycle.outgoingAttemptTerminated(remote, candidateConnection)
 			})
 		}
+		return
 	}
-	bridge.mutateLifecycle(func(lifecycle firstTrustOutgoingAttemptLifecycle) {
-		lifecycle.ServicePairingDetailUpdate(normalized, runtimeOutgoingAttemptPairingDetail(state))
-	})
+	bridge.publishPairingDetail(normalized, candidateConnection, detail)
 	if stateName == "complete" {
 		result := bridge.coordinator.completeOutgoingAttemptLocked(context.Background(), converted, remote, true)
 		if firstTrustOutgoingAttemptCompletionDurable(result) || result == "failure_state_failed_closed" {
@@ -307,6 +312,20 @@ func (bridge *firstTrustOutgoingAttemptBridge) OutgoingAttemptHandshakeStateUpda
 			bridge.clearHandshakeObservation(converted)
 		}
 	}
+}
+
+func (bridge *firstTrustOutgoingAttemptBridge) publishPairingDetail(
+	normalized string,
+	generation uint64,
+	detail *shipapi.ConnectionStateDetail,
+) {
+	bridge.mutateLifecycle(func(lifecycle firstTrustOutgoingAttemptLifecycle) {
+		if generationAware, ok := lifecycle.(firstTrustOutgoingAttemptGenerationLifecycle); ok && generation != 0 {
+			generationAware.servicePairingDetailUpdateForGeneration(normalized, generation, detail)
+			return
+		}
+		lifecycle.ServicePairingDetailUpdate(normalized, detail)
+	})
 }
 
 func (bridge *firstTrustOutgoingAttemptBridge) finishSuccessfulOutgoingAttemptClose(

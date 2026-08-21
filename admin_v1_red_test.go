@@ -134,6 +134,14 @@ func TestIssue124ConnectReturnsStableActionAndSnapshotIsIdentityFree(t *testing.
 	if replayed.ActionID != actionID || !replayed.Replayed || backend.calls("connect") != 1 {
 		t.Fatalf("replayed connect = %#v effects=%d, want same action/no relaunch", replayed, backend.calls("connect"))
 	}
+	changedPIN := request
+	changedPIN.PIN = []byte("a1b2c3d4")
+	if _, changedFailure := admin.Connect(context.Background(), changedPIN); changedFailure == nil || changedFailure.Code != AdminErrorCodeV1IdempotencyConflict {
+		t.Fatalf("changed PIN replay failure = %#v, want idempotency_conflict", changedFailure)
+	}
+	if backend.calls("connect_pin") != 0 {
+		t.Fatalf("changed PIN replay launched %d PIN effects", backend.calls("connect_pin"))
+	}
 
 	status, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
 	requireAdminV1Success(t, failure)
@@ -1337,6 +1345,14 @@ func (backend *operatorAdminV1TestBackend) snapshotOperatorAdminV1(context.Conte
 	return cloneOperatorAdminV1TestFacts(backend.facts), nil
 }
 
+func (backend *operatorAdminV1TestBackend) observeOperatorAdminV1ActiveAction(_ context.Context, actionID string) {
+	backend.mu.Lock()
+	if backend.facts.activeAction != nil && backend.facts.activeAction.actionID == actionID {
+		backend.facts.activeAction = nil
+	}
+	backend.mu.Unlock()
+}
+
 func (backend *operatorAdminV1TestBackend) openOperatorAdminV1(context.Context, time.Duration) (operatorAdminV1Transition, *AdminErrorV1) {
 	return backend.effect("open", "")
 }
@@ -1405,7 +1421,11 @@ func (backend *operatorAdminV1TestBackend) effect(operation, reference string) (
 		}
 		return override.transition, nil
 	}
-	return operatorAdminV1Transition{outcome: AdminOutcomeV1(operation + "_complete"), changed: true}, nil
+	transition := operatorAdminV1Transition{outcome: AdminOutcomeV1(operation + "_complete"), changed: true}
+	if operation == "connect" || operation == "connect_pin" {
+		transition.actionID = strings.Repeat("c", 64)
+	}
+	return transition, nil
 }
 
 func (backend *operatorAdminV1TestBackend) setEffect(

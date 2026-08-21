@@ -19,6 +19,7 @@ const (
 	operatorAdminV1BridgeMaximumRows       = 128
 	operatorAdminV1BridgeMaximumReferences = 128
 	operatorAdminV1BridgeReferenceAttempts = 32
+	operatorAdminV1ActionTTL               = 2 * time.Minute
 )
 
 type operatorAdminV1Service interface {
@@ -30,6 +31,7 @@ type operatorAdminV1Service interface {
 
 type OperatorAdminV1Backend interface {
 	OperatorAdminV1Snapshot(context.Context) (OperatorAdminV1Snapshot, string)
+	OperatorAdminV1ObserveAction(context.Context, string)
 	OperatorAdminV1Open(context.Context, time.Duration) (OperatorAdminV1Transition, string)
 	OperatorAdminV1Close(context.Context) (OperatorAdminV1Transition, string)
 	OperatorAdminV1Select(context.Context, string, string) (string, OperatorAdminV1Transition, string)
@@ -42,8 +44,18 @@ type OperatorAdminV1Backend interface {
 }
 
 type OperatorAdminV1Transition struct {
-	Outcome string
-	Changed bool
+	Outcome  string
+	Changed  bool
+	ActionID string
+}
+
+type OperatorAdminV1ActiveAction struct {
+	ActionID  string
+	Kind      string
+	State     string
+	Outcome   string
+	Retryable bool
+	Expiry    time.Time
 }
 
 type OperatorAdminV1Snapshot struct {
@@ -61,6 +73,7 @@ type OperatorAdminV1Snapshot struct {
 	Connected      []OperatorAdminV1Fact
 	Discovered     []OperatorAdminV1Fact
 	Candidates     []OperatorAdminV1Fact
+	ActiveAction   *OperatorAdminV1ActiveAction
 }
 
 type OperatorAdminV1Fact struct {
@@ -86,8 +99,18 @@ type OperatorAdminV1Fact struct {
 }
 
 type operatorAdminV1BridgeTransition struct {
-	outcome string
-	changed bool
+	outcome  string
+	changed  bool
+	actionID string
+}
+
+type operatorAdminV1BridgeActiveAction struct {
+	actionID  string
+	kind      string
+	state     string
+	outcome   string
+	retryable bool
+	expiresAt time.Time
 }
 
 type operatorAdminV1BridgeSnapshot struct {
@@ -105,6 +128,7 @@ type operatorAdminV1BridgeSnapshot struct {
 	connected      []operatorAdminV1BridgeFact
 	discovered     []operatorAdminV1BridgeFact
 	candidates     []operatorAdminV1BridgeFact
+	activeAction   *operatorAdminV1BridgeActiveAction
 }
 
 type operatorAdminV1BridgeFact struct {
@@ -166,12 +190,13 @@ type operatorAdminV1BridgeCandidateBinding struct {
 type operatorAdminV1Bridge struct {
 	serial sync.Mutex
 
-	coordinator *firstTrustCoordinator
-	service     operatorAdminV1Service
-	random      io.Reader
-	localSKI    string
-	localSHIPID string
-	closed      bool
+	coordinator  *firstTrustCoordinator
+	service      operatorAdminV1Service
+	random       io.Reader
+	localSKI     string
+	localSHIPID  string
+	actionFacade *firstTrustFacade
+	closed       bool
 
 	partners     map[string]operatorAdminV1BridgePartnerBinding
 	observations map[string]operatorAdminV1BridgeObservationBinding
@@ -196,6 +221,7 @@ type operatorAdminV1BridgeRawSnapshot struct {
 	connected      []operatorAdminV1BridgeRawConnected
 	discovered     []operatorAdminV1BridgeRawObservation
 	candidate      *operatorAdminV1BridgeCandidateBinding
+	activeAction   *operatorAdminV1BridgeActiveAction
 }
 
 type operatorAdminV1BridgeRawPartner struct {
@@ -295,6 +321,14 @@ func (backend *serviceBackend) OperatorAdminV1Snapshot(ctx context.Context) (Ope
 	return exportOperatorAdminV1Snapshot(snapshot), ""
 }
 
+func (backend *serviceBackend) OperatorAdminV1ObserveAction(ctx context.Context, actionID string) {
+	bridge := backend.operatorAdminV1Bridge()
+	if bridge == nil || operatorAdminV1BridgeContext(ctx).Err() != nil {
+		return
+	}
+	bridge.observeOperatorAdminV1ActiveAction(actionID)
+}
+
 func (backend *serviceBackend) OperatorAdminV1Open(ctx context.Context, duration time.Duration) (OperatorAdminV1Transition, string) {
 	bridge := backend.operatorAdminV1Bridge()
 	if bridge == nil {
@@ -377,7 +411,7 @@ func (backend *serviceBackend) OperatorAdminV1Untrust(ctx context.Context, refer
 }
 
 func exportOperatorAdminV1Transition(source operatorAdminV1BridgeTransition) OperatorAdminV1Transition {
-	return OperatorAdminV1Transition{Outcome: source.outcome, Changed: source.changed}
+	return OperatorAdminV1Transition{Outcome: source.outcome, Changed: source.changed, ActionID: source.actionID}
 }
 
 func exportOperatorAdminV1Snapshot(source operatorAdminV1BridgeSnapshot) OperatorAdminV1Snapshot {
@@ -388,6 +422,17 @@ func exportOperatorAdminV1Snapshot(source operatorAdminV1BridgeSnapshot) Operato
 		Discovery: source.discovery, Degraded: source.degraded,
 		Trusted: exportOperatorAdminV1Facts(source.trusted), Connected: exportOperatorAdminV1Facts(source.connected),
 		Discovered: exportOperatorAdminV1Facts(source.discovered), Candidates: exportOperatorAdminV1Facts(source.candidates),
+		ActiveAction: exportOperatorAdminV1ActiveAction(source.activeAction),
+	}
+}
+
+func exportOperatorAdminV1ActiveAction(source *operatorAdminV1BridgeActiveAction) *OperatorAdminV1ActiveAction {
+	if source == nil {
+		return nil
+	}
+	return &OperatorAdminV1ActiveAction{
+		ActionID: source.actionID, Kind: source.kind, State: source.state,
+		Outcome: source.outcome, Retryable: source.retryable, Expiry: source.expiresAt,
 	}
 }
 
@@ -421,6 +466,15 @@ func (bridge *operatorAdminV1Bridge) snapshotOperatorAdminV1(ctx context.Context
 	}
 	bridge.pruneSelectionsLocked()
 	return bridge.sanitizeSnapshot(raw)
+}
+
+func (bridge *operatorAdminV1Bridge) observeOperatorAdminV1ActiveAction(actionID string) {
+	bridge.serial.Lock()
+	defer bridge.serial.Unlock()
+	if !validOperatorAdminV1BridgeActionID(actionID) {
+		return
+	}
+	bridge.clearOperatorAdminV1ActiveAction(actionID)
 }
 
 func (bridge *operatorAdminV1Bridge) openOperatorAdminV1(ctx context.Context, duration time.Duration) (operatorAdminV1BridgeTransition, string) {
@@ -465,6 +519,7 @@ func (bridge *operatorAdminV1Bridge) closeOperatorAdminV1(ctx context.Context) (
 		return operatorAdminV1BridgeTransition{}, "unknown_state"
 	}
 	changed := before != bridge.coordinator.state()
+	bridge.clearOperatorAdminV1ActiveAction("")
 	if changed {
 		bridge.selections = make(map[string]operatorAdminV1BridgeSelectionBinding)
 		bridge.candidates = make(map[string]operatorAdminV1BridgeCandidateBinding)
@@ -532,11 +587,16 @@ func (bridge *operatorAdminV1Bridge) connectOperatorAdminV1(ctx context.Context,
 		!bridge.coordinator.operatorAdminV1SelectionCurrent(binding.candidateRef, binding.ski) {
 		return operatorAdminV1BridgeTransition{}, "observation_stale"
 	}
+	actionID, actionFacade, failure := bridge.armOperatorAdminV1ConnectAction(binding.ski, false)
+	if failure != "" {
+		return operatorAdminV1BridgeTransition{}, failure
+	}
 	delete(bridge.selections, reference)
 	if err := callOperatorAdminV1Connect(bridge.service, binding.reservation); err != nil {
+		actionFacade.clearOperatorAdminV1ActiveAction(actionID)
 		return operatorAdminV1BridgeTransition{changed: true}, mapOperatorAdminV1ConnectError(err)
 	}
-	return operatorAdminV1BridgeTransition{outcome: "connection_started", changed: true}, ""
+	return operatorAdminV1BridgeTransition{outcome: "connection_started", changed: true, actionID: actionID}, ""
 }
 
 func (bridge *operatorAdminV1Bridge) connectOperatorAdminV1WithPIN(ctx context.Context, reference string, provider shipapi.TransientPINProvider) (operatorAdminV1BridgeTransition, string) {
@@ -550,11 +610,54 @@ func (bridge *operatorAdminV1Bridge) connectOperatorAdminV1WithPIN(ctx context.C
 		!bridge.coordinator.operatorAdminV1SelectionCurrent(binding.candidateRef, binding.ski) {
 		return operatorAdminV1BridgeTransition{}, "observation_stale"
 	}
+	actionID, actionFacade, failure := bridge.armOperatorAdminV1ConnectAction(binding.ski, true)
+	if failure != "" {
+		return operatorAdminV1BridgeTransition{}, failure
+	}
 	delete(bridge.selections, reference)
 	if err := callOperatorAdminV1ConnectWithPIN(bridge.service, binding.reservation, provider); err != nil {
+		actionFacade.clearOperatorAdminV1ActiveAction(actionID)
 		return operatorAdminV1BridgeTransition{changed: true}, mapOperatorAdminV1ConnectError(err)
 	}
-	return operatorAdminV1BridgeTransition{outcome: "connection_started", changed: true}, ""
+	return operatorAdminV1BridgeTransition{outcome: "connection_started", changed: true, actionID: actionID}, ""
+}
+
+func (bridge *operatorAdminV1Bridge) armOperatorAdminV1ConnectAction(
+	target string,
+	pinSupplied bool,
+) (string, *firstTrustFacade, string) {
+	facade, now := bridge.operatorAdminV1ActionFacade()
+	if facade == nil || !validOperatorAdminV1BridgeSKI(target) {
+		return "", nil, "admin_boundary_unavailable"
+	}
+	used := bridge.currentReferences()
+	if current := facade.operatorAdminV1ActiveActionID(now); current != "" {
+		used[current] = struct{}{}
+	}
+	actionID, ok := bridge.newOpaqueReference(used)
+	if !ok || !facade.armOperatorAdminV1ActiveAction(actionID, target, pinSupplied, now.Add(operatorAdminV1ActionTTL)) {
+		return "", nil, "admin_boundary_unavailable"
+	}
+	return actionID, facade, ""
+}
+
+func (bridge *operatorAdminV1Bridge) operatorAdminV1ActionFacade() (*firstTrustFacade, time.Time) {
+	if bridge == nil || bridge.coordinator == nil {
+		return nil, time.Time{}
+	}
+	bridge.coordinator.mu.Lock()
+	defer bridge.coordinator.mu.Unlock()
+	if bridge.actionFacade != nil {
+		return bridge.actionFacade, bridge.coordinator.now()
+	}
+	facade, _ := bridge.coordinator.effects.(*firstTrustFacade)
+	return facade, bridge.coordinator.now()
+}
+
+func (bridge *operatorAdminV1Bridge) clearOperatorAdminV1ActiveAction(actionID string) {
+	if facade, _ := bridge.operatorAdminV1ActionFacade(); facade != nil {
+		facade.clearOperatorAdminV1ActiveAction(actionID)
+	}
 }
 
 func (bridge *operatorAdminV1Bridge) pruneSelectionsLocked() {
@@ -626,6 +729,7 @@ func (bridge *operatorAdminV1Bridge) cancelOperatorAdminV1(ctx context.Context, 
 	}
 	delete(bridge.candidates, reference)
 	bridge.selections = make(map[string]operatorAdminV1BridgeSelectionBinding)
+	bridge.clearOperatorAdminV1ActiveAction("")
 	return operatorAdminV1BridgeTransition{outcome: outcome, changed: true}, ""
 }
 
@@ -683,6 +787,7 @@ func (bridge *operatorAdminV1Bridge) closeOperatorAdminV1Bridge() {
 	}
 	bridge.serial.Lock()
 	bridge.closed = true
+	bridge.clearOperatorAdminV1ActiveAction("")
 	bridge.partners = nil
 	bridge.observations = nil
 	bridge.selections = nil
@@ -798,6 +903,7 @@ func (bridge *operatorAdminV1Bridge) captureRawSnapshot() (operatorAdminV1Bridge
 	coordinator.mu.Unlock()
 
 	if facade, ok := effects.(*firstTrustFacade); ok {
+		raw.activeAction = facade.operatorAdminV1ActiveActionSnapshot(now)
 		raw.connected = facade.operatorAdminV1ConnectedSnapshot()
 		metadata := facade.operatorAdminV1MetadataSnapshot()
 		connectedBySKI := make(map[string]operatorAdminV1BridgeRawConnected, len(raw.connected))
@@ -883,6 +989,9 @@ func operatorAdminV1BridgeRetryStateLocked(
 }
 
 func (bridge *operatorAdminV1Bridge) sanitizeSnapshot(raw operatorAdminV1BridgeRawSnapshot) (operatorAdminV1BridgeSnapshot, string) {
+	if !validOperatorAdminV1BridgeActiveAction(raw.activeAction, raw.capturedAt) {
+		return operatorAdminV1BridgeSnapshot{}, "admin_boundary_unavailable"
+	}
 	partnerRefs := make(map[string]string, len(raw.trusted))
 	partnerBindings := make(map[string]operatorAdminV1BridgePartnerBinding, len(raw.trusted))
 	observationRefs := make(map[string]string, len(raw.discovered))
@@ -928,7 +1037,8 @@ func (bridge *operatorAdminV1Bridge) sanitizeSnapshot(raw operatorAdminV1BridgeR
 		status: raw.status, window: raw.window, windowDeadline: raw.windowDeadline,
 		register: raw.register, listener: raw.listener, discovery: raw.discovery, degraded: raw.degraded,
 		trusted: make([]operatorAdminV1BridgeFact, len(raw.trusted)), connected: make([]operatorAdminV1BridgeFact, len(raw.connected)),
-		discovered: make([]operatorAdminV1BridgeFact, len(raw.discovered)),
+		discovered:   make([]operatorAdminV1BridgeFact, len(raw.discovered)),
+		activeAction: cloneOperatorAdminV1BridgeActiveAction(raw.activeAction),
 	}
 	for index, partner := range raw.trusted {
 		snapshot.trusted[index] = operatorAdminV1BridgeFact{
@@ -967,6 +1077,14 @@ func (bridge *operatorAdminV1Bridge) sanitizeSnapshot(raw operatorAdminV1BridgeR
 	bridge.observations = observationBindings
 	bridge.candidates = candidateBindings
 	return snapshot, ""
+}
+
+func cloneOperatorAdminV1BridgeActiveAction(source *operatorAdminV1BridgeActiveAction) *operatorAdminV1BridgeActiveAction {
+	if source == nil {
+		return nil
+	}
+	copy := *source
+	return &copy
 }
 
 func (bridge *operatorAdminV1Bridge) referenceForTarget(
@@ -1393,6 +1511,27 @@ func operatorAdminV1BridgeContext(ctx context.Context) context.Context {
 func validOperatorAdminV1BridgeSKI(value string) bool {
 	decoded, normalized, ok := decodeFirstTrustSKI(value)
 	return ok && len(decoded) == 20 && normalized == value
+}
+
+func validOperatorAdminV1BridgeActiveAction(action *operatorAdminV1BridgeActiveAction, capturedAt time.Time) bool {
+	if action == nil {
+		return true
+	}
+	if !validOperatorAdminV1BridgeActionID(action.actionID) || action.kind != "connect" ||
+		(action.state != "pending" && action.state != "terminal") || action.expiresAt.IsZero() ||
+		!capturedAt.Before(action.expiresAt) {
+		return false
+	}
+	if action.state == "pending" {
+		return action.outcome == ""
+	}
+	switch action.outcome {
+	case "connection_completed", "attempt_timeout", "disconnected", "trust_denied", "unknown_state",
+		"pin_required", "pin_optional", "pin_busy", "pin_rejected", "pin_unavailable", "pin_protocol_error":
+		return true
+	default:
+		return false
+	}
 }
 
 func validOperatorAdminV1BridgeText(value string) bool {
