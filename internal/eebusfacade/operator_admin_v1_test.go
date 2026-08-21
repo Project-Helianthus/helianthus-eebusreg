@@ -148,10 +148,119 @@ func TestIssue124RealCallbackRejectsStaleSameSKIReplacementGeneration(t *testing
 	}
 }
 
+func TestIssue124RealTerminalErrorSurvivesGenerationTeardownUntilExactObservation(t *testing.T) {
+	tests := []struct {
+		name      string
+		pin       *shipmodel.PINHandshakeDetail
+		err       error
+		outcome   string
+		retryable bool
+	}{
+		{
+			name: "pin rejected",
+			pin: &shipmodel.PINHandshakeDetail{
+				Requirement: shipmodel.PINRequirementRequired,
+				Phase:       shipmodel.PINPhaseFailed,
+				Category:    shipmodel.PINCategoryPointer(shipmodel.PINCategoryRejected),
+			},
+			outcome: "pin_rejected",
+		},
+		{
+			name: "pin unavailable",
+			pin: &shipmodel.PINHandshakeDetail{
+				Requirement: shipmodel.PINRequirementRequired,
+				Phase:       shipmodel.PINPhaseFailed,
+				Category:    shipmodel.PINCategoryPointer(shipmodel.PINCategoryUnavailable),
+				Retryable:   true,
+			},
+			outcome:   "pin_unavailable",
+			retryable: true,
+		},
+		{
+			name: "pin protocol",
+			pin: &shipmodel.PINHandshakeDetail{
+				Requirement: shipmodel.PINRequirementUnknown,
+				Phase:       shipmodel.PINPhaseFailed,
+				Category:    shipmodel.PINCategoryPointer(shipmodel.PINCategoryProtocol),
+			},
+			outcome: "pin_protocol_error",
+		},
+		{name: "untyped timeout", err: context.DeadlineExceeded, outcome: "attempt_timeout", retryable: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := newIssue124OperatorRealPath(t)
+			path.outgoing.OutgoingAttemptHandshakeStateUpdate(
+				path.remoteSKI,
+				shipmodel.ShipState{State: shipmodel.SmeStateError, Error: test.err, PIN: test.pin},
+				path.permit.Metadata,
+			)
+			assertIssue124TerminalActionObservedExactlyOnce(t, path, test.outcome, test.retryable)
+		})
+	}
+}
+
+func TestIssue124RealPINRequiredSurvivesLaterErrorTeardown(t *testing.T) {
+	path := newIssue124OperatorRealPath(t)
+	required := shipmodel.PINCategoryRequired
+	path.outgoing.OutgoingAttemptHandshakeStateUpdate(
+		path.remoteSKI,
+		shipmodel.ShipState{
+			State: shipmodel.SmePinStateAskProcess,
+			PIN: &shipmodel.PINHandshakeDetail{
+				Requirement: shipmodel.PINRequirementRequired,
+				Phase:       shipmodel.PINPhaseWaitingPeer,
+				Category:    &required,
+				Retryable:   true,
+			},
+		},
+		path.permit.Metadata,
+	)
+	if action := path.facade.operatorAdminV1ActiveActionSnapshot(path.fixture.clock.WallNow()); action == nil ||
+		action.state != "terminal" || action.outcome != "pin_required" || !action.retryable {
+		t.Fatalf("PIN-required action before teardown = %#v", action)
+	}
+	path.outgoing.OutgoingAttemptHandshakeStateUpdate(
+		path.remoteSKI,
+		shipmodel.ShipState{State: shipmodel.SmeStateError, Error: errors.New("closed owner error")},
+		path.permit.Metadata,
+	)
+	assertIssue124TerminalActionObservedExactlyOnce(t, path, "pin_required", true)
+}
+
+func assertIssue124TerminalActionObservedExactlyOnce(
+	t *testing.T,
+	path *issue124OperatorRealPath,
+	wantOutcome string,
+	wantRetryable bool,
+) {
+	t.Helper()
+	action := path.facade.operatorAdminV1ActiveActionSnapshot(path.fixture.clock.WallNow())
+	if action == nil || action.actionID != path.actionID || action.state != "terminal" ||
+		action.outcome != wantOutcome || action.retryable != wantRetryable {
+		t.Fatalf("terminal action after generation teardown = %#v, want %q retryable=%t", action, wantOutcome, wantRetryable)
+	}
+	const wrongActionID = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	path.operator.observeOperatorAdminV1ActiveAction(wrongActionID)
+	if action := path.facade.operatorAdminV1ActiveActionSnapshot(path.fixture.clock.WallNow()); action == nil ||
+		action.actionID != path.actionID || action.state != "terminal" {
+		t.Fatalf("non-matching observation cleared terminal action: %#v", action)
+	}
+	path.operator.observeOperatorAdminV1ActiveAction(path.actionID)
+	if action := path.facade.operatorAdminV1ActiveActionSnapshot(path.fixture.clock.WallNow()); action != nil {
+		t.Fatalf("exact observation retained terminal action: %#v", action)
+	}
+	path.operator.observeOperatorAdminV1ActiveAction(path.actionID)
+	if action := path.facade.operatorAdminV1ActiveActionSnapshot(path.fixture.clock.WallNow()); action != nil {
+		t.Fatalf("repeated exact observation recreated terminal action: %#v", action)
+	}
+}
+
 type issue124OperatorRealPath struct {
 	fixture   *msp04cFixture
 	facade    *firstTrustFacade
 	outgoing  *firstTrustOutgoingAttemptBridge
+	operator  *operatorAdminV1Bridge
 	remoteSKI string
 	permit    shipapi.OutgoingAttemptPermit
 	actionID  string
@@ -288,7 +397,7 @@ func newIssue124OperatorRealPath(t *testing.T) *issue124OperatorRealPath {
 	}
 	facade.mu.Unlock()
 	return &issue124OperatorRealPath{
-		fixture: fixture, facade: facade, outgoing: outgoing, remoteSKI: remoteSKI,
+		fixture: fixture, facade: facade, outgoing: outgoing, operator: operator, remoteSKI: remoteSKI,
 		permit: permit, actionID: transition.actionID,
 	}
 }
