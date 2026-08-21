@@ -599,5 +599,7 @@ func runtimeOutgoingAttemptPairingDetail(state shipmodel.ShipState) *shipapi.Con
 	if state.Error != nil {
 		pairingState = shipapi.ConnectionStateError
 	}
-	return shipapi.NewConnectionStateDetail(pairingState, state.Error)
+	detail := shipapi.NewConnectionStateDetail(pairingState, state.Error)
+	detail.SetPINHandshakeDetail(state.PIN)
+	return detail
 }

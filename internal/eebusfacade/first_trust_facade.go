@@ -759,12 +759,24 @@ func (facade *firstTrustFacade) armOperatorAdminV1ActiveAction(
 	}
 	facade.mu.Lock()
 	defer facade.mu.Unlock()
-	if facade.next == ^uint64(0) || facade.activeAction != nil && facade.activeAction.actionID == actionID {
+	if facade.activeAction != nil && facade.activeAction.actionID == actionID {
 		return false
+	}
+	generation := uint64(0)
+	generationFloor := uint64(0)
+	if connection := facade.connections[target]; connection != nil && connection.active && connection.attemptStarted &&
+		!connection.cancelled && !connection.blocked && connection.pairingEpoch == facade.pairingEpoch {
+		generation = connection.generation
+		generationFloor = connection.generation
+	} else {
+		if facade.next == ^uint64(0) {
+			return false
+		}
+		generationFloor = facade.next + 1
 	}
 	facade.activeAction = &firstTrustActiveAction{
 		actionID: actionID, target: target, kind: "connect", state: "pending",
-		expiresAt: expiresAt, pinSupplied: pinSupplied, generationFloor: facade.next + 1,
+		expiresAt: expiresAt, pinSupplied: pinSupplied, generation: generation, generationFloor: generationFloor,
 	}
 	return true
 }

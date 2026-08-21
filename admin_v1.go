@@ -2,6 +2,7 @@ package eebusruntime
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -556,10 +557,12 @@ type operatorAdminV1Reducer struct {
 	serial chan struct{}
 	mu     sync.Mutex
 
-	now       func() time.Time
-	random    io.Reader
-	lifecycle operatorAdminV1Lifecycle
-	backend   operatorAdminV1Backend
+	now             func() time.Time
+	random          io.Reader
+	bindingKey      [32]byte
+	bindingKeyReady bool
+	lifecycle       operatorAdminV1Lifecycle
+	backend         operatorAdminV1Backend
 
 	initialized    bool
 	revision       uint64
@@ -581,15 +584,23 @@ func newOperatorAdminV1Reducer(
 	}
 	serial := make(chan struct{}, 1)
 	serial <- struct{}{}
+	var bindingKey [32]byte
+	bindingKeyReady := false
+	if random != nil {
+		_, err := io.ReadFull(random, bindingKey[:])
+		bindingKeyReady = err == nil && bindingKey != [32]byte{}
+	}
 	return &operatorAdminV1Reducer{
-		serial:    serial,
-		now:       now,
-		random:    random,
-		lifecycle: lifecycle,
-		backend:   backend,
-		handles:   make(map[[32]byte]operatorAdminV1HandleRecord),
-		byTarget:  make(map[operatorAdminV1HandleKind]map[string][32]byte),
-		replays:   make(map[string]operatorAdminV1Replay),
+		serial:          serial,
+		now:             now,
+		random:          random,
+		bindingKey:      bindingKey,
+		bindingKeyReady: bindingKeyReady,
+		lifecycle:       lifecycle,
+		backend:         backend,
+		handles:         make(map[[32]byte]operatorAdminV1HandleRecord),
+		byTarget:        make(map[operatorAdminV1HandleKind]map[string][32]byte),
+		replays:         make(map[string]operatorAdminV1Replay),
 	}
 }
 
@@ -699,7 +710,10 @@ func (admin *operatorAdminV1Reducer) Connect(ctx context.Context, request Connec
 			}()
 		}
 	}
-	binding := operatorAdminV1Binding("connect", request.Selection.token[:], request.PIN)
+	binding, bindingFailure := admin.connectBinding(request.Selection.token, request.PIN)
+	if requestFailure == nil {
+		requestFailure = bindingFailure
+	}
 	result, _, actionID, failure := admin.execute(
 		ctx, request.MutationPreconditionV1, binding, requestFailure,
 		func(now time.Time) (string, *AdminErrorV1) {
@@ -1506,6 +1520,28 @@ func operatorAdminV1Binding(operation string, parts ...[]byte) [32]byte {
 	var result [32]byte
 	copy(result[:], hash.Sum(nil))
 	return result
+}
+
+func (admin *operatorAdminV1Reducer) connectBinding(selection [32]byte, pin []byte) ([32]byte, *AdminErrorV1) {
+	if admin == nil || !admin.bindingKeyReady {
+		return [32]byte{}, newAdminBoundaryUnavailableV1()
+	}
+	mac := hmac.New(sha256.New, admin.bindingKey[:])
+	operatorAdminV1WriteBindingPart(mac, []byte("connect"))
+	operatorAdminV1WriteBindingPart(mac, selection[:])
+	presence := []byte{0}
+	if pin != nil {
+		presence[0] = 1
+	}
+	operatorAdminV1WriteBindingPart(mac, presence)
+	operatorAdminV1WriteBindingPart(mac, pin)
+	var result [32]byte
+	digest := mac.Sum(nil)
+	copy(result[:], digest)
+	for index := range digest {
+		digest[index] = 0
+	}
+	return result, nil
 }
 
 func operatorAdminV1WriteBindingPart(writer io.Writer, value []byte) {
