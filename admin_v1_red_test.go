@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 )
 
 func TestAdminV1FacadeHasClosedRequestResultOperations(t *testing.T) {
@@ -56,6 +58,17 @@ func TestIssue122ConnectPINIsOpaqueAndCannotBeRenderedOrSerialized(t *testing.T)
 	}
 	if payload, err := json.Marshal(request); err == nil || len(payload) != 0 {
 		t.Fatalf("ConnectRequestV1 JSON = %q/%v, want refusal", payload, err)
+	}
+}
+
+func TestIssue124SHIPCallbackDistinguishesRequiredFromOptionalPIN(t *testing.T) {
+	// A terminal operator action must report what SHIP actually observed.  A
+	// shared ConnectionStatePin with the same error channel cannot truthfully
+	// distinguish a required PIN from an optional continuation.
+	required := shipapi.NewConnectionStateDetail(shipapi.ConnectionStatePin, nil)
+	optional := shipapi.NewConnectionStateDetail(shipapi.ConnectionStatePin, nil)
+	if required.State() == optional.State() && required.Error() == optional.Error() {
+		t.Fatal("SHIP callback collapses required and optional PIN into ConnectionStatePin; it needs a typed terminal PIN outcome before eebusreg can expose one")
 	}
 }
 
