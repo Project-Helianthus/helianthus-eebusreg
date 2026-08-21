@@ -51,6 +51,7 @@ type SelectRequestV1 struct {
 type ConnectRequestV1 struct {
 	MutationPreconditionV1
 	Selection SelectionHandleV1
+	PIN       []byte
 }
 
 type ConfirmRequestV1 struct {
@@ -336,6 +337,43 @@ func (CandidateV1) GoString() string                     { return operatorAdminV
 func (CandidateV1) Format(state fmt.State, verb rune)    { operatorAdminV1Format(state, verb) }
 func (CandidateV1) MarshalJSON() ([]byte, error)         { return operatorAdminV1MarshalJSON() }
 
+type operatorAdminV1TransientPIN struct{ bytes []byte }
+
+func newOperatorAdminV1TransientPIN(value []byte) (operatorAdminV1TransientPIN, bool) {
+	if !validOperatorAdminV1PIN(value) {
+		return operatorAdminV1TransientPIN{}, false
+	}
+	return operatorAdminV1TransientPIN{bytes: append([]byte(nil), value...)}, true
+}
+
+func (pin *operatorAdminV1TransientPIN) WithTransientPIN(_ string, consume func([]byte) error) (bool, error) {
+	if pin == nil || pin.cleared() || consume == nil {
+		return false, errors.New("transient PIN provider invalid")
+	}
+	defer pin.clear()
+	return true, consume(pin.bytes)
+}
+
+func (pin *operatorAdminV1TransientPIN) DiscardTransientPIN(string) { pin.clear() }
+
+func (pin *operatorAdminV1TransientPIN) clear() {
+	if pin == nil {
+		return
+	}
+	for index := range pin.bytes {
+		pin.bytes[index] = 0
+	}
+	pin.bytes = nil
+}
+
+func (pin *operatorAdminV1TransientPIN) cleared() bool { return pin == nil || len(pin.bytes) == 0 }
+func (operatorAdminV1TransientPIN) String() string     { return operatorAdminV1String() }
+func (operatorAdminV1TransientPIN) GoString() string   { return operatorAdminV1String() }
+func (operatorAdminV1TransientPIN) Format(state fmt.State, verb rune) {
+	operatorAdminV1Format(state, verb)
+}
+func (operatorAdminV1TransientPIN) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
+
 func newAdminBoundaryUnavailableV1() *AdminErrorV1 {
 	return &AdminErrorV1{Code: AdminErrorCodeV1AdminBoundaryUnavailable}
 }
@@ -355,12 +393,17 @@ type operatorAdminV1Lifecycle interface {
 	operatorAdminV1Lifecycle() (enabled, started, shutdown bool)
 }
 
+type operatorAdminV1PINProvider interface {
+	WithTransientPIN(string, func([]byte) error) (bool, error)
+}
+
 type operatorAdminV1Backend interface {
 	snapshotOperatorAdminV1(context.Context) (operatorAdminV1SnapshotFacts, *AdminErrorV1)
 	openOperatorAdminV1(context.Context, time.Duration) (operatorAdminV1Transition, *AdminErrorV1)
 	closeOperatorAdminV1(context.Context) (operatorAdminV1Transition, *AdminErrorV1)
 	selectOperatorAdminV1(context.Context, string, string) (string, operatorAdminV1Transition, *AdminErrorV1)
 	connectOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
+	connectOperatorAdminV1WithPIN(context.Context, string, operatorAdminV1PINProvider) (operatorAdminV1Transition, *AdminErrorV1)
 	confirmOperatorAdminV1(context.Context, string, string) (operatorAdminV1Transition, *AdminErrorV1)
 	cancelOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
 	retryTrustedOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
@@ -593,13 +636,36 @@ func (admin *operatorAdminV1Reducer) Select(ctx context.Context, request SelectR
 }
 
 func (admin *operatorAdminV1Reducer) Connect(ctx context.Context, request ConnectRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
+	var pin *operatorAdminV1TransientPIN
+	var requestFailure *AdminErrorV1
+	handedOff := false
+	if request.PIN != nil {
+		owned, valid := newOperatorAdminV1TransientPIN(request.PIN)
+		if !valid {
+			requestFailure = operatorAdminV1Error(AdminErrorCodeV1InvalidRequest)
+		} else {
+			pin = &owned
+			defer func() {
+				if !handedOff {
+					pin.clear()
+				}
+			}()
+		}
+	}
 	binding := operatorAdminV1Binding("connect", request.Selection.token[:])
 	result, _, failure := admin.execute(
-		ctx, request.MutationPreconditionV1, binding, nil,
+		ctx, request.MutationPreconditionV1, binding, requestFailure,
 		func(now time.Time) (string, *AdminErrorV1) {
 			return admin.resolveHandleLocked(operatorAdminV1SelectionHandle, request.Selection.token, now)
 		},
 		func(ctx context.Context, target string) (string, operatorAdminV1Transition, *AdminErrorV1) {
+			if pin != nil {
+				transition, failure := admin.backend.connectOperatorAdminV1WithPIN(ctx, target, pin)
+				if failure == nil {
+					handedOff = true
+				}
+				return "", transition, failure
+			}
 			transition, failure := admin.backend.connectOperatorAdminV1(ctx, target)
 			return "", transition, failure
 		},
@@ -1260,6 +1326,18 @@ func validOperatorAdminV1SKI(value string) bool {
 	return true
 }
 
+func validOperatorAdminV1PIN(value []byte) bool {
+	if len(value) < 8 || len(value) > 16 {
+		return false
+	}
+	for _, character := range value {
+		if !(character >= '0' && character <= '9') && !(character >= 'a' && character <= 'f') && !(character >= 'A' && character <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
 func validOperatorAdminV1View(view AdminViewV1) bool {
 	switch view {
 	case AdminViewV1Trusted, AdminViewV1Connected, AdminViewV1Discovered, AdminViewV1Candidate:
@@ -1374,6 +1452,9 @@ func normalizeOperatorAdminV1Error(failure *AdminErrorV1) *AdminErrorV1 {
 		AdminErrorCodeV1BackoffActive,
 		AdminErrorCodeV1TerminalQuarantine,
 		AdminErrorCodeV1PersistenceFailure,
+		AdminErrorCodeV1("pin_unavailable"),
+		AdminErrorCodeV1("pin_rejected"),
+		AdminErrorCodeV1("pin_protocol"),
 		AdminErrorCodeV1UnknownState:
 		return operatorAdminV1Error(failure.Code)
 	default:
@@ -1440,6 +1521,13 @@ func (slot *operatorAdminV1BackendSlot) selectOperatorAdminV1(ctx context.Contex
 func (slot *operatorAdminV1BackendSlot) connectOperatorAdminV1(ctx context.Context, reference string) (operatorAdminV1Transition, *AdminErrorV1) {
 	if backend := slot.current(); backend != nil {
 		return backend.connectOperatorAdminV1(ctx, reference)
+	}
+	return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+}
+
+func (slot *operatorAdminV1BackendSlot) connectOperatorAdminV1WithPIN(ctx context.Context, reference string, provider operatorAdminV1PINProvider) (operatorAdminV1Transition, *AdminErrorV1) {
+	if backend := slot.current(); backend != nil && provider != nil {
+		return backend.connectOperatorAdminV1WithPIN(ctx, reference, provider)
 	}
 	return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
 }

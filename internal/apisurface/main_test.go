@@ -110,7 +110,7 @@ func TestOperatorAdminV1RequestResultAndErrorSurfaceIsExact(t *testing.T) {
 		"OpenPairingWindowRequestV1":  "type OpenPairingWindowRequestV1 struct{ MutationPreconditionV1; Duration time.Duration }",
 		"ClosePairingWindowRequestV1": "type ClosePairingWindowRequestV1 struct{ MutationPreconditionV1 }",
 		"SelectRequestV1":             "type SelectRequestV1 struct{ MutationPreconditionV1; Observation ObservationHandleV1; ExpectedSKI string }",
-		"ConnectRequestV1":            "type ConnectRequestV1 struct{ MutationPreconditionV1; Selection SelectionHandleV1 }",
+		"ConnectRequestV1":            "type ConnectRequestV1 struct{ MutationPreconditionV1; Selection SelectionHandleV1; PIN []uint8 }",
 		"ConfirmRequestV1":            "type ConfirmRequestV1 struct{ MutationPreconditionV1; Candidate CandidateHandleV1; ExpectedSKI string }",
 		"CancelRequestV1":             "type CancelRequestV1 struct{ MutationPreconditionV1; Candidate CandidateHandleV1 }",
 		"RetryTrustedRequestV1":       "type RetryTrustedRequestV1 struct{ MutationPreconditionV1; Partner PartnerHandleV1 }",

@@ -50,7 +50,7 @@ func TestStaticEvidenceReturnsIndependentSlices(t *testing.T) {
 }
 
 func TestGoListPinsEEBusGoWithoutReplace(t *testing.T) {
-	const operatorAdminEEBusGoVersion = "v0.7.1-helianthus.17"
+	const operatorAdminEEBusGoVersion = "v0.7.1-helianthus.19"
 	root := repoRoot(t)
 	cmd := exec.Command("go", "list", "-m", "-json", EEBusGoModulePath)
 	cmd.Dir = root

@@ -8,9 +8,19 @@ import (
 	"time"
 
 	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
 	shipcert "github.com/Project-Helianthus/helianthus-ship-go/cert"
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 )
+
+type issue122PINForwarder interface {
+	ConnectPairingCandidateWithPIN(shipapi.PairingCandidateReservation, shipapi.TransientPINProvider) error
+}
+
+// Compile-time contract: callers only receive the reviewed one-shot provider
+// surface. Its implementation must reject typed nil, unsupported and terminal
+// paths before SHIP is reached; no PIN bytes are accepted by this package.
+var _ issue122PINForwarder = (*Service)(nil)
 
 func TestScopedServiceShutdownJoinsMonitorWithoutFalseTerminal(t *testing.T) {
 	for iteration := 0; iteration < 10; iteration++ {

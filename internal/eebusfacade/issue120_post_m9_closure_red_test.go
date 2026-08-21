@@ -587,6 +587,10 @@ func (*issue120WithdrawalService) ConnectPairingCandidate(shipapi.PairingCandida
 	return nil
 }
 
+func (*issue120WithdrawalService) ConnectPairingCandidateWithPIN(shipapi.PairingCandidateReservation, shipapi.TransientPINProvider) error {
+	return nil
+}
+
 func (*issue120WithdrawalService) RetryTrustedRemote(string) error { return nil }
 
 func (service *issue120WithdrawalService) withdrawalCalls() (int, int) {

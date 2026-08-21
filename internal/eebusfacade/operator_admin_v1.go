@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"reflect"
 	"sort"
 	"strconv"
 	"sync"
@@ -23,6 +24,7 @@ const (
 type operatorAdminV1Service interface {
 	SelectPairingCandidate(string, string) (shipapi.PairingCandidateReservation, error)
 	ConnectPairingCandidate(shipapi.PairingCandidateReservation) error
+	ConnectPairingCandidateWithPIN(shipapi.PairingCandidateReservation, shipapi.TransientPINProvider) error
 	RetryTrustedRemote(string) error
 }
 
@@ -32,6 +34,7 @@ type OperatorAdminV1Backend interface {
 	OperatorAdminV1Close(context.Context) (OperatorAdminV1Transition, string)
 	OperatorAdminV1Select(context.Context, string, string) (string, OperatorAdminV1Transition, string)
 	OperatorAdminV1Connect(context.Context, string) (OperatorAdminV1Transition, string)
+	OperatorAdminV1ConnectWithPIN(context.Context, string, shipapi.TransientPINProvider) (OperatorAdminV1Transition, string)
 	OperatorAdminV1Confirm(context.Context, string, string) (OperatorAdminV1Transition, string)
 	OperatorAdminV1Cancel(context.Context, string) (OperatorAdminV1Transition, string)
 	OperatorAdminV1RetryTrusted(context.Context, string) (OperatorAdminV1Transition, string)
@@ -328,6 +331,15 @@ func (backend *serviceBackend) OperatorAdminV1Connect(ctx context.Context, refer
 	return exportOperatorAdminV1Transition(transition), failure
 }
 
+func (backend *serviceBackend) OperatorAdminV1ConnectWithPIN(ctx context.Context, reference string, provider shipapi.TransientPINProvider) (OperatorAdminV1Transition, string) {
+	bridge := backend.operatorAdminV1Bridge()
+	if bridge == nil || provider == nil {
+		return OperatorAdminV1Transition{}, "admin_boundary_unavailable"
+	}
+	transition, failure := bridge.connectOperatorAdminV1WithPIN(ctx, reference, provider)
+	return exportOperatorAdminV1Transition(transition), failure
+}
+
 func (backend *serviceBackend) OperatorAdminV1Confirm(ctx context.Context, reference, expectedSKI string) (OperatorAdminV1Transition, string) {
 	bridge := backend.operatorAdminV1Bridge()
 	if bridge == nil {
@@ -522,6 +534,24 @@ func (bridge *operatorAdminV1Bridge) connectOperatorAdminV1(ctx context.Context,
 	}
 	delete(bridge.selections, reference)
 	if err := callOperatorAdminV1Connect(bridge.service, binding.reservation); err != nil {
+		return operatorAdminV1BridgeTransition{changed: true}, mapOperatorAdminV1ConnectError(err)
+	}
+	return operatorAdminV1BridgeTransition{outcome: "connection_started", changed: true}, ""
+}
+
+func (bridge *operatorAdminV1Bridge) connectOperatorAdminV1WithPIN(ctx context.Context, reference string, provider shipapi.TransientPINProvider) (operatorAdminV1BridgeTransition, string) {
+	bridge.serial.Lock()
+	defer bridge.serial.Unlock()
+	if failure := bridge.available(ctx); failure != "" {
+		return operatorAdminV1BridgeTransition{}, failure
+	}
+	binding, exists := bridge.selections[reference]
+	if !exists || binding.consumed || !binding.reservation.Valid() ||
+		!bridge.coordinator.operatorAdminV1SelectionCurrent(binding.candidateRef, binding.ski) {
+		return operatorAdminV1BridgeTransition{}, "observation_stale"
+	}
+	delete(bridge.selections, reference)
+	if err := callOperatorAdminV1ConnectWithPIN(bridge.service, binding.reservation, provider); err != nil {
 		return operatorAdminV1BridgeTransition{changed: true}, mapOperatorAdminV1ConnectError(err)
 	}
 	return operatorAdminV1BridgeTransition{outcome: "connection_started", changed: true}, ""
@@ -1235,6 +1265,14 @@ func mapOperatorAdminV1SelectError(err error) string {
 		return "listener_unavailable"
 	case errors.Is(err, shipapi.ErrRemoteAlreadyTrusted):
 		return "trust_denied"
+	case errors.Is(err, shipapi.ErrPINUnavailable):
+		return "pin_unavailable"
+	case errors.Is(err, shipapi.ErrPINRejected):
+		return "pin_rejected"
+	case errors.Is(err, shipapi.ErrPINProtocol):
+		return "pin_protocol"
+	case errors.Is(err, shipapi.ErrPINProviderInvalid):
+		return "admin_boundary_unavailable"
 	default:
 		return "unknown_state"
 	}
@@ -1252,6 +1290,14 @@ func mapOperatorAdminV1ConnectError(err error) string {
 		return "listener_unavailable"
 	case errors.Is(err, shipapi.ErrRemoteAlreadyTrusted):
 		return "trust_denied"
+	case errors.Is(err, shipapi.ErrPINUnavailable):
+		return "pin_unavailable"
+	case errors.Is(err, shipapi.ErrPINRejected):
+		return "pin_rejected"
+	case errors.Is(err, shipapi.ErrPINProtocol):
+		return "pin_protocol"
+	case errors.Is(err, shipapi.ErrPINProviderInvalid):
+		return "admin_boundary_unavailable"
 	default:
 		return "unknown_state"
 	}
@@ -1301,6 +1347,31 @@ func callOperatorAdminV1Connect(service operatorAdminV1Service, reservation ship
 		}
 	}()
 	return service.ConnectPairingCandidate(reservation)
+}
+
+func callOperatorAdminV1ConnectWithPIN(service operatorAdminV1Service, reservation shipapi.PairingCandidateReservation, provider shipapi.TransientPINProvider) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = errors.New("operator AdminV1 PIN connect panicked")
+		}
+	}()
+	if operatorAdminV1NilInterface(service) || operatorAdminV1NilInterface(provider) {
+		return shipapi.ErrPINProviderInvalid
+	}
+	return service.ConnectPairingCandidateWithPIN(reservation, provider)
+}
+
+func operatorAdminV1NilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 func callOperatorAdminV1Retry(service operatorAdminV1Service, expectedSKI string) (err error) {
