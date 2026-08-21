@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	issue56EEBusGoVersion = "v0.7.1-helianthus.18"
-	issue56SHIPGoVersion  = "v0.6.1-helianthus.16"
+	issue56EEBusGoVersion = "v0.7.1-helianthus.19"
+	issue56SHIPGoVersion  = "v0.6.1-helianthus.17"
 )
 
 func TestIssue56DependencyPinsAreReleasedDirectAndWorkspaceFree(t *testing.T) {
@@ -91,6 +91,9 @@ func TestIssue56SHIPSourceContractPinsBeforeWebSocketAndHasNoEndpointFallback(t 
 	issue56RequireAll(t, connections,
 		"func (h *Hub) RetryTrustedRemote(expectedSKI string) error",
 		"observation, observed := h.visibleTrustedRemoteObservations[ski]",
+		"func discardTransientPINProvider(remoteSKI string, provider api.TransientPINProvider)",
+		"provider.(api.TransientPINDiscarder)",
+		"discarder.DiscardTransientPIN(remoteSKI)",
 	)
 	for _, forbidden := range []string{"host string", "port int", "path string", "endpoint string"} {
 		for _, prefix := range []string{

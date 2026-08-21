@@ -3,7 +3,7 @@ package eebusfacade
 import "testing"
 
 func TestMSP05PRuntimeEvidencePinsReviewedEEBusGo(t *testing.T) {
-	const want = "v0.7.1-helianthus.18"
+	const want = "v0.7.1-helianthus.19"
 	if EEBusGoVersion != want {
 		t.Fatalf("current runtime eebus-go evidence = %q, want %q", EEBusGoVersion, want)
 	}

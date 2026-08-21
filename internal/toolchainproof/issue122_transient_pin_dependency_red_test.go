@@ -18,8 +18,8 @@ func TestIssue122PINDependenciesAreExactReviewedReleases(t *testing.T) {
 		t.Fatalf("parse repository go.mod: %v", err)
 	}
 	want := map[string]string{
-		"github.com/Project-Helianthus/helianthus-eebus-go": "v0.7.1-helianthus.18",
-		"github.com/Project-Helianthus/helianthus-ship-go":  "v0.6.1-helianthus.16",
+		"github.com/Project-Helianthus/helianthus-eebus-go": "v0.7.1-helianthus.19",
+		"github.com/Project-Helianthus/helianthus-ship-go":  "v0.6.1-helianthus.17",
 	}
 	got := make(map[string]string)
 	for _, requirement := range file.Require {
