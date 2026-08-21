@@ -824,7 +824,8 @@ func (facade *firstTrustFacade) clearOperatorAdminV1ActiveAction(actionID string
 }
 
 func (facade *firstTrustFacade) clearOperatorAdminV1ActiveActionGenerationLocked(target string, generation uint64) {
-	if facade.activeAction != nil && facade.activeAction.target == target && facade.activeAction.generation == generation {
+	if facade.activeAction != nil && facade.activeAction.target == target && facade.activeAction.generation == generation &&
+		facade.activeAction.state != "terminal" {
 		facade.activeAction = nil
 	}
 }
@@ -859,7 +860,7 @@ func (facade *firstTrustFacade) bindOperatorAdminV1ActiveActionLocked(target str
 		action.generation = generation
 		return
 	}
-	if action.generation != generation {
+	if action.generation != generation && action.state != "terminal" {
 		facade.activeAction = nil
 	}
 }

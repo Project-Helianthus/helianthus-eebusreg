@@ -228,6 +228,26 @@ func TestIssue124RealPINRequiredSurvivesLaterErrorTeardown(t *testing.T) {
 	assertIssue124TerminalActionObservedExactlyOnce(t, path, "pin_required", true)
 }
 
+func TestIssue124PendingActionClearsOnExactGenerationCancel(t *testing.T) {
+	path := newIssue124OperatorRealPath(t)
+	remote, normalized, ok := decodeFirstTrustSKI(path.remoteSKI)
+	if !ok || normalized != path.remoteSKI {
+		t.Fatal("pending-action remote SKI is invalid")
+	}
+	path.facade.mu.Lock()
+	connection := path.facade.connections[path.remoteSKI]
+	if connection == nil {
+		path.facade.mu.Unlock()
+		t.Fatal("pending-action generation is absent")
+	}
+	generation := connection.generation
+	path.facade.mu.Unlock()
+	path.facade.cancelGeneration(remote, generation)
+	if action := path.facade.operatorAdminV1ActiveActionSnapshot(path.fixture.clock.WallNow()); action != nil {
+		t.Fatalf("cancelled pending generation retained action %#v", action)
+	}
+}
+
 func assertIssue124TerminalActionObservedExactlyOnce(
 	t *testing.T,
 	path *issue124OperatorRealPath,
@@ -239,6 +259,18 @@ func assertIssue124TerminalActionObservedExactlyOnce(
 	if action == nil || action.actionID != path.actionID || action.state != "terminal" ||
 		action.outcome != wantOutcome || action.retryable != wantRetryable {
 		t.Fatalf("terminal action after generation teardown = %#v, want %q retryable=%t", action, wantOutcome, wantRetryable)
+	}
+	path.facade.mu.Lock()
+	replacement := path.facade.newConnectionLocked(path.remoteSKI, false)
+	if replacement == nil {
+		path.facade.mu.Unlock()
+		t.Fatal("terminal-action replacement generation was not created")
+	}
+	path.facade.bindOperatorAdminV1ActiveActionLocked(path.remoteSKI, replacement.generation)
+	path.facade.mu.Unlock()
+	if action := path.facade.operatorAdminV1ActiveActionSnapshot(path.fixture.clock.WallNow()); action == nil ||
+		action.actionID != path.actionID || action.state != "terminal" || action.outcome != wantOutcome {
+		t.Fatalf("replacement generation cleared terminal action: %#v", action)
 	}
 	const wrongActionID = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 	path.operator.observeOperatorAdminV1ActiveAction(wrongActionID)
