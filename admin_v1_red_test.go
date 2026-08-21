@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -69,6 +70,34 @@ func TestIssue124SHIPCallbackDistinguishesRequiredFromOptionalPIN(t *testing.T) 
 	optional := shipapi.NewConnectionStateDetail(shipapi.ConnectionStatePin, nil)
 	if required.State() == optional.State() && required.Error() == optional.Error() {
 		t.Fatal("SHIP callback collapses required and optional PIN into ConnectionStatePin; it needs a typed terminal PIN outcome before eebusreg can expose one")
+	}
+}
+
+func TestIssue124PinsTypedCallbackDependenciesExactly(t *testing.T) {
+	// This node consumes the two released typed-callback boundaries, not a
+	// local recreation or a pseudo-version. Keeping their pins explicit makes
+	// the source of every terminal action outcome auditable.
+	module, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	for _, want := range []string{
+		"github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.20",
+		"github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.18",
+	} {
+		if !strings.Contains(string(module), want) {
+			t.Errorf("go.mod missing required typed-callback dependency %q", want)
+		}
+	}
+}
+
+func TestIssue124SHIPCallbackExportsTypedPINHandshakeDetail(t *testing.T) {
+	// The required/optional/busy/rejected distinction must arrive through the
+	// actual callback payload. Do not infer it from an error string.
+	detailType := reflect.TypeOf(shipapi.NewConnectionStateDetail(shipapi.ConnectionStatePin, nil))
+	method, ok := detailType.MethodByName("PINHandshakeDetail")
+	if !ok || method.Type.NumIn() != 1 || method.Type.NumOut() != 1 {
+		t.Fatalf("SHIP ConnectionStateDetail lacks typed PINHandshakeDetail callback source: %v", detailType)
 	}
 }
 
