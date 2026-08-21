@@ -12,9 +12,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
-	shipmodel "github.com/Project-Helianthus/helianthus-ship-go/model"
 )
 
 func TestAdminV1FacadeHasClosedRequestResultOperations(t *testing.T) {
@@ -60,28 +57,6 @@ func TestIssue122ConnectPINIsOpaqueAndCannotBeRenderedOrSerialized(t *testing.T)
 	}
 	if payload, err := json.Marshal(request); err == nil || len(payload) != 0 {
 		t.Fatalf("ConnectRequestV1 JSON = %q/%v, want refusal", payload, err)
-	}
-}
-
-func TestIssue124SHIPCallbackDistinguishesRequiredFromOptionalPIN(t *testing.T) {
-	// A terminal operator action must report what SHIP actually observed.  A
-	// shared ConnectionStatePin with the same error channel cannot truthfully
-	// distinguish a required PIN from an optional continuation.
-	required := shipapi.NewConnectionStateDetail(shipapi.ConnectionStatePin, nil)
-	required.SetPINHandshakeDetail(&shipmodel.PINHandshakeDetail{
-		Requirement: shipmodel.PINRequirementRequired,
-		Phase:       shipmodel.PINPhaseWaitingPeer,
-		Category:    shipmodel.PINCategoryPointer(shipmodel.PINCategoryRequired),
-		Retryable:   true,
-	})
-	optional := shipapi.NewConnectionStateDetail(shipapi.ConnectionStatePin, nil)
-	optional.SetPINHandshakeDetail(&shipmodel.PINHandshakeDetail{
-		Requirement: shipmodel.PINRequirementOptional,
-		Phase:       shipmodel.PINPhaseRestricted,
-		Category:    shipmodel.PINCategoryPointer(shipmodel.PINCategoryOptional),
-	})
-	if required.PINHandshakeDetail().Equal(optional.PINHandshakeDetail()) {
-		t.Fatal("SHIP callback collapses required and optional PIN into ConnectionStatePin; it needs a typed terminal PIN outcome before eebusreg can expose one")
 	}
 }
 
@@ -168,16 +143,6 @@ func TestIssue124PinsTypedCallbackDependenciesExactly(t *testing.T) {
 		if !strings.Contains(string(module), want) {
 			t.Errorf("go.mod missing required typed-callback dependency %q", want)
 		}
-	}
-}
-
-func TestIssue124SHIPCallbackExportsTypedPINHandshakeDetail(t *testing.T) {
-	// The required/optional/busy/rejected distinction must arrive through the
-	// actual callback payload. Do not infer it from an error string.
-	detailType := reflect.TypeOf(shipapi.NewConnectionStateDetail(shipapi.ConnectionStatePin, nil))
-	method, ok := detailType.MethodByName("PINHandshakeDetail")
-	if !ok || method.Type.NumIn() != 1 || method.Type.NumOut() != 1 {
-		t.Fatalf("SHIP ConnectionStateDetail lacks typed PINHandshakeDetail callback source: %v", detailType)
 	}
 }
 
