@@ -91,6 +91,8 @@ func TestIssue56SHIPSourceContractPinsBeforeWebSocketAndHasNoEndpointFallback(t 
 	issue56RequireAll(t, connections,
 		"func (h *Hub) RetryTrustedRemote(expectedSKI string) error",
 		"observation, observed := h.visibleTrustedRemoteObservations[ski]",
+	)
+	issue56RequireAll(t, pairing,
 		"func discardTransientPINProvider(remoteSKI string, provider api.TransientPINProvider)",
 		"provider.(api.TransientPINDiscarder)",
 		"discarder.DiscardTransientPIN(remoteSKI)",
