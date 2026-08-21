@@ -14,6 +14,7 @@ import (
 	"time"
 
 	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	shipmodel "github.com/Project-Helianthus/helianthus-ship-go/model"
 )
 
 func TestAdminV1FacadeHasClosedRequestResultOperations(t *testing.T) {
@@ -23,7 +24,7 @@ func TestAdminV1FacadeHasClosedRequestResultOperations(t *testing.T) {
 		"OpenPairingWindow":  {request: "OpenPairingWindowRequestV1", result: "AdminMutationResultV1"},
 		"ClosePairingWindow": {request: "ClosePairingWindowRequestV1", result: "AdminMutationResultV1"},
 		"Select":             {request: "SelectRequestV1", result: "AdminSelectionResultV1"},
-		"Connect":            {request: "ConnectRequestV1", result: "AdminMutationResultV1"},
+		"Connect":            {request: "ConnectRequestV1", result: "ConnectResultV1"},
 		"Confirm":            {request: "ConfirmRequestV1", result: "AdminMutationResultV1"},
 		"Cancel":             {request: "CancelRequestV1", result: "AdminMutationResultV1"},
 		"RetryTrusted":       {request: "RetryTrustedRequestV1", result: "AdminMutationResultV1"},
@@ -67,10 +68,81 @@ func TestIssue124SHIPCallbackDistinguishesRequiredFromOptionalPIN(t *testing.T) 
 	// shared ConnectionStatePin with the same error channel cannot truthfully
 	// distinguish a required PIN from an optional continuation.
 	required := shipapi.NewConnectionStateDetail(shipapi.ConnectionStatePin, nil)
+	required.SetPINHandshakeDetail(&shipmodel.PINHandshakeDetail{
+		Requirement: shipmodel.PINRequirementRequired,
+		Phase:       shipmodel.PINPhaseWaitingPeer,
+		Category:    shipmodel.PINCategoryPointer(shipmodel.PINCategoryRequired),
+		Retryable:   true,
+	})
 	optional := shipapi.NewConnectionStateDetail(shipapi.ConnectionStatePin, nil)
-	if required.State() == optional.State() && required.Error() == optional.Error() {
+	optional.SetPINHandshakeDetail(&shipmodel.PINHandshakeDetail{
+		Requirement: shipmodel.PINRequirementOptional,
+		Phase:       shipmodel.PINPhaseRestricted,
+		Category:    shipmodel.PINCategoryPointer(shipmodel.PINCategoryOptional),
+	})
+	if required.PINHandshakeDetail().Equal(optional.PINHandshakeDetail()) {
 		t.Fatal("SHIP callback collapses required and optional PIN into ConnectionStatePin; it needs a typed terminal PIN outcome before eebusreg can expose one")
 	}
+}
+
+func TestIssue124ConnectReturnsStableActionAndSnapshotIsIdentityFree(t *testing.T) {
+	clock := newOperatorAdminV1TestClock()
+	facts := operatorAdminV1TestFacts()
+	backend := newOperatorAdminV1TestBackend(facts)
+	admin := newOperatorAdminV1Reducer(
+		clock.Now,
+		newOperatorAdminV1TestEntropy(),
+		newOperatorAdminV1TestLifecycle(true, true, false),
+		backend,
+	)
+
+	discovered, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Discovered})
+	requireAdminV1Success(t, failure)
+	selected, failure := admin.Select(context.Background(), SelectRequestV1{
+		MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "issue124-select", ExpectedStateRevision: discovered.StateRevision},
+		Observation:            discovered.Discovered[0].Observation,
+		ExpectedSKI:            discovered.Discovered[0].SKI,
+	})
+	requireAdminV1Success(t, failure)
+
+	const actionID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	outcome := AdminOutcomeV1("pin_required")
+	post := cloneOperatorAdminV1TestFacts(facts)
+	post.activeAction = &operatorAdminV1ActiveActionFact{
+		actionID:  actionID,
+		kind:      "connect",
+		state:     "terminal",
+		outcome:   outcome,
+		retryable: true,
+		expiresAt: clock.Now().Add(time.Minute),
+	}
+	backend.setEffect("connect", operatorAdminV1Transition{
+		outcome: AdminOutcomeV1("connection_started"), changed: true, actionID: actionID,
+	}, "", post)
+
+	request := ConnectRequestV1{
+		MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "issue124-connect", ExpectedStateRevision: selected.StateRevision},
+		Selection:              selected.Selection,
+	}
+	connected, failure := admin.Connect(context.Background(), request)
+	requireAdminV1Success(t, failure)
+	if connected.ActionID != actionID || connected.Outcome != AdminOutcomeV1("connection_started") || connected.Replayed {
+		t.Fatalf("connect result = %#v, want accepted opaque action", connected)
+	}
+	replayed, failure := admin.Connect(context.Background(), request)
+	requireAdminV1Success(t, failure)
+	if replayed.ActionID != actionID || !replayed.Replayed || backend.calls("connect") != 1 {
+		t.Fatalf("replayed connect = %#v effects=%d, want same action/no relaunch", replayed, backend.calls("connect"))
+	}
+
+	status, failure := admin.Snapshot(context.Background(), AdminSnapshotRequestV1{View: AdminViewV1Trusted})
+	requireAdminV1Success(t, failure)
+	if status.ActiveAction == nil || status.ActiveAction.ActionID != actionID || status.ActiveAction.Kind != "connect" ||
+		status.ActiveAction.State != "terminal" || status.ActiveAction.Outcome == nil || *status.ActiveAction.Outcome != outcome ||
+		!status.ActiveAction.Retryable || status.ActiveAction.Expiry.IsZero() {
+		t.Fatalf("active action = %#v, want closed terminal action", status.ActiveAction)
+	}
+	forbiddenAdminV1Fields(t, reflect.TypeOf(ActiveActionV1{}))
 }
 
 func TestIssue124PinsTypedCallbackDependenciesExactly(t *testing.T) {
