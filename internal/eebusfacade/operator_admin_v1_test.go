@@ -55,6 +55,244 @@ func TestIssue124TypedPairingActionOutcomeMatrix(t *testing.T) {
 	}
 }
 
+func TestIssue124RealSelectConnectCallbackPreservesTypedPINAndExactGeneration(t *testing.T) {
+	tests := []struct {
+		name        string
+		requirement shipmodel.PINRequirement
+		phase       shipmodel.PINPhase
+		category    shipmodel.PINCategory
+		retryable   bool
+		outcome     string
+	}{
+		{name: "required", requirement: shipmodel.PINRequirementRequired, phase: shipmodel.PINPhaseWaitingPeer, category: shipmodel.PINCategoryRequired, retryable: true, outcome: "pin_required"},
+		{name: "optional", requirement: shipmodel.PINRequirementOptional, phase: shipmodel.PINPhaseRestricted, category: shipmodel.PINCategoryOptional, outcome: "pin_optional"},
+		{name: "busy", requirement: shipmodel.PINRequirementRequired, phase: shipmodel.PINPhaseWaitingPeer, category: shipmodel.PINCategoryBusy, retryable: true, outcome: "pin_busy"},
+		{name: "rejected", requirement: shipmodel.PINRequirementRequired, phase: shipmodel.PINPhaseFailed, category: shipmodel.PINCategoryRejected, outcome: "pin_rejected"},
+		{name: "unavailable", requirement: shipmodel.PINRequirementRequired, phase: shipmodel.PINPhaseFailed, category: shipmodel.PINCategoryUnavailable, retryable: true, outcome: "pin_unavailable"},
+		{name: "protocol", requirement: shipmodel.PINRequirementUnknown, phase: shipmodel.PINPhaseFailed, category: shipmodel.PINCategoryProtocol, outcome: "pin_protocol_error"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := newIssue124OperatorRealPath(t)
+			category := test.category
+			path.outgoing.OutgoingAttemptHandshakeStateUpdate(
+				path.remoteSKI,
+				shipmodel.ShipState{
+					State: shipmodel.SmePinStateAskProcess,
+					PIN: &shipmodel.PINHandshakeDetail{
+						Requirement: test.requirement,
+						Phase:       test.phase,
+						Category:    &category,
+						Retryable:   test.retryable,
+					},
+				},
+				path.permit.Metadata,
+			)
+			action := path.facade.operatorAdminV1ActiveActionSnapshot(path.fixture.clock.WallNow())
+			if action == nil || action.actionID != path.actionID || action.state != "terminal" ||
+				action.outcome != test.outcome || action.retryable != test.retryable {
+				t.Fatalf("real Select->Connect callback action = %#v, want terminal %q retryable=%t", action, test.outcome, test.retryable)
+			}
+		})
+	}
+}
+
+func TestIssue124RealCallbackRejectsStaleSameSKIReplacementGeneration(t *testing.T) {
+	path := newIssue124OperatorRealPath(t)
+	path.facade.mu.Lock()
+	delete(path.facade.connections, path.remoteSKI)
+	replacement := path.facade.newConnectionLocked(path.remoteSKI, false)
+	if replacement == nil {
+		path.facade.mu.Unlock()
+		t.Fatal("replacement generation was not created")
+	}
+	replacement.attemptStarted = true
+	replacementGeneration := replacement.generation
+	path.facade.mu.Unlock()
+
+	const replacementActionID = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	if !path.facade.armOperatorAdminV1ActiveAction(
+		replacementActionID,
+		path.remoteSKI,
+		false,
+		path.fixture.clock.WallNow().Add(time.Minute),
+	) {
+		t.Fatal("replacement action was not armed")
+	}
+	category := shipmodel.PINCategoryRejected
+	path.outgoing.OutgoingAttemptHandshakeStateUpdate(
+		path.remoteSKI,
+		shipmodel.ShipState{
+			State: shipmodel.SmePinStateCheckError,
+			PIN: &shipmodel.PINHandshakeDetail{
+				Requirement: shipmodel.PINRequirementRequired,
+				Phase:       shipmodel.PINPhaseFailed,
+				Category:    &category,
+			},
+		},
+		path.permit.Metadata,
+	)
+	path.facade.mu.Lock()
+	action := path.facade.activeAction
+	if action == nil || action.actionID != replacementActionID || action.generation != replacementGeneration || action.state != "pending" {
+		path.facade.mu.Unlock()
+		t.Fatalf("stale callback changed replacement generation action: %#v, want generation %d pending", action, replacementGeneration)
+	}
+	path.facade.mu.Unlock()
+
+	completed := shipapi.NewConnectionStateDetail(shipapi.ConnectionStateCompleted, nil)
+	path.facade.servicePairingDetailUpdateForGeneration(path.remoteSKI, replacementGeneration, completed)
+	if action := path.facade.operatorAdminV1ActiveActionSnapshot(path.fixture.clock.WallNow()); action == nil ||
+		action.actionID != replacementActionID || action.state != "terminal" || action.outcome != "connection_completed" {
+		t.Fatalf("current replacement callback action = %#v", action)
+	}
+}
+
+type issue124OperatorRealPath struct {
+	fixture   *msp04cFixture
+	facade    *firstTrustFacade
+	outgoing  *firstTrustOutgoingAttemptBridge
+	remoteSKI string
+	permit    shipapi.OutgoingAttemptPermit
+	actionID  string
+}
+
+type issue124OperatorRealPathService struct {
+	issue60Service
+	reservation shipapi.PairingCandidateReservation
+	selectHook  func(string, string) error
+	connectHook func(shipapi.PairingCandidateReservation) error
+}
+
+func (service *issue124OperatorRealPathService) SelectPairingCandidate(candidateRef, expectedSKI string) (shipapi.PairingCandidateReservation, error) {
+	if service.selectHook != nil {
+		if err := service.selectHook(candidateRef, expectedSKI); err != nil {
+			return shipapi.PairingCandidateReservation{}, err
+		}
+	}
+	return service.reservation, nil
+}
+
+func (service *issue124OperatorRealPathService) ConnectPairingCandidate(reservation shipapi.PairingCandidateReservation) error {
+	if !reservation.Matches(service.reservation) {
+		return shipapi.ErrPairingCandidateReservationStale
+	}
+	if service.connectHook != nil {
+		return service.connectHook(reservation)
+	}
+	return nil
+}
+
+func (service *issue124OperatorRealPathService) ConnectPairingCandidateWithPIN(
+	reservation shipapi.PairingCandidateReservation,
+	_ shipapi.TransientPINProvider,
+) error {
+	return service.ConnectPairingCandidate(reservation)
+}
+
+func (*issue124OperatorRealPathService) RetryTrustedRemote(string) error { return nil }
+
+type issue124GenerationLifecycle struct{ facade *firstTrustFacade }
+
+func (lifecycle issue124GenerationLifecycle) RemoteSKIDisconnected(ski string) {
+	lifecycle.facade.RemoteSKIDisconnected(nil, ski)
+}
+
+func (lifecycle issue124GenerationLifecycle) ServicePairingDetailUpdate(ski string, detail *shipapi.ConnectionStateDetail) {
+	lifecycle.facade.ServicePairingDetailUpdate(ski, detail)
+}
+
+func (lifecycle issue124GenerationLifecycle) servicePairingDetailUpdateForGeneration(
+	ski string,
+	generation uint64,
+	detail *shipapi.ConnectionStateDetail,
+) {
+	lifecycle.facade.servicePairingDetailUpdateForGeneration(ski, generation, detail)
+}
+
+func newIssue124OperatorRealPath(t *testing.T) *issue124OperatorRealPath {
+	t.Helper()
+	fixture := newMSP04CFixture(t)
+	coordinator := fixture.newCoordinator()
+	if got := coordinator.reopen(context.Background()); got != "pairing_closed" {
+		t.Fatalf("reopen = %q", got)
+	}
+	var reservationToken [32]byte
+	reservationToken[0] = 0x7c
+	service := &issue124OperatorRealPathService{
+		reservation: shipapi.NewPairingCandidateReservation(reservationToken),
+	}
+	facade, err := newFirstTrustFacade(service, coordinator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.mu.Lock()
+	coordinator.effects = facade
+	coordinator.mu.Unlock()
+	outgoing := newFirstTrustOutgoingAttemptBridge(&runtimeFirstTrustResources{coordinator: coordinator})
+	outgoing.bindLifecycle(issue124GenerationLifecycle{facade: facade})
+	outgoing.bindTLSLifecycle(facade)
+	if got := coordinator.openPairingWindow(context.Background(), "issue124-real-open", firstTrustMaximumWindow); got != "open_empty" {
+		t.Fatalf("open pairing window = %q", got)
+	}
+
+	var permit shipapi.OutgoingAttemptPermit
+	service.selectHook = func(_ string, expectedSKI string) error {
+		facade.ServicePairingDetailUpdate(expectedSKI, shipapi.NewConnectionStateDetail(shipapi.ConnectionStateQueued, nil))
+		handle, prepareErr := outgoing.Prepare(issue75SHIPRequest(expectedSKI, "peer.invalid"))
+		if prepareErr != nil {
+			return prepareErr
+		}
+		permit, prepareErr = outgoing.AuthorizeLaunch(handle)
+		if prepareErr != nil {
+			return prepareErr
+		}
+		if permit.Decision != shipapi.OutgoingAttemptDecisionPermit {
+			return fmt.Errorf("outgoing attempt decision = %v", permit.Decision)
+		}
+		return nil
+	}
+	const candidateRef = "issue124-real-candidate"
+	facade.VisiblePairingCandidatesUpdated(nil, []shipapi.PairingCandidateRef{{
+		CandidateRef: candidateRef,
+		SKI:          issue56SKIA,
+	}})
+	operator := newOperatorAdminV1Bridge(coordinator, service, &msp04cOrdinalReader{next: 12_400})
+	snapshot, failure := operator.snapshotOperatorAdminV1(context.Background())
+	requireOperatorAdminV1BridgeSuccess(t, failure)
+	if len(snapshot.discovered) != 1 {
+		t.Fatalf("real-path discovery rows = %d, want 1", len(snapshot.discovered))
+	}
+	selection, transition, failure := operator.selectOperatorAdminV1(
+		context.Background(),
+		snapshot.discovered[0].reference,
+		issue56SKIA,
+	)
+	if failure != "" || !transition.changed || selection == "" {
+		t.Fatalf("real-path select = %q/%#v/%q", selection, transition, failure)
+	}
+	transition, failure = operator.connectOperatorAdminV1(context.Background(), selection)
+	if failure != "" || !transition.changed || transition.actionID == "" || permit.Decision != shipapi.OutgoingAttemptDecisionPermit {
+		t.Fatalf("real-path connect = %#v/%q permit=%#v", transition, failure, permit)
+	}
+	remote, remoteSKI, ok := decodeFirstTrustSKI(issue56SKIA)
+	if !ok || len(remote) != 20 {
+		t.Fatal("real-path remote SKI is invalid")
+	}
+	facade.mu.Lock()
+	connection := facade.connections[remoteSKI]
+	action := facade.activeAction
+	if connection == nil || action == nil || action.actionID != transition.actionID || action.generation != connection.generation {
+		facade.mu.Unlock()
+		t.Fatalf("real-path action generation = %#v connection=%#v", action, connection)
+	}
+	facade.mu.Unlock()
+	return &issue124OperatorRealPath{
+		fixture: fixture, facade: facade, outgoing: outgoing, remoteSKI: remoteSKI,
+		permit: permit, actionID: transition.actionID,
+	}
+}
+
 func TestIssue124ActiveActionRejectsStaleGenerationAndClearsAtBoundaries(t *testing.T) {
 	now := time.Unix(1_950_000_000, 0)
 	const target = operatorAdminV1BridgeTestSKI

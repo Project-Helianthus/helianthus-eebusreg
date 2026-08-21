@@ -14,6 +14,72 @@ import (
 	"time"
 )
 
+type issue124ConnectBindingOwner interface {
+	connectBinding([32]byte, []byte) ([32]byte, *AdminErrorV1)
+}
+
+func TestIssue124ConnectBindingIsProcessLocalAndPresenceExact(t *testing.T) {
+	clock := newOperatorAdminV1TestClock()
+	backend := newOperatorAdminV1TestBackend(operatorAdminV1TestFacts())
+	newReducer := func(seed uint64) *operatorAdminV1Reducer {
+		return newOperatorAdminV1Reducer(
+			clock.Now,
+			newOperatorAdminV1TestEntropyFrom(seed),
+			newOperatorAdminV1TestLifecycle(true, true, false),
+			backend,
+		)
+	}
+	first := newReducer(10_000)
+	second := newReducer(20_000)
+	firstBinder, ok := any(first).(issue124ConnectBindingOwner)
+	if !ok {
+		t.Fatal("operator AdminV1 reducer has no process-local connect binding owner")
+	}
+	secondBinder, ok := any(second).(issue124ConnectBindingOwner)
+	if !ok {
+		t.Fatal("independent operator AdminV1 reducer has no process-local connect binding owner")
+	}
+
+	var selection [32]byte
+	selection[0] = 0x5a
+	pin := []byte("issue124-transient-pin")
+	firstBinding, failure := firstBinder.connectBinding(selection, pin)
+	if failure != nil {
+		t.Fatalf("first connect binding failure = %#v", failure)
+	}
+	repeatedBinding, failure := firstBinder.connectBinding(selection, append([]byte(nil), pin...))
+	if failure != nil || repeatedBinding != firstBinding {
+		t.Fatalf("same reducer/request binding = %x/%#v, want stable %x", repeatedBinding, failure, firstBinding)
+	}
+	independentBinding, failure := secondBinder.connectBinding(selection, pin)
+	if failure != nil || independentBinding == firstBinding {
+		t.Fatalf("independent reducer binding = %x/%#v, must differ from %x", independentBinding, failure, firstBinding)
+	}
+
+	omitted, failure := firstBinder.connectBinding(selection, nil)
+	if failure != nil {
+		t.Fatalf("omitted PIN binding failure = %#v", failure)
+	}
+	empty, failure := firstBinder.connectBinding(selection, []byte{})
+	if failure != nil {
+		t.Fatalf("present-empty PIN binding failure = %#v", failure)
+	}
+	changed, failure := firstBinder.connectBinding(selection, []byte("issue124-transient-pio"))
+	if failure != nil {
+		t.Fatalf("changed PIN binding failure = %#v", failure)
+	}
+	if omitted == empty || empty == firstBinding || changed == firstBinding {
+		t.Fatalf("connect binding aliases exact PIN presence/value: omitted=%x empty=%x original=%x changed=%x", omitted, empty, firstBinding, changed)
+	}
+	for index := range pin {
+		pin[index] = 0
+	}
+	afterCallerClear, failure := firstBinder.connectBinding(selection, []byte("issue124-transient-pin"))
+	if failure != nil || afterCallerClear != firstBinding {
+		t.Fatalf("caller clear changed reducer binding = %x/%#v, want %x", afterCallerClear, failure, firstBinding)
+	}
+}
+
 func TestAdminV1FacadeHasClosedRequestResultOperations(t *testing.T) {
 	admin := reflect.TypeOf((*AdminV1)(nil)).Elem()
 	want := map[string]adminV1MethodShape{
