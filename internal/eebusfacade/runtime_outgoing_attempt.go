@@ -161,15 +161,6 @@ func (bridge *firstTrustOutgoingAttemptBridge) AuthorizeLaunch(handle shipapi.Ou
 	}, nil
 }
 
-func (bridge *firstTrustOutgoingAttemptBridge) bindObserver(observer firstTrustOutgoingAttemptObserver) {
-	if bridge == nil {
-		return
-	}
-	bridge.mu.Lock()
-	bridge.observer = observer
-	bridge.mu.Unlock()
-}
-
 func (bridge *firstTrustOutgoingAttemptBridge) observePrepared(
 	metadata firstTrustOutgoingAttemptMetadata,
 	path string,

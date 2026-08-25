@@ -104,7 +104,6 @@ func ExpectedControlSurface() APIShapeEvidence {
 
 var (
 	serviceReaderShapeBound       = serviceReaderShapeMatches()
-	configurationConstructor      = eebusapi.NewConfiguration
 	configurationConstructorBound = true
 )
 

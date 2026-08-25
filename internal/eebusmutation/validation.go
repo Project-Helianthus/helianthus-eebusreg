@@ -63,20 +63,6 @@ func validateRawMutationSetRequest(request eebusraw.FeatureDataSetRequestV1) *ee
 	return eebusraw.ValidateFeatureDataSetRequestV1(request)
 }
 
-func validateWriteTarget(target eebusraw.FeatureTargetV1) *eebusraw.ErrorV1 {
-	if target.Operation != eebusraw.OperationV1Write {
-		return mutationError(eebusraw.ErrorCodeV1UnsupportedOperation, false)
-	}
-	readTarget := target.Clone()
-	readTarget.Operation = eebusraw.OperationV1Read
-	if terminal := eebusraw.ValidateFeatureDataGetRequestV1(eebusraw.FeatureDataGetRequestV1{
-		Targets: []eebusraw.FeatureTargetV1{readTarget},
-	}); terminal != nil {
-		return mutationError(terminal.Code, terminal.Retriable)
-	}
-	return nil
-}
-
 func verifyRawMutationReadToken(
 	ctx context.Context,
 	config rawMutationCoordinatorConfig,
