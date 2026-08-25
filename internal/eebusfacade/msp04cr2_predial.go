@@ -920,16 +920,6 @@ func (coordinator *firstTrustCoordinator) firstTrustOutgoingAttemptRemote(metada
 	return bytes.Clone(coordinator.controlView.control.attempts[index].remoteSKI), true
 }
 
-func (coordinator *firstTrustCoordinator) firstTrustOutgoingAttemptMatchesRemote(
-	metadata firstTrustOutgoingAttemptMetadata,
-	remote []byte,
-) bool {
-	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
-	index := coordinator.firstTrustOutgoingAttemptMetadataLocked(metadata)
-	return index >= 0 && bytes.Equal(coordinator.controlView.control.attempts[index].remoteSKI, remote)
-}
-
 func (coordinator *firstTrustCoordinator) cancelOutgoingAttemptRuntime(attemptID [32]byte) {
 	coordinator.mu.Lock()
 	runtime, ok := coordinator.outgoingAttemptContexts[attemptID]
