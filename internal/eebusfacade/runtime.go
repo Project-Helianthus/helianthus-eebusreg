@@ -1,6 +1,7 @@
 package eebusfacade
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -252,7 +253,24 @@ func Acquire(ctx context.Context, config RuntimeConfig) (Backend, error) {
 	return acquireRuntime(ctx, config, defaultRuntimeDependencies)
 }
 
+func AcquireNativeRuntimeV2(ctx context.Context, config RuntimeConfig) (Backend, error) {
+	return acquireRuntimeWithSnapshotSerializer(
+		ctx, config, defaultRuntimeDependencies, marshalNativeRuntimeSnapshotV2WithIdentity,
+	)
+}
+
 func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runtimeDependencies) (Backend, error) {
+	return acquireRuntimeWithSnapshotSerializer(ctx, config, dependencies, marshalRuntimeSnapshotWithIdentity)
+}
+
+type runtimeSnapshotSerializer func(string, string, []runtimeGraphObservation, time.Time) ([]byte, error)
+
+func acquireRuntimeWithSnapshotSerializer(
+	ctx context.Context,
+	config RuntimeConfig,
+	dependencies runtimeDependencies,
+	serializer runtimeSnapshotSerializer,
+) (Backend, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -344,6 +362,7 @@ func acquireRuntime(ctx context.Context, config RuntimeConfig, dependencies runt
 	if err != nil {
 		return nil, errors.Join(err, closeFirstTrust())
 	}
+	handler.setSnapshotSerializer(serializer)
 	reader := newRuntimeServiceReader(handler)
 	service, err := dependencies.newService(config, material, reader)
 	if err != nil {
@@ -942,6 +961,7 @@ type runtimeServiceHandler struct {
 	publishedRuntimeRevision  uint64
 	publishedTrustRevision    uint64
 	now                       func() time.Time
+	snapshotSerializer        runtimeSnapshotSerializer
 	publish                   func([]byte)
 	errors                    chan error
 	spineService              runtimeService
@@ -962,18 +982,28 @@ func newRuntimeServiceHandler(config RuntimeConfig, localSKI string, now func() 
 		return nil, errors.New("runtime service clock is required")
 	}
 	handler := &runtimeServiceHandler{
-		runtimeID:    "runtime:" + localSKI,
-		localSKI:     localSKI,
-		reducer:      newRuntimeObservationReducer(),
-		observations: make(map[string]runtimeGraphObservation, len(config.Remotes)),
-		now:          now,
-		errors:       make(chan error, 1),
+		runtimeID:          "runtime:" + localSKI,
+		localSKI:           localSKI,
+		reducer:            newRuntimeObservationReducer(),
+		observations:       make(map[string]runtimeGraphObservation, len(config.Remotes)),
+		now:                now,
+		snapshotSerializer: marshalRuntimeSnapshotWithIdentity,
+		errors:             make(chan error, 1),
 	}
 	for _, remote := range config.Remotes {
 		handler.policyRemotes = append(handler.policyRemotes, strings.ToLower(strings.TrimSpace(remote.SKI)))
 	}
 	sort.Strings(handler.policyRemotes)
 	return handler, nil
+}
+
+func (handler *runtimeServiceHandler) setSnapshotSerializer(serializer runtimeSnapshotSerializer) {
+	if serializer == nil {
+		serializer = marshalRuntimeSnapshotWithIdentity
+	}
+	handler.mu.Lock()
+	handler.snapshotSerializer = serializer
+	handler.mu.Unlock()
 }
 
 func (handler *runtimeServiceHandler) setPublisher(publish func([]byte)) {
@@ -1316,11 +1346,15 @@ func (handler *runtimeServiceHandler) remoteLivenessAllowedLocked(ski string) bo
 func (handler *runtimeServiceHandler) publishRuntimeGraph(graph []runtimeGraphObservation) error {
 	handler.mu.Lock()
 	publish := handler.publish
+	serializer := handler.snapshotSerializer
 	handler.mu.Unlock()
 	if publish == nil {
 		return nil
 	}
-	payload, err := marshalRuntimeSnapshotWithIdentity(handler.runtimeID, handler.localSKI, graph, handler.timestamp())
+	if serializer == nil {
+		serializer = marshalRuntimeSnapshotWithIdentity
+	}
+	payload, err := serializer(handler.runtimeID, handler.localSKI, graph, handler.timestamp())
 	if err != nil {
 		return err
 	}
@@ -1531,7 +1565,9 @@ func detachedRuntimeJSONValue(value any) (any, error) {
 		return nil, errors.New("encode detailed discovery value")
 	}
 	var detached any
-	if err := json.Unmarshal(encoded, &detached); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	if err := decoder.Decode(&detached); err != nil {
 		return nil, errors.New("decode detailed discovery value")
 	}
 	return detached, nil

@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -410,7 +411,32 @@ func init() {
 	for exported := range postM9OperatorAdminRuntimeExports {
 		allowedRuntimeExports[exported] = struct{}{}
 	}
+	for exported := range issue129NativeRuntimeV2Exports {
+		allowedRuntimeExports[exported] = struct{}{}
+	}
 }
+
+var issue129NativeRuntimeV2Exports = frozenExportInventory(`
+const NativeSnapshotContractV2
+func NewNativeRuntimeV2
+func NewNativeSnapshotV2
+func NativeSnapshotV2.Clone
+func NativeSnapshotV2.Validate
+type NativeDegradationV2
+type NativeDeviceV2
+type NativeEntityV2
+type NativeFeatureV2
+type NativeObservationV2
+type NativePairingObservationV2
+type NativeRuntimeObservationV2
+type NativeRuntimeV2
+type NativeServiceV2
+type NativeSessionV2
+type NativeSnapshotMetaV2
+type NativeSnapshotV2
+type NativeUseCaseV2
+type NativeValueV2
+`)
 
 var msp055RuntimeExports = map[manifestExport]struct{}{
 	{Kind: "const", Name: "PairingPolicyClosed"}:       {},
@@ -1008,14 +1034,16 @@ type chainedImporter struct {
 type stableContractSpec struct {
 	enums      []stableEnumSpec
 	importPath string
+	optional   bool
 	types      []manifestStableType
 	root       string
 }
 
 type stableEnumSpec struct {
-	exact    bool
-	typeName string
-	values   []manifestStableEnumValue
+	additional []string
+	exact      bool
+	typeName   string
+	values     []manifestStableEnumValue
 }
 
 type pathOrigin string
@@ -1419,6 +1447,9 @@ func inspectRuntimeExports(modulePath string, packages map[string]*packageInvent
 			if _, operatorAdmin := postM9OperatorAdminRuntimeExports[expected]; operatorAdmin {
 				continue
 			}
+			if _, nativeV2 := issue129NativeRuntimeV2Exports[expected]; nativeV2 {
+				continue
+			}
 		}
 		if _, present := inventory.exports[expected]; !present {
 			violations = append(violations, fmt.Sprintf("root eebusruntime export required by MSP-036 is missing: %s %s", expected.Kind, expected.Name))
@@ -1776,8 +1807,11 @@ func inspectStableContracts(root, modulePath string, fset *token.FileSet, packag
 	allExpectedTypes[modulePath]["RawMutationOutcomeV1"] = struct{}{}
 	allExpectedTypes[modulePath]["RawMutationRuntimeV1"] = struct{}{}
 	for _, spec := range specs {
+		inventory := packages[spec.importPath]
+		if spec.optional && (inventory == nil || inventory.types[spec.root].spec == nil) {
+			continue
+		}
 		if modulePath != canonicalModulePath {
-			inventory := packages[spec.importPath]
 			if inventory == nil {
 				continue
 			}
@@ -1790,7 +1824,7 @@ func inspectStableContracts(root, modulePath string, fset *token.FileSet, packag
 			ImportPath: spec.importPath,
 			Types:      append([]manifestStableType(nil), spec.types...),
 		}
-		inventory := packages[spec.importPath]
+		inventory = packages[spec.importPath]
 		if inventory == nil {
 			violations = append(violations, "stable contract package is missing: "+spec.importPath)
 			contracts = append(contracts, contract)
@@ -1847,6 +1881,9 @@ func inspectStableContracts(root, modulePath string, fset *token.FileSet, packag
 						continue
 					}
 					if _, ok := expectedNames[name]; !ok {
+						if slices.Contains(enumSpec.additional, name) {
+							continue
+						}
 						violations = append(violations, fmt.Sprintf("%s: stable enum %s has unexpected value %s", actual.rel, enumSpec.typeName, name))
 					}
 				}
@@ -2308,7 +2345,9 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 				),
 			},
 			enums: []stableEnumSpec{
-				{exact: true, values: []manifestStableEnumValue{enumValue("SnapshotContractV1", "helianthus.eebus.runtime.raw-snapshot.v1")}},
+				{additional: []string{"NativeSnapshotContractV2"}, exact: true, values: []manifestStableEnumValue{
+					enumValue("SnapshotContractV1", "helianthus.eebus.runtime.raw-snapshot.v1"),
+				}},
 				{exact: true, typeName: "ObservedRuntimeStateV1", values: []manifestStableEnumValue{
 					enumValue("ObservedRuntimeStateV1Unknown", "unknown"),
 					enumValue("ObservedRuntimeStateV1Stopped", "stopped"),
@@ -2340,6 +2379,16 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 					enumValue("FeatureRoleV1Unspecified", ""),
 					enumValue("FeatureRoleV1Client", "client"),
 					enumValue("FeatureRoleV1Server", "server"),
+				}},
+			},
+		},
+		{
+			importPath: modulePath,
+			optional:   true,
+			root:       "NativeSnapshotV2",
+			enums: []stableEnumSpec{
+				{values: []manifestStableEnumValue{
+					enumValue("NativeSnapshotContractV2", "helianthus.eebus.runtime.native-snapshot.v2"),
 				}},
 			},
 		},
