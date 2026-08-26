@@ -258,6 +258,16 @@ func nativeRuntimeValueV2FromAny(source any, depth int) (nativeRuntimeValueV2Pay
 			return nativeRuntimeValueV2Payload{}, errors.New("native string exceeds the limit")
 		}
 		return nativeRuntimeValueV2Payload{String: &value}, nil
+	case json.Number:
+		integer, err := value.Int64()
+		if err == nil {
+			return nativeRuntimeValueV2Payload{Integer: &integer}, nil
+		}
+		floating, err := value.Float64()
+		if err != nil || math.IsNaN(floating) || math.IsInf(floating, 0) {
+			return nativeRuntimeValueV2Payload{}, errors.New("native number is invalid")
+		}
+		return nativeRuntimeValueV2Payload{Float: &floating}, nil
 	case int:
 		integer := int64(value)
 		return nativeRuntimeValueV2Payload{Integer: &integer}, nil
