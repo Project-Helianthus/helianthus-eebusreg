@@ -116,7 +116,7 @@ func TestIssue129RuntimeDevicesPreserveDetachedNativeNumberTokensInV2(t *testing
 		t.Fatal(err)
 	}
 	values := issue129NativeNumberObject(t, document)
-	if got := issue129NativeNumber(t, values, "counter", "integer"); got != "9007199254740993" {
+	if got := issue129NativeNumber(t, values, "counter", "number"); got != "9007199254740993" {
 		t.Fatalf("counter = %q, want exact native integer", got)
 	}
 	if got := issue129NativeNumber(t, values, "fraction", "number"); got != "12.5" {
@@ -177,6 +177,7 @@ func issue129NativeNumber(t *testing.T, values map[string]any, key, kind string)
 func TestIssue129RuntimeV2PreservesWideJSONNumbersAndEmptyContainers(t *testing.T) {
 	value, err := detachedRuntimeJSONValue(map[string]any{
 		"wide":   json.Number("18446744073709551615"),
+		"minus":  json.Number("-0"),
 		"array":  []any{},
 		"object": map[string]any{},
 	})
@@ -203,6 +204,9 @@ func TestIssue129RuntimeV2PreservesWideJSONNumbersAndEmptyContainers(t *testing.
 	values := issue129NativeObject(t, document, "/devices/1/native")
 	if got := issue129NativeNumber(t, values, "wide", "number"); got != "18446744073709551615" {
 		t.Fatalf("wide number = %q, want exact native token", got)
+	}
+	if got := issue129NativeNumber(t, values, "minus", "number"); got != "-0" {
+		t.Fatalf("negative zero = %q, want exact native token", got)
 	}
 	if array, ok := values["array"].(map[string]any)["array"].([]any); !ok || len(array) != 0 {
 		t.Fatalf("empty native array = %#v, want []", values["array"])

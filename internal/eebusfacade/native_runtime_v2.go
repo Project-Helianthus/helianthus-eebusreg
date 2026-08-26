@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const nativeRuntimeV2Source = "eebusfacade.runtime"
+
+var nativeRuntimeV2JSONNumber = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`)
 
 type nativeRuntimeSnapshotV2Payload struct {
 	Meta         nativeRuntimeSnapshotMetaV2Payload  `json:"meta"`
@@ -261,11 +264,10 @@ func nativeRuntimeValueV2FromAny(source any, depth int) (nativeRuntimeValueV2Pay
 		}
 		return nativeRuntimeValueV2Payload{String: &value}, nil
 	case json.Number:
-		integer, err := value.Int64()
-		if err == nil {
-			return nativeRuntimeValueV2Payload{Integer: &integer}, nil
-		}
 		number := value.String()
+		if len(number) > 65536 || !nativeRuntimeV2JSONNumber.MatchString(number) {
+			return nativeRuntimeValueV2Payload{}, errors.New("native number is invalid")
+		}
 		return nativeRuntimeValueV2Payload{Number: &number}, nil
 	case int:
 		integer := int64(value)
