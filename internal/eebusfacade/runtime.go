@@ -1573,6 +1573,18 @@ func detachedRuntimeJSONValue(value any) (any, error) {
 	return detached, nil
 }
 
+func detachedRuntimeJSONValueV1(value any) (any, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, errors.New("encode detailed discovery value")
+	}
+	var detached any
+	if err := json.Unmarshal(encoded, &detached); err != nil {
+		return nil, errors.New("decode detailed discovery value")
+	}
+	return detached, nil
+}
+
 func cloneRuntimeDescription(value *spinemodel.DescriptionType) *string {
 	if value == nil {
 		return nil
@@ -1831,7 +1843,7 @@ func marshalRuntimeDevice(source runtimeDeviceObservation) (
 		result.Metadata = &metadata
 	}
 	if source.Opaque != nil {
-		opaque := cloneRuntimeOpaque(source.Opaque)
+		opaque := cloneRuntimeOpaqueV1(source.Opaque)
 		result.Opaque = &opaque
 	}
 	var entities []runtimeEntityPayload
@@ -2433,6 +2445,23 @@ func cloneRuntimeOpaque(source []runtimeOpaquePayload) []runtimeOpaquePayload {
 	for index, observation := range source {
 		result[index] = observation
 		value, err := detachedRuntimeJSONValue(observation.Value)
+		if err == nil {
+			result[index].Value = value
+		} else {
+			result[index].Value = nil
+		}
+	}
+	return result
+}
+
+func cloneRuntimeOpaqueV1(source []runtimeOpaquePayload) []runtimeOpaquePayload {
+	if source == nil {
+		return nil
+	}
+	result := make([]runtimeOpaquePayload, len(source))
+	for index, observation := range source {
+		result[index] = observation
+		value, err := detachedRuntimeJSONValueV1(observation.Value)
 		if err == nil {
 			result[index].Value = value
 		} else {

@@ -159,6 +159,16 @@ func issue129NativeNumberObject(t *testing.T, document map[string]any) map[strin
 
 func issue129NativeNumber(t *testing.T, values map[string]any, key, kind string) string {
 	t.Helper()
+	if kind == "" {
+		switch number := values[key].(type) {
+		case json.Number:
+			return number.String()
+		case string:
+			return number
+		default:
+			t.Fatalf("%s = %#v, want native number", key, values[key])
+		}
+	}
 	value, ok := values[key].(map[string]any)
 	if !ok {
 		t.Fatalf("%s = %#v, want native value", key, values[key])
@@ -214,6 +224,77 @@ func TestIssue129RuntimeV2PreservesWideJSONNumbersAndEmptyContainers(t *testing.
 	if object, ok := values["object"].(map[string]any)["object"].(map[string]any); !ok || len(object) != 0 {
 		t.Fatalf("empty native object = %#v, want {}", values["object"])
 	}
+}
+
+func TestIssue129V1NormalizesAndV2PreservesDetachedNativeNumberTokens(t *testing.T) {
+	value, err := detachedRuntimeJSONValue(map[string]any{
+		"large":    json.Number("9007199254740993"),
+		"minus":    json.Number("-0"),
+		"fraction": json.Number("12.5"),
+		"exponent": json.Number("1e+3"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := []runtimeGraphObservation{{
+		RemoteSKI: issue77ReducerRemoteSKI,
+		Visible:   true,
+		Devices: []runtimeDeviceObservation{{
+			SKI: issue77ReducerRemoteSKI, Address: "1", Type: "device",
+			Opaque: []runtimeOpaquePayload{{Path: "/devices/1/native", Source: "spine", Value: value}},
+		}},
+	}}
+	now := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+	v1, err := marshalRuntimeSnapshotWithIdentity("runtime", issue77ReducerRemoteSKI, graph, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := marshalNativeRuntimeSnapshotV2WithIdentity("runtime", issue77ReducerRemoteSKI, graph, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1Values := issue129V1NativeObject(t, v1)
+	if got := issue129NativeNumber(t, v1Values, "large", ""); got != "9007199254740992" {
+		t.Fatalf("V1 large number = %q, want frozen float64 normalization", got)
+	}
+	if got := issue129NativeNumber(t, v1Values, "exponent", ""); got != "1000" {
+		t.Fatalf("V1 exponent = %q, want frozen float64 normalization", got)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(v2))
+	decoder.UseNumber()
+	var document map[string]any
+	if err := decoder.Decode(&document); err != nil {
+		t.Fatal(err)
+	}
+	v2Values := issue129NativeObject(t, document, "/devices/1/native")
+	for key, want := range map[string]string{"large": "9007199254740993", "minus": "-0", "fraction": "12.5", "exponent": "1e+3"} {
+		if got := issue129NativeNumber(t, v2Values, key, "number"); got != want {
+			t.Fatalf("V2 %s = %q, want exact native token %q", key, got, want)
+		}
+	}
+}
+
+func issue129V1NativeObject(t *testing.T, payload []byte) map[string]any {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	var document map[string]any
+	if err := decoder.Decode(&document); err != nil {
+		t.Fatal(err)
+	}
+	devices, ok := document["devices"].([]any)
+	if !ok || len(devices) != 1 {
+		t.Fatalf("V1 devices = %#v, want one", document["devices"])
+	}
+	opaque, ok := devices[0].(map[string]any)["opaque"].([]any)
+	if !ok || len(opaque) != 1 {
+		t.Fatalf("V1 opaque = %#v, want one", devices[0])
+	}
+	value, ok := opaque[0].(map[string]any)["value"].(map[string]any)
+	if !ok {
+		t.Fatalf("V1 opaque value = %#v, want object", opaque[0])
+	}
+	return value
 }
 
 func issue129NativeObject(t *testing.T, document map[string]any, path string) map[string]any {
