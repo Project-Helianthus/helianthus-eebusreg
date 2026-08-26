@@ -119,7 +119,7 @@ func TestIssue129RuntimeDevicesPreserveDetachedNativeNumberTokensInV2(t *testing
 	if got := issue129NativeNumber(t, values, "counter", "integer"); got != "9007199254740993" {
 		t.Fatalf("counter = %q, want exact native integer", got)
 	}
-	if got := issue129NativeNumber(t, values, "fraction", "float"); got != "12.5" {
+	if got := issue129NativeNumber(t, values, "fraction", "number"); got != "12.5" {
 		t.Fatalf("fraction = %q, want native fraction", got)
 	}
 }
@@ -163,9 +163,80 @@ func issue129NativeNumber(t *testing.T, values map[string]any, key, kind string)
 	if !ok {
 		t.Fatalf("%s = %#v, want native value", key, values[key])
 	}
-	number, ok := value[kind].(json.Number)
-	if !ok {
+	switch number := value[kind].(type) {
+	case json.Number:
+		return number.String()
+	case string:
+		return number
+	default:
 		t.Fatalf("%s %s = %#v, want native number", key, kind, value[kind])
 	}
-	return number.String()
+	return ""
+}
+
+func TestIssue129RuntimeV2PreservesWideJSONNumbersAndEmptyContainers(t *testing.T) {
+	value, err := detachedRuntimeJSONValue(map[string]any{
+		"wide":   json.Number("18446744073709551615"),
+		"array":  []any{},
+		"object": map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := marshalNativeRuntimeSnapshotV2WithIdentity("native-runtime-id", issue77ReducerRemoteSKI, []runtimeGraphObservation{{
+		RemoteSKI: issue77ReducerRemoteSKI,
+		Visible:   true,
+		Devices: []runtimeDeviceObservation{{
+			SKI: issue77ReducerRemoteSKI, Address: "1", Type: "device",
+			Opaque: []runtimeOpaquePayload{{Path: "/devices/1/native", Source: "spine", Value: value}},
+		}},
+	}}, time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	var document map[string]any
+	if err := decoder.Decode(&document); err != nil {
+		t.Fatal(err)
+	}
+	values := issue129NativeObject(t, document, "/devices/1/native")
+	if got := issue129NativeNumber(t, values, "wide", "number"); got != "18446744073709551615" {
+		t.Fatalf("wide number = %q, want exact native token", got)
+	}
+	if array, ok := values["array"].(map[string]any)["array"].([]any); !ok || len(array) != 0 {
+		t.Fatalf("empty native array = %#v, want []", values["array"])
+	}
+	if object, ok := values["object"].(map[string]any)["object"].(map[string]any); !ok || len(object) != 0 {
+		t.Fatalf("empty native object = %#v, want {}", values["object"])
+	}
+}
+
+func issue129NativeObject(t *testing.T, document map[string]any, path string) map[string]any {
+	t.Helper()
+	devices, ok := document["devices"].([]any)
+	if !ok || len(devices) != 1 {
+		t.Fatalf("devices = %#v, want one native device", document["devices"])
+	}
+	observations, ok := devices[0].(map[string]any)["observations"].([]any)
+	if !ok {
+		t.Fatalf("observations = %#v, want array", devices[0])
+	}
+	for _, observation := range observations {
+		entry, ok := observation.(map[string]any)
+		if !ok || entry["path"] != path {
+			continue
+		}
+		value, ok := entry["value"].(map[string]any)
+		if !ok {
+			t.Fatalf("value = %#v, want object", entry["value"])
+		}
+		object, ok := value["object"].(map[string]any)
+		if !ok {
+			t.Fatalf("object = %#v, want native object", value["object"])
+		}
+		return object
+	}
+	t.Fatalf("native observation %q missing: %#v", path, observations)
+	return nil
 }

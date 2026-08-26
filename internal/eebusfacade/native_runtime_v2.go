@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -114,13 +115,14 @@ type nativeRuntimeObservationV2Payload struct {
 }
 
 type nativeRuntimeValueV2Payload struct {
-	Null    *bool                                  `json:"null,omitempty"`
-	Boolean *bool                                  `json:"boolean,omitempty"`
-	Integer *int64                                 `json:"integer,omitempty"`
-	Float   *float64                               `json:"float,omitempty"`
-	String  *string                                `json:"string,omitempty"`
-	Array   []nativeRuntimeValueV2Payload          `json:"array,omitempty"`
-	Object  map[string]nativeRuntimeValueV2Payload `json:"object,omitempty"`
+	Null    *bool                                   `json:"null,omitempty"`
+	Boolean *bool                                   `json:"boolean,omitempty"`
+	Integer *int64                                  `json:"integer,omitempty"`
+	Float   *float64                                `json:"float,omitempty"`
+	Number  *string                                 `json:"number,omitempty"`
+	String  *string                                 `json:"string,omitempty"`
+	Array   *[]nativeRuntimeValueV2Payload          `json:"array,omitempty"`
+	Object  *map[string]nativeRuntimeValueV2Payload `json:"object,omitempty"`
 }
 
 func marshalNativeRuntimeSnapshotV2WithIdentity(runtimeIdentity, localIdentity string, graph []runtimeGraphObservation, now time.Time) ([]byte, error) {
@@ -263,11 +265,8 @@ func nativeRuntimeValueV2FromAny(source any, depth int) (nativeRuntimeValueV2Pay
 		if err == nil {
 			return nativeRuntimeValueV2Payload{Integer: &integer}, nil
 		}
-		floating, err := value.Float64()
-		if err != nil || math.IsNaN(floating) || math.IsInf(floating, 0) {
-			return nativeRuntimeValueV2Payload{}, errors.New("native number is invalid")
-		}
-		return nativeRuntimeValueV2Payload{Float: &floating}, nil
+		number := value.String()
+		return nativeRuntimeValueV2Payload{Number: &number}, nil
 	case int:
 		integer := int64(value)
 		return nativeRuntimeValueV2Payload{Integer: &integer}, nil
@@ -292,7 +291,8 @@ func nativeRuntimeValueV2FromAny(source any, depth int) (nativeRuntimeValueV2Pay
 		return nativeRuntimeValueV2Payload{Float: &value}, nil
 	case uint:
 		if uint64(value) > uint64(^uint64(0)>>1) {
-			return nativeRuntimeValueV2Payload{}, errors.New("native integer exceeds signed range")
+			number := strconv.FormatUint(uint64(value), 10)
+			return nativeRuntimeValueV2Payload{Number: &number}, nil
 		}
 		integer := int64(value)
 		return nativeRuntimeValueV2Payload{Integer: &integer}, nil
@@ -307,7 +307,8 @@ func nativeRuntimeValueV2FromAny(source any, depth int) (nativeRuntimeValueV2Pay
 		return nativeRuntimeValueV2Payload{Integer: &integer}, nil
 	case uint64:
 		if value > uint64(^uint64(0)>>1) {
-			return nativeRuntimeValueV2Payload{}, errors.New("native integer exceeds signed range")
+			number := strconv.FormatUint(value, 10)
+			return nativeRuntimeValueV2Payload{Number: &number}, nil
 		}
 		integer := int64(value)
 		return nativeRuntimeValueV2Payload{Integer: &integer}, nil
@@ -315,26 +316,28 @@ func nativeRuntimeValueV2FromAny(source any, depth int) (nativeRuntimeValueV2Pay
 		if len(value) > 256 {
 			return nativeRuntimeValueV2Payload{}, errors.New("native array exceeds the limit")
 		}
-		result := nativeRuntimeValueV2Payload{Array: make([]nativeRuntimeValueV2Payload, len(value))}
+		values := make([]nativeRuntimeValueV2Payload, len(value))
+		result := nativeRuntimeValueV2Payload{Array: &values}
 		for index, child := range value {
 			converted, err := nativeRuntimeValueV2FromAny(child, depth+1)
 			if err != nil {
 				return nativeRuntimeValueV2Payload{}, err
 			}
-			result.Array[index] = converted
+			(*result.Array)[index] = converted
 		}
 		return result, nil
 	case map[string]any:
 		if len(value) > 32 {
 			return nativeRuntimeValueV2Payload{}, errors.New("native object exceeds the limit")
 		}
-		result := nativeRuntimeValueV2Payload{Object: make(map[string]nativeRuntimeValueV2Payload, len(value))}
+		values := make(map[string]nativeRuntimeValueV2Payload, len(value))
+		result := nativeRuntimeValueV2Payload{Object: &values}
 		for key, child := range value {
 			converted, err := nativeRuntimeValueV2FromAny(child, depth+1)
 			if err != nil {
 				return nativeRuntimeValueV2Payload{}, err
 			}
-			result.Object[key] = converted
+			(*result.Object)[key] = converted
 		}
 		return result, nil
 	default:

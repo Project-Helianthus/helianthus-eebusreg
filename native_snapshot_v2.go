@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -124,14 +125,17 @@ type NativeObservationV2 struct {
 }
 
 type NativeValueV2 struct {
-	Null    *bool                    `json:"null,omitempty"`
-	Boolean *bool                    `json:"boolean,omitempty"`
-	Integer *int64                   `json:"integer,omitempty"`
-	Float   *float64                 `json:"float,omitempty"`
-	String  *string                  `json:"string,omitempty"`
-	Array   []NativeValueV2          `json:"array,omitempty"`
-	Object  map[string]NativeValueV2 `json:"object,omitempty"`
+	Null    *bool                     `json:"null,omitempty"`
+	Boolean *bool                     `json:"boolean,omitempty"`
+	Integer *int64                    `json:"integer,omitempty"`
+	Float   *float64                  `json:"float,omitempty"`
+	Number  *string                   `json:"number,omitempty"`
+	String  *string                   `json:"string,omitempty"`
+	Array   *[]NativeValueV2          `json:"array,omitempty"`
+	Object  *map[string]NativeValueV2 `json:"object,omitempty"`
 }
+
+var nativeSnapshotV2JSONNumber = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`)
 
 func NewNativeSnapshotV2(draft NativeSnapshotV2) (NativeSnapshotV2, error) {
 	snapshot := draft.Clone()
@@ -289,6 +293,12 @@ func nativeSnapshotV2ValidateValue(value NativeValueV2, depth int) error {
 			return errors.New("native float is invalid")
 		}
 	}
+	if value.Number != nil {
+		variants++
+		if len(*value.Number) > nativeSnapshotV2MaximumPayloadBytes || !nativeSnapshotV2JSONNumber.MatchString(*value.Number) {
+			return errors.New("native number is invalid")
+		}
+	}
 	if value.String != nil {
 		variants++
 		if len(*value.String) > nativeSnapshotV2MaximumPayloadBytes {
@@ -297,10 +307,10 @@ func nativeSnapshotV2ValidateValue(value NativeValueV2, depth int) error {
 	}
 	if value.Array != nil {
 		variants++
-		if len(value.Array) > 256 {
+		if len(*value.Array) > 256 {
 			return errors.New("native array exceeds the limit")
 		}
-		for _, child := range value.Array {
+		for _, child := range *value.Array {
 			if err := nativeSnapshotV2ValidateValue(child, depth+1); err != nil {
 				return err
 			}
@@ -308,10 +318,10 @@ func nativeSnapshotV2ValidateValue(value NativeValueV2, depth int) error {
 	}
 	if value.Object != nil {
 		variants++
-		if len(value.Object) > 32 {
+		if len(*value.Object) > 32 {
 			return errors.New("native object exceeds the limit")
 		}
-		for key, child := range value.Object {
+		for key, child := range *value.Object {
 			if !nativeSnapshotV2ValidText(key, nativeSnapshotV2MaximumSourceBytes) {
 				return errors.New("native object key is invalid")
 			}
@@ -391,17 +401,20 @@ func nativeSnapshotV2CloneValue(source NativeValueV2) NativeValueV2 {
 		result.Float = &value
 	}
 	result.String = nativeSnapshotV2CloneString(source.String)
+	result.Number = nativeSnapshotV2CloneString(source.Number)
 	if source.Array != nil {
-		result.Array = make([]NativeValueV2, len(source.Array))
-		for index, value := range source.Array {
-			result.Array[index] = nativeSnapshotV2CloneValue(value)
+		values := make([]NativeValueV2, len(*source.Array))
+		for index, value := range *source.Array {
+			values[index] = nativeSnapshotV2CloneValue(value)
 		}
+		result.Array = &values
 	}
 	if source.Object != nil {
-		result.Object = make(map[string]NativeValueV2, len(source.Object))
-		for key, value := range source.Object {
-			result.Object[key] = nativeSnapshotV2CloneValue(value)
+		values := make(map[string]NativeValueV2, len(*source.Object))
+		for key, value := range *source.Object {
+			values[key] = nativeSnapshotV2CloneValue(value)
 		}
+		result.Object = &values
 	}
 	return result
 }
