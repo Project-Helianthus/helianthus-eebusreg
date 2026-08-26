@@ -191,6 +191,9 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 	}
 	symbols := root.Symbols[:0]
 	for _, symbol := range root.Symbols {
+		if issue129NativeV2Symbol(symbol) {
+			continue
+		}
 		if msp05pPostM9OperatorAdminSymbol(symbol) {
 			continue
 		}
@@ -279,6 +282,28 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 		projected.Packages[index].Symbols = rawSymbols
 	}
 	return projected
+}
+
+// issue129NativeV2Symbol is deliberately a closed inventory. It keeps the
+// historical V1 projection byte-identical while making every new V2 export
+// subject to its own API-surface attestation.
+func issue129NativeV2Symbol(symbol symbol) bool {
+	names := map[string]struct{}{
+		"NativeSnapshotContractV2": {}, "NewNativeRuntimeV2": {}, "NewNativeSnapshotV2": {},
+		"NativeDegradationV2": {}, "NativeDeviceV2": {}, "NativeEntityV2": {},
+		"NativeFeatureV2": {}, "NativeObservationV2": {}, "NativePairingObservationV2": {},
+		"NativeRuntimeObservationV2": {}, "NativeRuntimeV2": {}, "NativeServiceV2": {},
+		"NativeSessionV2": {}, "NativeSnapshotMetaV2": {}, "NativeSnapshotV2": {},
+		"NativeUseCaseV2": {}, "NativeValueV2": {},
+	}
+	if _, ok := names[symbol.Name]; ok {
+		return true
+	}
+	if symbol.Receiver == nil || symbol.Receiver.Base != "NativeSnapshotV2" {
+		return false
+	}
+	_, ok := map[string]struct{}{"Clone": {}, "Validate": {}}[symbol.Name]
+	return ok
 }
 
 func msp05pPostM9OperatorAdminSymbol(symbol symbol) bool {

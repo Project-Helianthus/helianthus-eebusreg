@@ -72,6 +72,38 @@ func TestMSP05PInitialV1ContractIsExactlyAllowlisted(t *testing.T) {
 	}
 }
 
+func TestIssue129NativeRuntimeV2ContractIsExactlyAllowlisted(t *testing.T) {
+	want := frozenExportInventory(`
+const NativeSnapshotContractV2
+func NewNativeRuntimeV2
+func NewNativeSnapshotV2
+func NativeSnapshotV2.Clone
+func NativeSnapshotV2.Validate
+type NativeDegradationV2
+type NativeDeviceV2
+type NativeEntityV2
+type NativeFeatureV2
+type NativeObservationV2
+type NativePairingObservationV2
+type NativeRuntimeObservationV2
+type NativeRuntimeV2
+type NativeServiceV2
+type NativeSessionV2
+type NativeSnapshotMetaV2
+type NativeSnapshotV2
+type NativeUseCaseV2
+type NativeValueV2
+`)
+	if !maps.Equal(issue129NativeRuntimeV2Exports, want) {
+		t.Fatal("issue #129 native V2 closed inventory drifted")
+	}
+	for exported := range want {
+		if _, ok := allowedRuntimeExports[exported]; !ok {
+			t.Errorf("issue #129 native V2 export is not allowlisted: %s %s", exported.Kind, exported.Name)
+		}
+	}
+}
+
 func TestPostM9OperatorAdminV1ContractIsExactlyAllowlisted(t *testing.T) {
 	want := postM9OperatorAdminV1ExportInventory()
 	if !maps.Equal(postM9OperatorAdminRuntimeExports, want) {

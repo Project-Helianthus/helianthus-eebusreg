@@ -720,6 +720,35 @@ func TestMSP035DependencyExportInventory(t *testing.T) {
 	}
 }
 
+func TestIssue129NativeRuntimeV2StableEnumGate(t *testing.T) {
+	tool := buildAPIBoundary(t)
+
+	t.Run("native V2 contract is separately activated", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeMSP035DependencyFixture(t, root)
+		writeIssue129NativeRuntimeV2Fixture(t, root)
+		if output, err := runTool(t, tool, root); err != nil {
+			t.Fatalf("native V2 fixture was rejected: %v\n%s", err, output)
+		}
+	})
+
+	t.Run("native V2 contract value is exact", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeMSP035DependencyFixture(t, root)
+		writeIssue129NativeRuntimeV2Fixture(t, root)
+		path := filepath.Join(root, "native_snapshot_v2.go")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = bytes.Replace(data, []byte("helianthus.eebus.runtime.native-snapshot.v2"), []byte("synthetic-invalid-v2"), 1)
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		expectRejected(t, tool, root, "NativeSnapshotContractV2", "does not match exact manifest")
+	})
+}
+
 func TestDocsCleanAPIBoundaryManifestArtifact(t *testing.T) {
 	tool := buildAPIBoundary(t)
 	root := newSyntheticRepository(t)
@@ -938,6 +967,16 @@ func writeMSP035DependencyFixture(t *testing.T, root string) {
 		writeFile(t, root, name, string(data))
 	}
 	runGit(t, root, nil, "add", "--", ".")
+}
+
+func writeIssue129NativeRuntimeV2Fixture(t *testing.T, root string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(msp035FixtureSourceRoot(t), "native_snapshot_v2.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "native_snapshot_v2.go", string(data))
+	runGit(t, root, nil, "add", "--", "native_snapshot_v2.go")
 }
 
 func copyMSP035FixtureDirectory(t *testing.T, root, directory string) {
