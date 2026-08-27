@@ -10,7 +10,7 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
 
-func TestIssue83RuntimeRejectsAuthorizationAndShapeBeforeBackendContact(t *testing.T) {
+func TestRawFeatureReadRejectsAuthorizationAndShapeBeforeBackendContact(t *testing.T) {
 	backend := &issue83RawBackend{}
 	instance, err := newRuntime(validRuntimeConfig(t.TempDir()), func(context.Context, Config) (runtimeBackend, error) {
 		return backend, nil
@@ -117,7 +117,7 @@ func TestIssue83RuntimeRejectsAuthorizationAndShapeBeforeBackendContact(t *testi
 	}
 }
 
-func TestIssue83RuntimeRequiresStartedBackendAndPreservesPartialResult(t *testing.T) {
+func TestRawFeatureReadRequiresStartedBackendAndPreservesPartialResult(t *testing.T) {
 	backend := &issue83RawBackend{}
 	instance, err := newRuntime(validRuntimeConfig(t.TempDir()), func(context.Context, Config) (runtimeBackend, error) {
 		return backend, nil
@@ -188,7 +188,7 @@ func TestIssue83RuntimeRequiresStartedBackendAndPreservesPartialResult(t *testin
 	}
 }
 
-func TestIssue83RuntimeFeaturesGetUsesClosedReadTool(t *testing.T) {
+func TestRawFeatureInventoryUsesOnlyItsReadTool(t *testing.T) {
 	backend := &issue83RawBackend{
 		inventory: eebusraw.FeaturesGetDataV1{
 			Feature:       issue83RuntimeLocator(),

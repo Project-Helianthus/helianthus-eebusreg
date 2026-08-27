@@ -11,7 +11,7 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
 
-func TestIssue77ValidateAndMarshalRequireMatchingDataHash(t *testing.T) {
+func TestRawSnapshotValidationAndMarshalRequireMatchingDataHash(t *testing.T) {
 	valid := issue77Snapshot(t)
 	hashless := valid.Clone()
 	hashless.Meta.DataHash = ""
@@ -38,7 +38,7 @@ func TestIssue77ValidateAndMarshalRequireMatchingDataHash(t *testing.T) {
 	}
 }
 
-func TestIssue77PrivateKeyArmorCorpusIsRejectedAtEveryNestedTier(t *testing.T) {
+func TestRawSnapshotRejectsPrivateKeyArmorAtEveryNestedTier(t *testing.T) {
 	armors := []string{
 		"-----BEGIN PRIVATE KEY-----",
 		"-----BEGIN RSA PRIVATE KEY-----",
@@ -90,7 +90,7 @@ func TestIssue77PrivateKeyArmorCorpusIsRejectedAtEveryNestedTier(t *testing.T) {
 	}
 }
 
-func TestIssue77RedactedFormatterRedactsEveryVerbAndDirectCall(t *testing.T) {
+func TestRedactedSnapshotFormatterUsesSafeRepresentationForEveryVerb(t *testing.T) {
 	snapshot, err := BuildRedactedSnapshotV1(issue77Snapshot(t))
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestIssue77RedactedFormatterRedactsEveryVerbAndDirectCall(t *testing.T) {
 	}
 }
 
-func TestIssue77RedactedValidateAndUnmarshalRejectMalformedGraph(t *testing.T) {
+func TestRedactedSnapshotValidateAndUnmarshalRejectMalformedGraph(t *testing.T) {
 	valid, err := BuildRedactedSnapshotV1(issue77Snapshot(t))
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestIssue77RedactedValidateAndUnmarshalRejectMalformedGraph(t *testing.T) {
 	}
 }
 
-func TestIssue77OpaqueDecoderFailsClosedBeforeMaterializingOverBudgetInput(t *testing.T) {
+func TestOpaqueValueDecoderFailsClosedBeforeMaterializingOverBudgetInput(t *testing.T) {
 	originalText := "unchanged"
 	original := OpaqueValueV1{Scalar: &OpaqueScalarV1{String: &originalText}}
 	tests := []struct {
@@ -224,7 +224,7 @@ func TestIssue77OpaqueDecoderFailsClosedBeforeMaterializingOverBudgetInput(t *te
 	}
 }
 
-func TestIssue77RedactedUseCaseDeviceJoinParsesExactDeviceComponent(t *testing.T) {
+func TestRedactedSnapshotUseCaseClaimsJoinByExactDeviceComponent(t *testing.T) {
 	draft := rawSnapshotDraftV1(t, false)
 	draft.Devices[0].Address = "dev"
 	draft.Devices[1].Address = "dev-2"

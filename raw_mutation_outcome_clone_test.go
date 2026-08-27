@@ -35,7 +35,7 @@ func (*issue95OutcomeRuntime) MutationsRollback(
 	return RawMutationOutcomeV1{}, nil
 }
 
-func TestIssue95MutationOutcomeClonesRuntimeAndMutation(t *testing.T) {
+func TestRawMutationOutcomeCloneDetachesRuntimeAndMutation(t *testing.T) {
 	before, err := eebusraw.NewTypedValueV1(map[string]any{
 		"limit": int64(23),
 		"unit":  "degC",
