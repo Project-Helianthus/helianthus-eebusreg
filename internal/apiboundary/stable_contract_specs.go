@@ -1,7 +1,5 @@
 package main
 
-// stableContractSpecs preserves the canonical contract order while each
-// constructor owns one immutable contract definition.
 func stableContractSpecs(modulePath string) []stableContractSpec {
 	rawPath := modulePath + "/eebusraw"
 	evidencePath := modulePath + "/eebusevidence"
