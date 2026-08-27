@@ -8,7 +8,7 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
 
-func TestIssue85RootRuntimeWiresSeparateMutationCapability(t *testing.T) {
+func TestRawMutationRuntimeExposesSeparateMutationCapability(t *testing.T) {
 	backend := &issue85RootMutationBackend{}
 	instance, err := newRuntime(
 		validRuntimeConfig(t.TempDir()),
@@ -81,7 +81,7 @@ func TestIssue85RootRuntimeWiresSeparateMutationCapability(t *testing.T) {
 	}
 }
 
-func TestIssue85RootRuntimeAuthorizesBeforeMutationBackendContact(t *testing.T) {
+func TestRawMutationRuntimeAuthorizesBeforeBackendContact(t *testing.T) {
 	backend := &issue85RootMutationBackend{}
 	instance, err := newRuntime(
 		validRuntimeConfig(t.TempDir()),
@@ -227,7 +227,7 @@ func TestIssue85RootRuntimeAuthorizesBeforeMutationBackendContact(t *testing.T) 
 	}
 }
 
-func TestIssue85RootRuntimeUsesReadAuthorizationOnlyForMutationStatus(t *testing.T) {
+func TestRawMutationStatusUsesReadAuthorizationOnly(t *testing.T) {
 	backend := &issue85RootMutationBackend{
 		getResult: eebusraw.MutationV1{
 			MutationRef: "issue85-status-ref",

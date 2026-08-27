@@ -19,7 +19,7 @@ var (
 	_ func(Config) (Runtime, error) = New
 )
 
-func TestMSP05PInitialV1PublicShapeIsExact(t *testing.T) {
+func TestRuntimeConfigurationPublicShapeIsExact(t *testing.T) {
 	assertMSP05PStructFields(t, reflect.TypeOf(Config{}), []msp05pField{
 		{name: "Enabled", typ: reflect.TypeOf(false)},
 		{name: "StateRoot", typ: reflect.TypeOf("")},
@@ -49,7 +49,7 @@ func TestMSP05PInitialV1PublicShapeIsExact(t *testing.T) {
 	}
 }
 
-func TestMSP05PInitialV1EnabledValidationIsPureAndExact(t *testing.T) {
+func TestRuntimeConfigurationEnabledValidationIsPureAndExact(t *testing.T) {
 	sandbox := t.TempDir()
 	stateRoot := filepath.Join(sandbox, "runtime-state")
 	valid := validCleanupRuntimeConfig(stateRoot, false, nil)
@@ -129,7 +129,7 @@ func TestMSP05PInitialV1EnabledValidationIsPureAndExact(t *testing.T) {
 	assertRuntimeDirectoryEmpty(t, sandbox)
 }
 
-func TestMSP05PInitialV1RemotesNormalizeRejectAndRemainDefensivelyCopied(t *testing.T) {
+func TestRuntimeConfigurationRemotesNormalizeRejectAndRemainDefensivelyCopied(t *testing.T) {
 	stateRoot := filepath.Join(t.TempDir(), "runtime-state")
 	valid := validCleanupRuntimeConfig(stateRoot, true, nil)
 	invalid := []struct {
@@ -227,7 +227,7 @@ func TestMSP05PInitialV1RemotesNormalizeRejectAndRemainDefensivelyCopied(t *test
 	}
 }
 
-func TestMSP05PInitialV1DisabledProductIsStrictlyInert(t *testing.T) {
+func TestRuntimeConfigurationDisabledModeIsStrictlyInert(t *testing.T) {
 	sandbox := t.TempDir()
 	t.Setenv("HOME", sandbox)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(sandbox, "config"))
