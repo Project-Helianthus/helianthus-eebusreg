@@ -40,11 +40,20 @@ static int helianthus_acl_entry_count(int fd) {
 func TestDocsCleanOwnershipContract(t *testing.T) {
 	tool := buildAPIBoundary(t)
 
-	t.Run("exact minimal README and concise package metadata are accepted", func(t *testing.T) {
+	t.Run("repository README and concise package metadata are accepted", func(t *testing.T) {
 		root := newSyntheticRepository(t)
 		output, err := runTool(t, tool, root)
 		if err != nil {
 			t.Fatalf("exact external-only ownership fixture was rejected: %v\n%s", err, output)
+		}
+	})
+
+	t.Run("expanded contributor README is accepted", func(t *testing.T) {
+		root := newSyntheticRepository(t)
+		writeFile(t, root, "README.md", minimalREADME+"\n## Contributing\n\nRepository-local build and test guidance.\n")
+		output, err := runTool(t, tool, root)
+		if err != nil {
+			t.Fatalf("expanded repository README was rejected: %v\n%s", err, output)
 		}
 	})
 
@@ -475,11 +484,11 @@ import "C"
 			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
 		},
 		{
-			name: "README drift",
+			name: "empty README",
 			mutate: func(t *testing.T, root string) {
-				writeFile(t, root, "README.md", minimalREADME+"Additional local documentation.\n")
+				writeFile(t, root, "README.md", " \n\t\n")
 			},
-			want: []string{"README.md", "exact"},
+			want: []string{"README.md", "non-empty"},
 		},
 	}
 

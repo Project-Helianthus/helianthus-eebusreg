@@ -30,8 +30,6 @@ import (
 
 const canonicalModulePath = "github.com/Project-Helianthus/helianthus-eebusreg"
 
-const minimalREADME = "# eeBUS Registry\n\nCanonical docs: Project-Helianthus/helianthus-docs-eebus.\n\nBuild: `./scripts/ci_local.sh`.\n"
-
 var forbiddenExportFragments = []string{
 	"Registry",
 	"Projection",
@@ -1203,7 +1201,7 @@ func validateRepositoryPaths(root string) ([]string, error) {
 	info, err := os.Lstat(readmePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			violations["README.md must exist and match the exact minimal README"] = struct{}{}
+			violations["README.md must exist and be non-empty"] = struct{}{}
 		} else {
 			return nil, err
 		}
@@ -1212,11 +1210,11 @@ func validateRepositoryPaths(root string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if string(data) != minimalREADME {
-			violations["README.md must match the exact minimal README"] = struct{}{}
+		if strings.TrimSpace(string(data)) == "" {
+			violations["README.md must be non-empty"] = struct{}{}
 		}
 	} else {
-		violations["README.md must be a regular file with the exact minimal content"] = struct{}{}
+		violations["README.md must be a non-empty regular file"] = struct{}{}
 	}
 
 	result := make([]string, 0, len(violations))
