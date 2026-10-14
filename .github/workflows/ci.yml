@@ -53,8 +53,8 @@ jobs:
             sh -c 'apk add --no-cache bash git && export PATH=/usr/local/go/bin:$PATH && git config --global --add safe.directory /workspace && ./scripts/toolchain_boundary_proof.sh'
 
   api-surface-attestation:
-    # fork pull requests never run on the persistent runners
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'synology' }}
+    # stays GitHub-hosted: attestations are verified with --deny-self-hosted-runners (MSP-055)
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
