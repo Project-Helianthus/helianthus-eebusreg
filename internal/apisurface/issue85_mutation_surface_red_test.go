@@ -159,6 +159,9 @@ func TestIssue85PublicSurfaceAddsNoConsumerAliasOrSecretCarrier(t *testing.T) {
 				"signingkey",
 				"truststore",
 			} {
+				if fragment == "compat" && pkg.Path == modulePath && issue137ParticipationSymbol(symbol) {
+					continue
+				}
 				if strings.Contains(lower, fragment) {
 					violations = append(violations, pkg.Path+"."+symbol.Name+":"+fragment)
 				}

@@ -191,6 +191,9 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 	}
 	symbols := root.Symbols[:0]
 	for _, symbol := range root.Symbols {
+		if issue137ParticipationSymbol(symbol) {
+			continue
+		}
 		if issue129NativeV2Symbol(symbol) {
 			continue
 		}

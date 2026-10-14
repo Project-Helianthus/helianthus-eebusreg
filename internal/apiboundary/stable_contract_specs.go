@@ -21,6 +21,7 @@ func stableContractSpecs(modulePath string) []stableContractSpec {
 		stableIdentityDocumentV1ContractSpec(modulePath, rawPath, evidencePath, field, stableType, enumValue),
 		stableReadAuthorizationV1ContractSpec(modulePath, rawPath, evidencePath, field, stableType, enumValue),
 		stableEnvelopeV1ContractSpec(modulePath, rawPath, evidencePath, field, stableType, enumValue),
+		stableParticipationV1ContractSpec(modulePath, evidencePath, field, stableType, enumValue),
 	}
 }
 

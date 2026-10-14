@@ -71,6 +71,168 @@ restricted paraphrases into code, tests, issues, pull requests, or review
 comments. Record independently publishable facts with their evidence and
 uncertainty in the canonical docs repository.
 
+## Portal Participation Contract (PORTAL-05)
+
+Issue [#137](https://github.com/Project-Helianthus/helianthus-eebusreg/issues/137)
+adds the typed `eebusruntime` contract
+[`ParticipationContractV1`](./participation_contract_v1.go), with pure validators
+and the [`ParticipationDriverV1`](./participation_driver_v1.go) extension hook.
+This is a contract publication in source, not an implemented Portal workflow,
+runtime adapter, binding executor, persistence backend, or physical qualification.
+Gateway PORTAL-03 consumes the hook after its generic configuration foundations.
+It must not decode SHIP/SPINE or bypass accepted semantic producers/bindings.
+
+The runtime boundary remains this repository's responsibility; its internal
+facade composes `helianthus-eebus-go` and the SHIP/SPINE dependencies. Gateway
+owns Portal composition, HTTP authorization, versioned atomic configuration
+storage, edit conflicts and package restart coordination. The native owner
+keeps protected participant identity, peer trust, negotiated permissions and
+native evidence; the existing semantic producer owns promotion/selection and
+projection assessment. This contract references that producer's selected result;
+it neither defines universal semantic types nor replaces accepted consumer work.
+No implementation of `ParticipationDriverV1` is supplied by existing constructors.
+Canonical API documentation still belongs in `helianthus-docs-eebus`: publish the
+matching reference there and reconcile the accepted producer/binding adapter
+before Gateway integration merges. This source contract and its fixture tests
+do not close that documentation or integration gate.
+
+### Typed Contribution And Ordinary Workflow
+
+`ParticipationConfigurationV1` contains a version, monotonically increasing
+saved revision, stable local participant reference, enable flag, one explicit
+listener (interface and unicast address/port), discovery preference and selected
+`ParticipationBindingV1` records. One listener matches current `Config`;
+additional listeners are unsupported. Discovery is bounded by the native owner
+and current runtime allowlists; enabling discovery grants neither trust nor
+control and never creates bindings automatically. Unknown peers remain candidates.
+A driver must validate the listener against available interfaces and exposure
+policy before applying it. The pure validator checks shape, not machine availability.
+
+The Portal presents enable/listener/discovery settings, the existing native
+trust/discovery inspection, compatible promoted capability choices, and then
+participant/capability/direction/permission for each selected binding. The
+operator reviews the exact configuration delta before applying sensitive changes.
+`send` means local capability to the selected peer capability; `receive` means
+the reverse. Both sides use stable references; the local participant is in the
+configuration. `observe` and `control` are separately selected permissions;
+control can never be inferred from observation, a functional mapping or peer trust.
+
+References (`LocalParticipant`, peer, capabilities, selection and binding ID)
+are owner-allocated opaque 128-bit tokens encoded as 32 lowercase hex characters.
+They must not encode or derive from a device fingerprint, SKI, serial, address,
+discovery order or display name. The owner durably resolves them to native
+identity/capability and the established semantic selection, and reserves deleted
+IDs against reuse. Portal handles from `AdminV1` are short-lived authority handles,
+not persistent references: reacquire them from a fresh native admin snapshot.
+Exact selected identity and capability compatibility must be rechecked on use.
+Persisting a token without the owner's durable resolution is an incomplete setup,
+which stays configured/error and cannot be silently repaired by choosing a peer.
+
+`ParticipationDriverV1.Participation` supplies the saved configuration, the
+actually applied revision, a capture time, listener state and one observation
+for every saved binding, including unavailable ones. `OperatorAdmin` supplies
+existing `AdminV1` for bounded discovered/candidate/trusted/connected views,
+selection, connect/confirm, cancel, retry and untrust. Trust action preconditions,
+PIN privacy, observation expiry and native identity checks remain those of
+`AdminV1`; Portal adds no parallel trust database or HA session contract.
+HTTP/Ingress authentication does not establish native eeBUS trust.
+
+`ApplyParticipation` takes the complete candidate configuration and existing
+`MutationPreconditionV1` (native expected state revision and idempotency key).
+Gateway checks its saved-revision conflict first; the driver checks native state
+preconditions and the immutable binding targets. All new driver calls must have
+a context deadline of at most 30 seconds; timed-out application returns an
+explicit recovery/error result and requires fresh inspection before retry.
+Idempotent retries reuse the key and identical payload, never launch competing
+apply operations. Error text is a fixed safe category, never a native payload.
+`ParticipationApplyResultV1` identifies native state revision, applied revision,
+state and failure; returning from a call is not evidence that a device operated.
+Gateway saves atomically only after validation, retains the previous valid
+configuration on save failure, and displays a saved but unapplied revision after
+apply failure. Native persistence and generic configuration persistence are not
+assumed to be one transaction: interrupted application is reconciled explicitly.
+
+### Trust, Mapping, Permission And Observed State
+
+| State | Meaning and required display |
+| --- | --- |
+| `configured` | Desired binding is saved; operation has not been established (including disabled or restart-pending configuration). |
+| `offline` | The bound participant is unavailable; saved identity, capability, permission and last evidence remain visible with age. |
+| `incompatible` | Native capability/version/direction compatibility is negatively established; control is unavailable. |
+| `active` | Current saved revision is applied, listener/peer are available, peer is trusted, capabilities are compatible, selected state is promoted and native negotiation is established. |
+| `error` | Listener, persistence, authorization, negotiation or recovery failed; the safe failure category and control outcome are visible. |
+
+Compatibility is explicitly `unknown`, `compatible` or `incompatible`; admission
+is `unknown`, `candidate`, `qualified`, `promoted` or `unsupported`. The driver
+reports the producer's current admission for the configured selection, rather
+than elevating a candidate because it was selected in the UI. False/unknown trust,
+availability or negotiation never establishes active operation. Inspection uses
+current capture time plus retained native evidence; a partial read failure must
+preserve each valid field and mark affected observations unavailable/stale.
+A binding disappears only through explicit configuration removal.
+
+`Granted` is the native negotiated permission subset of the saved permissions;
+active operation requires at least one such grant.
+`ValidateParticipationControlV1` is a pure eligibility check, not authorization
+or dispatch. The actual native control owner must also require authenticated
+operator authority, action-time confirmation for the exact target/direction/
+operation, current promotion and compatibility, a fresh non-expired observation,
+and its existing mutation/read-token/connection-generation preconditions. A
+stale snapshot or a saved control permission alone never suffices. Incoming
+peer control is subject to the same explicit target policy. No new generic
+control endpoint or executable command is defined here. A retained control outcome is historical, not a current grant. Accepted control
+means peer acceptance only, not verified effect; rejected or uncertain control is an
+error with `rejected` or `outcome_unknown`, never successful operation.
+
+`ParticipationProvenanceV1` retains the existing redacted evidence envelope (capture/data timestamps,
+object digests and validated content hash) and
+observed SHIP transport/SPINE data-model versions (null means unknown).
+A null envelope represents unavailable evidence; active state requires a hashed
+envelope. Bindings and evidence/loss collections are bounded at 256 records. Native
+snapshots and the existing protected admin views retain full native detail under
+their own authorization/redaction boundary. A non-null `Losses` array is the
+producer's explicit semantic projection assessment: empty means assessed with no
+reported loss, while null means unassessed. Each loss has a native observation
+path and `omitted`, `transformed` or `unknown` code. Unassessed/unknown loss blocks
+active state; any known loss whose `ControlSafe` qualification is false blocks
+control eligibility. `ControlSafe` must come from the owning qualification,
+never a Portal checkbox. Version labels, references and fixture values are not
+normative specification or device compatibility evidence.
+
+### Disable, Removal, Restart And Recovery
+
+Disabling participation stops discovery/listening and new negotiations/control,
+cancels outstanding work, and closes native sessions within the apply deadline.
+It retains protected local identity, trusted peers, binding IDs and configuration
+preferences. The existing disabled runtime accepts only empty `Config`: an
+adapter applies that shape, keeping the saved participation settings separately;
+re-enabling constructs a fresh runtime with the retained native state root.
+Disable failure is an explicit error; it never reports the listener stopped
+without observation. Disabling discovery alone does not untrust existing peers.
+
+Removing a binding revokes its functional permission and cancels its in-flight
+work before reporting removal applied; it does not untrust its peer or reset
+local identity. Untrust is the separate confirmed native `AdminV1` action: it
+invalidates grants and suspends all affected bindings without deleting their
+saved records. Replacing a target, direction or selection requires a new binding
+ID and an explicit reviewed delta. An identity reset is a separate authorized
+operation, outside ordinary participation configuration; it cannot happen as a
+side effect of disabling or deleting the last binding.
+
+Restart/reconnect reloads the versioned saved bindings and the owner's durable
+reference/trust resolution before negotiation. It preserves target identity and
+selection, but recomputes availability, admission, compatibility and grants from
+fresh evidence. No prior `active` flag or permission grant is restored as
+operating authority. An unavailable/changed peer remains offline/incompatible;
+neither name matching nor discovery can reassign it. Failed apply/recovery keeps
+last-known-good fields and native identity; use at most one in-flight apply and
+three context-bounded attempts per operator request, then surface an error and
+require explicit retry. No background recovery may restore control after a
+revocation, removal or disable. The validators enforce shape, state prerequisites
+and immutable targets; fixtures demonstrate persistence round trips and negative
+states only. Real atomic storage, timeout/cancellation, tombstones, cross-owner
+reconciliation and physical effects remain implementation/integration gates.
+
 ## Reproduce From A Clean Public Checkout
 
 ### Prerequisites
