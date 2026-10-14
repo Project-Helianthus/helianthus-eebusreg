@@ -602,4 +602,8 @@ func validFirstTrustCandidateRef(value string) bool {
 	return true
 }
 
-var _ eebusapi.PairingCandidateReader = (*firstTrustFacade)(nil)
+type pairingCandidateLegacyReader interface {
+	VisiblePairingCandidatesUpdated(service eebusapi.ServiceInterface, candidates []shipapi.PairingCandidateRef)
+}
+
+var _ pairingCandidateLegacyReader = (*firstTrustFacade)(nil)

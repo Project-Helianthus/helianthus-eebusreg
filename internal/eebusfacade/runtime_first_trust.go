@@ -54,7 +54,7 @@ type runtimeServiceReader struct {
 }
 
 var _ eebusapi.ServiceReaderInterface = (*runtimeServiceReader)(nil)
-var _ eebusapi.PairingCandidateReader = (*runtimeServiceReader)(nil)
+var _ pairingCandidateLegacyReader = (*runtimeServiceReader)(nil)
 
 func newRuntimeServiceReader(observation *runtimeServiceHandler) *runtimeServiceReader {
 	return &runtimeServiceReader{observation: observation}
