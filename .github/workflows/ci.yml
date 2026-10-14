@@ -12,8 +12,8 @@ concurrency:
 
 jobs:
   validate:
-    # fork pull requests never run on the persistent runners
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'synology' }}
+    # stays GitHub-hosted: the protected store's filesystem preflight fails on the Synology container (val 3, eebusreg issue)
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
