@@ -21,18 +21,29 @@ func participationFixture() ParticipationContributionV1 {
 		panic(err)
 	}
 
-	return ParticipationContributionV1{
+	fixture := ParticipationContributionV1{
 		Configuration: ParticipationConfigurationV1{
 			Contract: ParticipationContractV1, Revision: 1, LocalParticipant: strings.Repeat("1", 32), Enabled: true,
 			Listener: ParticipationListenerV1{Interface: "synthetic0", Address: netip.MustParseAddrPort("192.0.2.10:4711")},
 			Bindings: []ParticipationBindingV1{{ID: strings.Repeat("2", 32), PeerParticipant: strings.Repeat("3", 32), LocalCapability: strings.Repeat("4", 32), PeerCapability: strings.Repeat("5", 32), Selection: strings.Repeat("6", 32), Direction: ParticipationDirectionV1Send, Permissions: []ParticipationPermissionV1{ParticipationPermissionV1Observe, ParticipationPermissionV1Control}}},
 		},
 		AppliedRevision: 1, ObservedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), ListenerState: ParticipationStateV1Active,
-		Bindings: []ParticipationBindingObservationV1{{ID: strings.Repeat("2", 32), State: ParticipationStateV1Active, PeerOnline: true, Trusted: true, Compatibility: ParticipationCompatibilityV1Compatible, Admission: ParticipationAdmissionV1Promoted, Negotiated: true, Granted: []ParticipationPermissionV1{ParticipationPermissionV1Observe, ParticipationPermissionV1Control}, ControlOutcome: ParticipationControlOutcomeV1NotRequested, Failure: ParticipationFailureV1None,
+		Bindings: []ParticipationBindingObservationV1{{ConfigurationRevision: 1, ID: strings.Repeat("2", 32), State: ParticipationStateV1Active, PeerOnline: true, Trusted: true, Compatibility: ParticipationCompatibilityV1Compatible, Admission: ParticipationAdmissionV1Promoted, Negotiated: true, Granted: []ParticipationPermissionV1{ParticipationPermissionV1Observe, ParticipationPermissionV1Control}, ControlOutcome: ParticipationControlOutcomeV1NotRequested, Failure: ParticipationFailureV1None,
 			Provenance: ParticipationProvenanceV1{Native: &native, TransportVersion: &transport, DataModelVersion: &model},
 			Losses:     []ParticipationLossV1{},
 		}},
 	}
+	applied := participationCopyConfiguration(fixture.Configuration)
+	fixture.AppliedConfiguration = &applied
+	return fixture
+}
+
+func participationCopyConfiguration(configuration ParticipationConfigurationV1) ParticipationConfigurationV1 {
+	configuration.Bindings = append([]ParticipationBindingV1(nil), configuration.Bindings...)
+	for i := range configuration.Bindings {
+		configuration.Bindings[i].Permissions = append([]ParticipationPermissionV1(nil), configuration.Bindings[i].Permissions...)
+	}
+	return configuration
 }
 
 func TestParticipationContractNegativeCompatibilityAndAuthorization(t *testing.T) {
@@ -80,6 +91,8 @@ func TestParticipationContractNegativeCompatibilityAndAuthorization(t *testing.T
 		t.Fatal(err)
 	}
 	s.Configuration.Bindings[0].Permissions = []ParticipationPermissionV1{ParticipationPermissionV1Observe}
+	applied := participationCopyConfiguration(s.Configuration)
+	s.AppliedConfiguration = &applied
 	s.Bindings[0].Granted = []ParticipationPermissionV1{ParticipationPermissionV1Observe}
 	if err := s.Validate(); err != nil {
 		t.Fatal(err)
@@ -112,6 +125,7 @@ func TestParticipationContractRestartOfflineAndReconnectPreserveIdentity(t *test
 		s := participationFixture()
 		s.Configuration = saved
 		s.AppliedRevision = 0
+		s.AppliedConfiguration = nil
 		s.ListenerState = ParticipationStateV1Configured
 		s.Bindings[0].State = state
 		s.Bindings[0].PeerOnline = false
@@ -268,8 +282,9 @@ func TestParticipationContractLossAndAdmissionFailClosed(t *testing.T) {
 func TestParticipationContractInitialSetupHasSerializableUnknownEvidence(t *testing.T) {
 	s := participationFixture()
 	s.AppliedRevision = 0
+	s.AppliedConfiguration = nil
 	s.ListenerState = ParticipationStateV1Configured
-	s.Bindings[0] = ParticipationBindingObservationV1{ID: s.Bindings[0].ID, State: ParticipationStateV1Configured, Compatibility: ParticipationCompatibilityV1Unknown, Admission: ParticipationAdmissionV1Unknown, ControlOutcome: ParticipationControlOutcomeV1NotRequested, Failure: ParticipationFailureV1None}
+	s.Bindings[0] = ParticipationBindingObservationV1{ConfigurationRevision: s.Configuration.Revision, ID: s.Bindings[0].ID, State: ParticipationStateV1Configured, Compatibility: ParticipationCompatibilityV1Unknown, Admission: ParticipationAdmissionV1Unknown, ControlOutcome: ParticipationControlOutcomeV1NotRequested, Failure: ParticipationFailureV1None}
 	if err := s.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -289,5 +304,197 @@ func TestParticipationContractInitialSetupHasSerializableUnknownEvidence(t *test
 	}
 	if restored.Bindings[0].Provenance.Native != nil || restored.Bindings[0].Losses != nil {
 		t.Fatal("unknown evidence or loss assessment manufactured")
+	}
+}
+
+func TestParticipationContractReviewPendingRemovalRemainsObservable(t *testing.T) {
+	s := participationFixture()
+	s.Configuration.Revision++
+	s.Configuration.Bindings = nil
+	if err := s.Validate(); err != nil {
+		t.Fatalf("removed but still applied binding is unobservable: %v", err)
+	}
+	if s.ListenerState != ParticipationStateV1Active || s.Bindings[0].State != ParticipationStateV1Active {
+		t.Fatal("operating state lost")
+	}
+	if ValidateParticipationControlV1(s, s.Bindings[0].ID) == nil {
+		t.Fatal("removed saved binding permits control")
+	}
+}
+
+func TestParticipationContractReviewPendingRevocationRemainsObservable(t *testing.T) {
+	s := participationFixture()
+	s.Configuration.Revision++
+	s.Configuration.Bindings[0].Permissions = []ParticipationPermissionV1{ParticipationPermissionV1Observe}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("still-held applied control grant is unobservable: %v", err)
+	}
+	if ValidateParticipationControlV1(s, s.Bindings[0].ID) == nil {
+		t.Fatal("revoked saved permission permits control")
+	}
+	payload, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored ParticipationContributionV1
+	if err = json.Unmarshal(payload, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if err = restored.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(restored.Configuration, s.Configuration) || !reflect.DeepEqual(restored.AppliedConfiguration, s.AppliedConfiguration) || restored.Bindings[0].ConfigurationRevision != s.Bindings[0].ConfigurationRevision || !reflect.DeepEqual(restored.Bindings[0].Granted, s.Bindings[0].Granted) || restored.ListenerState != s.ListenerState || restored.Bindings[0].State != s.Bindings[0].State || restored.Bindings[0].Provenance.Native.DataHash != s.Bindings[0].Provenance.Native.DataHash {
+		t.Fatal("inspection serialization conflated saved and applied state")
+	}
+	if ValidateParticipationControlV1(restored, restored.Bindings[0].ID) == nil {
+		t.Fatal("serialization restored revoked control eligibility")
+	}
+}
+
+func TestParticipationContractReviewPendingDisableRemainsObservable(t *testing.T) {
+	s := participationFixture()
+	s.Configuration.Revision++
+	s.Configuration.Enabled = false
+	if err := s.Validate(); err != nil {
+		t.Fatalf("older applied listener/binding is unobservable: %v", err)
+	}
+	if ValidateParticipationControlV1(s, s.Bindings[0].ID) == nil {
+		t.Fatal("saved disable permits control")
+	}
+}
+
+func TestParticipationContractReviewSavedAdditionsDoNotHideAppliedBindings(t *testing.T) {
+	s := participationFixture()
+	s.Configuration.Revision++
+	added := participationCopyConfiguration(s.Configuration).Bindings[0]
+	added.ID = strings.Repeat("7", 32)
+	added.PeerParticipant = strings.Repeat("8", 32)
+	s.Configuration.Bindings = append(s.Configuration.Bindings, added)
+	pending := ParticipationBindingObservationV1{ID: added.ID, ConfigurationRevision: s.Configuration.Revision, State: ParticipationStateV1Configured, Compatibility: ParticipationCompatibilityV1Unknown, Admission: ParticipationAdmissionV1Unknown, ControlOutcome: ParticipationControlOutcomeV1NotRequested, Failure: ParticipationFailureV1None}
+	s.Bindings = append(s.Bindings, pending)
+	if err := s.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if ValidateParticipationControlV1(s, added.ID) == nil {
+		t.Fatal("saved-only binding permits control")
+	}
+	if err := ValidateParticipationControlV1(s, s.Bindings[0].ID); err != nil {
+		t.Fatalf("unchanged saved permission lost eligibility: %v", err)
+	}
+	s.Bindings[1].Negotiated = true
+	if s.Validate() == nil {
+		t.Fatal("unapplied binding reports native negotiation")
+	}
+}
+
+func TestParticipationContractReviewAppliedRevisionAndIdentityFailClosed(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*ParticipationContributionV1)
+	}{
+		{"missing applied snapshot", func(s *ParticipationContributionV1) { s.AppliedConfiguration = nil }},
+		{"applied revision mismatch", func(s *ParticipationContributionV1) { s.AppliedConfiguration.Revision = 2 }},
+		{"observation revision mismatch", func(s *ParticipationContributionV1) { s.Bindings[0].ConfigurationRevision = 2 }},
+		{"same revision different listener", func(s *ParticipationContributionV1) {
+			s.AppliedConfiguration.Listener.Address = netip.MustParseAddrPort("192.0.2.20:4711")
+		}},
+		{"local identity replacement", func(s *ParticipationContributionV1) {
+			s.Configuration.Revision++
+			s.Configuration.LocalParticipant = strings.Repeat("9", 32)
+		}},
+		{"same binding retargeted", func(s *ParticipationContributionV1) {
+			s.Configuration.Revision++
+			s.Configuration.Bindings[0].PeerParticipant = strings.Repeat("9", 32)
+		}},
+		{"grant absent in applied permissions", func(s *ParticipationContributionV1) {
+			s.Configuration.Revision++
+			s.AppliedConfiguration.Bindings[0].Permissions = []ParticipationPermissionV1{ParticipationPermissionV1Observe}
+		}},
+		{"disabled applied listener", func(s *ParticipationContributionV1) {
+			s.Configuration.Revision++
+			s.AppliedConfiguration.Enabled = false
+		}},
+		{"unknown applied binding", func(s *ParticipationContributionV1) { s.Bindings[0].ID = strings.Repeat("9", 32) }},
+		{"saved-only grant", func(s *ParticipationContributionV1) {
+			s.Configuration.Revision++
+			s.AppliedConfiguration.Bindings = nil
+			s.Bindings[0].ConfigurationRevision = s.Configuration.Revision
+			s.Bindings[0].State = ParticipationStateV1Configured
+			s.Bindings[0].Negotiated = false
+			s.Bindings[0].Granted = []ParticipationPermissionV1{ParticipationPermissionV1Control}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := participationFixture()
+			tc.mutate(&s)
+			if s.Validate() == nil {
+				t.Fatal("inconsistent applied identity/revision/authority accepted")
+			}
+		})
+	}
+}
+
+func TestParticipationContractReviewApplyResultValidation(t *testing.T) {
+	for _, state := range []ParticipationStateV1{ParticipationStateV1Configured, ParticipationStateV1Offline, ParticipationStateV1Incompatible, ParticipationStateV1Active, ParticipationStateV1Error} {
+		result := ParticipationApplyResultV1{StateRevision: 3, AppliedRevision: 1, State: state, Failure: ParticipationFailureV1None}
+		if state == ParticipationStateV1Error {
+			result.Failure = ParticipationFailureV1Recovery
+		}
+		if err := result.Validate(); err != nil {
+			t.Fatalf("%s: %v", state, err)
+		}
+	}
+	invalid := []ParticipationApplyResultV1{
+		{}, {StateRevision: 1, State: "future", Failure: ParticipationFailureV1None},
+		{StateRevision: 1, State: ParticipationStateV1Configured, Failure: "future"},
+		{StateRevision: 1, State: ParticipationStateV1Active, Failure: ParticipationFailureV1None},
+		{StateRevision: 1, State: ParticipationStateV1Error, Failure: ParticipationFailureV1None},
+		{StateRevision: 1, State: ParticipationStateV1Configured, Failure: ParticipationFailureV1Persistence},
+	}
+	for i, result := range invalid {
+		if result.Validate() == nil {
+			t.Fatalf("invalid result %d accepted", i)
+		}
+	}
+	failed := ParticipationApplyResultV1{StateRevision: 3, AppliedRevision: 1, State: ParticipationStateV1Error, Failure: ParticipationFailureV1Recovery}
+	s := participationFixture()
+	s.Configuration.Revision++
+	if err := failed.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("failed apply obscured older active runtime: %v", err)
+	}
+}
+
+func TestParticipationContractReviewApplyRequestRemainsInProcessOnly(t *testing.T) {
+	request := ParticipationApplyRequestV1{MutationPreconditionV1: MutationPreconditionV1{IdempotencyKey: "synthetic-action", ExpectedStateRevision: 1}, Configuration: participationFixture().Configuration}
+	if _, err := json.Marshal(request); err == nil {
+		t.Fatal("embedded admin serialization guard was lost")
+	}
+	if _, err := json.Marshal(&request); err == nil {
+		t.Fatal("pointer request bypasses admin serialization guard")
+	}
+	field, _ := reflect.TypeOf(request).FieldByName("Configuration")
+	if field.Tag.Get("json") != "" {
+		t.Fatal("in-process-only request retains a misleading JSON contract")
+	}
+}
+
+func TestParticipationContractReviewEqualRevisionIgnoresCollectionOrder(t *testing.T) {
+	s := participationFixture()
+	second := participationCopyConfiguration(s.Configuration).Bindings[0]
+	second.ID = strings.Repeat("7", 32)
+	s.Configuration.Bindings = append(s.Configuration.Bindings, second)
+	applied := participationCopyConfiguration(s.Configuration)
+	applied.Bindings[0], applied.Bindings[1] = applied.Bindings[1], applied.Bindings[0]
+	applied.Bindings[0].Permissions[0], applied.Bindings[0].Permissions[1] = applied.Bindings[0].Permissions[1], applied.Bindings[0].Permissions[0]
+	s.AppliedConfiguration = &applied
+	observation := s.Bindings[0]
+	observation.ID = second.ID
+	s.Bindings = append(s.Bindings, observation)
+	if err := s.Validate(); err != nil {
+		t.Fatalf("record order conflates equal saved/applied revisions: %v", err)
 	}
 }

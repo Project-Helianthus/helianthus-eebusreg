@@ -16,7 +16,7 @@ type ParticipationDriverV1 interface {
 
 type ParticipationApplyRequestV1 struct {
 	MutationPreconditionV1
-	Configuration ParticipationConfigurationV1 `json:"configuration"`
+	Configuration ParticipationConfigurationV1
 }
 
 var participationIDV1 = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -86,7 +86,7 @@ func ValidateParticipationChangeV1(previous, next ParticipationConfigurationV1) 
 		if !exists {
 			continue
 		}
-		if prior.PeerParticipant != binding.PeerParticipant || prior.LocalCapability != binding.LocalCapability || prior.PeerCapability != binding.PeerCapability || prior.Selection != binding.Selection || prior.Direction != binding.Direction {
+		if !participationBindingSameTargetV1(prior, binding) {
 			return errors.New("participation binding replacement requires a new identity")
 		}
 	}
@@ -104,29 +104,65 @@ func (contribution ParticipationContributionV1) Validate() error {
 	if !participationStateValidV1(contribution.ListenerState) || contribution.ListenerState == ParticipationStateV1Incompatible {
 		return errors.New("participation listener state is invalid")
 	}
-	if contribution.ListenerState == ParticipationStateV1Active && (!configuration.Enabled || contribution.AppliedRevision != configuration.Revision) {
-		return errors.New("participation listener is not applied")
-	}
-	if len(contribution.Bindings) != len(configuration.Bindings) {
-		return errors.New("participation observations must preserve every configured binding")
-	}
+	applied := contribution.AppliedConfiguration
 	configured := make(map[string]ParticipationBindingV1, len(configuration.Bindings))
 	for _, binding := range configuration.Bindings {
 		configured[binding.ID] = binding
 	}
+	operating := make(map[string]ParticipationBindingV1)
+	expected := make(map[string]bool, len(configuration.Bindings))
+	for id := range configured {
+		expected[id] = true
+	}
+	if applied == nil {
+		if contribution.AppliedRevision != 0 {
+			return errors.New("participation applied configuration is missing")
+		}
+	} else {
+		if err := applied.Validate(); err != nil {
+			return err
+		}
+		if applied.Revision != contribution.AppliedRevision || applied.LocalParticipant != configuration.LocalParticipant {
+			return errors.New("participation applied revision or local identity is invalid")
+		}
+		if applied.Revision == configuration.Revision && !participationConfigurationsEqualV1(*applied, configuration) {
+			return errors.New("participation same revision has different configurations")
+		}
+		for _, binding := range applied.Bindings {
+			if saved, exists := configured[binding.ID]; exists && !participationBindingSameTargetV1(saved, binding) {
+				return errors.New("participation saved and applied binding identities differ")
+			}
+			operating[binding.ID] = binding
+			expected[binding.ID] = true
+		}
+	}
+	if contribution.ListenerState == ParticipationStateV1Active && (applied == nil || !applied.Enabled) {
+		return errors.New("participation listener lacks an enabled applied configuration")
+	}
+	if len(contribution.Bindings) != len(expected) {
+		return errors.New("participation observations must preserve every saved and applied binding")
+	}
 	seen := make(map[string]bool, len(contribution.Bindings))
 	for _, observation := range contribution.Bindings {
-		binding, exists := configured[observation.ID]
-		if !exists || seen[observation.ID] {
-			return errors.New("participation observation identity is invalid")
+		binding, isApplied := operating[observation.ID]
+		revision := contribution.AppliedRevision
+		if !isApplied {
+			binding = configured[observation.ID]
+			revision = configuration.Revision
+		}
+		if !expected[observation.ID] || seen[observation.ID] || observation.ConfigurationRevision != revision {
+			return errors.New("participation observation identity or revision is invalid")
 		}
 		seen[observation.ID] = true
 		if !participationStateValidV1(observation.State) || !participationPermissionsValidV1(observation.Granted) {
 			return errors.New("participation observation state or grant is invalid")
 		}
+		if !isApplied && (len(observation.Granted) > 0 || observation.Negotiated || observation.State == ParticipationStateV1Active) {
+			return errors.New("participation unapplied binding cannot have operating authority")
+		}
 		for _, grant := range observation.Granted {
 			if !slices.Contains(binding.Permissions, grant) {
-				return errors.New("participation grant exceeds configured permission")
+				return errors.New("participation grant exceeds observation configuration permission")
 			}
 		}
 		switch observation.Compatibility {
@@ -144,9 +180,7 @@ func (contribution ParticipationContributionV1) Validate() error {
 		default:
 			return errors.New("participation control outcome is invalid")
 		}
-		switch observation.Failure {
-		case ParticipationFailureV1None, ParticipationFailureV1Authorization, ParticipationFailureV1Negotiation, ParticipationFailureV1Listener, ParticipationFailureV1Persistence, ParticipationFailureV1Recovery:
-		default:
+		if !participationFailureValidV1(observation.Failure) {
 			return errors.New("participation failure is invalid")
 		}
 		failed := observation.Failure != ParticipationFailureV1None
@@ -193,7 +227,7 @@ func (contribution ParticipationContributionV1) Validate() error {
 			}
 		}
 		if observation.State == ParticipationStateV1Active {
-			if len(observation.Granted) == 0 || !configuration.Enabled || contribution.AppliedRevision != configuration.Revision || contribution.ListenerState != ParticipationStateV1Active || !observation.PeerOnline || !observation.Trusted || observation.Compatibility != ParticipationCompatibilityV1Compatible || observation.Admission != ParticipationAdmissionV1Promoted || !observation.Negotiated {
+			if len(observation.Granted) == 0 || !isApplied || !applied.Enabled || contribution.ListenerState != ParticipationStateV1Active || !observation.PeerOnline || !observation.Trusted || observation.Compatibility != ParticipationCompatibilityV1Compatible || observation.Admission != ParticipationAdmissionV1Promoted || !observation.Negotiated {
 				return errors.New("participation active state lacks established operation")
 			}
 			if !nativePresent || observation.Provenance.Native.DataHash == "" || observation.Provenance.TransportVersion == nil || observation.Provenance.DataModelVersion == nil || observation.Losses == nil || unknownLoss {
@@ -207,6 +241,19 @@ func (contribution ParticipationContributionV1) Validate() error {
 func ValidateParticipationControlV1(contribution ParticipationContributionV1, bindingID string) error {
 	if err := contribution.Validate(); err != nil {
 		return err
+	}
+	if !contribution.Configuration.Enabled {
+		return errors.New("participation control is unavailable")
+	}
+	allowed := false
+	for _, binding := range contribution.Configuration.Bindings {
+		if binding.ID == bindingID && slices.Contains(binding.Permissions, ParticipationPermissionV1Control) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return errors.New("participation control is unavailable")
 	}
 	for _, observation := range contribution.Bindings {
 		if observation.ID == bindingID && observation.State == ParticipationStateV1Active && slices.Contains(observation.Granted, ParticipationPermissionV1Control) {
@@ -240,6 +287,54 @@ func participationPermissionsValidV1(permissions []ParticipationPermissionV1) bo
 			return false
 		}
 		seen[permission] = true
+	}
+	return true
+}
+
+func (result ParticipationApplyResultV1) Validate() error {
+	if result.StateRevision == 0 || !participationStateValidV1(result.State) || !participationFailureValidV1(result.Failure) {
+		return errors.New("participation apply result is invalid")
+	}
+	if (result.Failure != ParticipationFailureV1None) != (result.State == ParticipationStateV1Error) {
+		return errors.New("participation apply failure must have an error state")
+	}
+	if result.State == ParticipationStateV1Active && result.AppliedRevision == 0 {
+		return errors.New("participation active apply result requires an applied revision")
+	}
+	return nil
+}
+
+func participationBindingSameTargetV1(left, right ParticipationBindingV1) bool {
+	return left.ID == right.ID && left.PeerParticipant == right.PeerParticipant && left.LocalCapability == right.LocalCapability && left.PeerCapability == right.PeerCapability && left.Selection == right.Selection && left.Direction == right.Direction
+}
+
+func participationFailureValidV1(failure ParticipationFailureV1) bool {
+	switch failure {
+	case ParticipationFailureV1None, ParticipationFailureV1Authorization, ParticipationFailureV1Negotiation, ParticipationFailureV1Listener, ParticipationFailureV1Persistence, ParticipationFailureV1Recovery:
+		return true
+	default:
+		return false
+	}
+}
+
+func participationConfigurationsEqualV1(left, right ParticipationConfigurationV1) bool {
+	if left.Contract != right.Contract || left.Revision != right.Revision || left.LocalParticipant != right.LocalParticipant || left.Enabled != right.Enabled || left.Listener != right.Listener || left.DiscoveryEnabled != right.DiscoveryEnabled || len(left.Bindings) != len(right.Bindings) {
+		return false
+	}
+	bindings := make(map[string]ParticipationBindingV1, len(right.Bindings))
+	for _, binding := range right.Bindings {
+		bindings[binding.ID] = binding
+	}
+	for _, binding := range left.Bindings {
+		other, exists := bindings[binding.ID]
+		if !exists || !participationBindingSameTargetV1(binding, other) || len(binding.Permissions) != len(other.Permissions) {
+			return false
+		}
+		for _, permission := range binding.Permissions {
+			if !slices.Contains(other.Permissions, permission) {
+				return false
+			}
+		}
 	}
 	return true
 }

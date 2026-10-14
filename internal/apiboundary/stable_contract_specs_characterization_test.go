@@ -38,7 +38,7 @@ func TestStableContractSpecsInventoryOrderAndCopies(t *testing.T) {
 		t.Fatal("stable contract specifications share mutable state across calls")
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%#v", second))))
-	const wantFingerprint = "b5cdec16a5d576213dda30a201ddc0b25df0cff8425cda57472936732e71b50d"
+	const wantFingerprint = "fd51d21e9408646fe649eb1f0cc685f539d78328b84179e0faaeb5bf28c9ae2a"
 	if got != wantFingerprint {
 		t.Fatalf("stable contract fingerprint = %s, want %s", got, wantFingerprint)
 	}

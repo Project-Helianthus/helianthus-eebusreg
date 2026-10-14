@@ -88,26 +88,28 @@ const (
 )
 
 type ParticipationContributionV1 struct {
-	Configuration   ParticipationConfigurationV1        `json:"configuration"`
-	AppliedRevision uint64                              `json:"applied_revision"`
-	ObservedAt      time.Time                           `json:"observed_at"`
-	ListenerState   ParticipationStateV1                `json:"listener_state"`
-	Bindings        []ParticipationBindingObservationV1 `json:"bindings"`
+	Configuration        ParticipationConfigurationV1        `json:"configuration"`
+	AppliedConfiguration *ParticipationConfigurationV1       `json:"applied_configuration"`
+	AppliedRevision      uint64                              `json:"applied_revision"`
+	ObservedAt           time.Time                           `json:"observed_at"`
+	ListenerState        ParticipationStateV1                `json:"listener_state"`
+	Bindings             []ParticipationBindingObservationV1 `json:"bindings"`
 }
 
 type ParticipationBindingObservationV1 struct {
-	ID             string                        `json:"id"`
-	State          ParticipationStateV1          `json:"state"`
-	PeerOnline     bool                          `json:"peer_online"`
-	Trusted        bool                          `json:"trusted"`
-	Compatibility  ParticipationCompatibilityV1  `json:"compatibility"`
-	Admission      ParticipationAdmissionV1      `json:"admission"`
-	Negotiated     bool                          `json:"negotiated"`
-	Granted        []ParticipationPermissionV1   `json:"granted"`
-	ControlOutcome ParticipationControlOutcomeV1 `json:"control_outcome"`
-	Failure        ParticipationFailureV1        `json:"failure"`
-	Provenance     ParticipationProvenanceV1     `json:"provenance"`
-	Losses         []ParticipationLossV1         `json:"losses"`
+	ID                    string                        `json:"id"`
+	ConfigurationRevision uint64                        `json:"configuration_revision"`
+	State                 ParticipationStateV1          `json:"state"`
+	PeerOnline            bool                          `json:"peer_online"`
+	Trusted               bool                          `json:"trusted"`
+	Compatibility         ParticipationCompatibilityV1  `json:"compatibility"`
+	Admission             ParticipationAdmissionV1      `json:"admission"`
+	Negotiated            bool                          `json:"negotiated"`
+	Granted               []ParticipationPermissionV1   `json:"granted"`
+	ControlOutcome        ParticipationControlOutcomeV1 `json:"control_outcome"`
+	Failure               ParticipationFailureV1        `json:"failure"`
+	Provenance            ParticipationProvenanceV1     `json:"provenance"`
+	Losses                []ParticipationLossV1         `json:"losses"`
 }
 
 type ParticipationProvenanceV1 struct {

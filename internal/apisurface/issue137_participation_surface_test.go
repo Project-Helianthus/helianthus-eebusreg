@@ -13,10 +13,11 @@ func TestIssue137ParticipationDriverPreservesNativeAdminBoundary(t *testing.T) {
 	root := msp05pRootSurface(t, doc)
 	want := map[string]string{
 		"type ParticipationDriverV1":                   "type ParticipationDriverV1 interface{ ApplyParticipation(context.Context, ParticipationApplyRequestV1) (ParticipationApplyResultV1, error); OperatorAdmin() AdminV1; Participation(context.Context) (ParticipationContributionV1, error) }",
-		"type ParticipationApplyRequestV1":             `type ParticipationApplyRequestV1 struct{ MutationPreconditionV1; Configuration ParticipationConfigurationV1 "json:\"configuration\"" }`,
+		"type ParticipationApplyRequestV1":             `type ParticipationApplyRequestV1 struct{ MutationPreconditionV1; Configuration ParticipationConfigurationV1 }`,
 		"func ValidateParticipationChangeV1":           "func ValidateParticipationChangeV1(ParticipationConfigurationV1, ParticipationConfigurationV1) error",
 		"func ValidateParticipationControlV1":          "func ValidateParticipationControlV1(ParticipationContributionV1, string) error",
 		"method ParticipationConfigurationV1.Validate": "func (ParticipationConfigurationV1) Validate() error",
+		"method ParticipationApplyResultV1.Validate":   "func (ParticipationApplyResultV1) Validate() error",
 		"method ParticipationContributionV1.Validate":  "func (ParticipationContributionV1) Validate() error",
 	}
 	got := map[string]string{}
@@ -70,6 +71,7 @@ var issue137ParticipationInventory = map[string]bool{
 	"const ParticipationStateV1Offline":               true,
 	"func ParticipationConfigurationV1.Validate":      true,
 	"func ParticipationContributionV1.Validate":       true,
+	"func ParticipationApplyResultV1.Validate":        true,
 	"func ValidateParticipationChangeV1":              true,
 	"func ValidateParticipationControlV1":             true,
 	"type ParticipationApplyRequestV1":                true,

@@ -439,6 +439,7 @@ const ParticipationStateV1Incompatible
 const ParticipationStateV1Offline
 func ParticipationConfigurationV1.Validate
 func ParticipationContributionV1.Validate
+func ParticipationApplyResultV1.Validate
 func ValidateParticipationChangeV1
 func ValidateParticipationControlV1
 type ParticipationApplyRequestV1
@@ -465,6 +466,7 @@ type ParticipationStateV1
 var issue137ParticipationOperatorExports = frozenExportInventory(`
 func ParticipationConfigurationV1.Validate
 func ParticipationContributionV1.Validate
+func ParticipationApplyResultV1.Validate
 func ValidateParticipationChangeV1
 func ValidateParticipationControlV1
 type ParticipationApplyRequestV1

@@ -113,9 +113,13 @@ trust/discovery inspection, compatible promoted capability choices, and then
 participant/capability/direction/permission for each selected binding. The
 operator reviews the exact configuration delta before applying sensitive changes.
 `send` means local capability to the selected peer capability; `receive` means
-the reverse. Both sides use stable references; the local participant is in the
-configuration. `observe` and `control` are separately selected permissions;
-control can never be inferred from observation, a functional mapping or peer trust.
+the reverse. For `control`, a `send` binding permits the local participant to
+control the selected peer capability; a `receive` binding permits the selected
+peer to control the bound local capability. A receive grant does not authorize
+Portal to issue control to that peer. The native owner checks the actual actor/
+feature roles and target policy for either direction. Both sides use stable
+references; the local participant is in the configuration. `observe` and
+`control` are separately selected permissions; control can never be inferred from observation, a functional mapping or peer trust.
 
 References (`LocalParticipant`, peer, capabilities, selection and binding ID)
 are owner-allocated opaque 128-bit tokens encoded as 32 lowercase hex characters.
@@ -128,10 +132,26 @@ Exact selected identity and capability compatibility must be rechecked on use.
 Persisting a token without the owner's durable resolution is an incomplete setup,
 which stays configured/error and cannot be silently repaired by choosing a peer.
 
-`ParticipationDriverV1.Participation` supplies the saved configuration, the
-actually applied revision, a capture time, listener state and one observation
-for every saved binding, including unavailable ones. `OperatorAdmin` supplies
-existing `AdminV1` for bounded discovered/candidate/trusted/connected views,
+`ParticipationDriverV1.Participation` supplies `Configuration` (saved intent),
+`AppliedConfiguration` (the independent applied snapshot), `AppliedRevision`,
+a capture time and the observed listener/binding states. A null applied snapshot
+requires revision zero and means no configuration has been applied. A non-null
+snapshot must identify the same local participant and match `AppliedRevision`;
+it may be older than the saved revision during pending or failed application.
+Equal revisions must describe equal configurations, with binding/permission
+order ignored. Reusing a binding ID for a different target is invalid even while
+saved and applied revisions differ.
+
+The observation collection preserves the union of saved and applied binding IDs,
+including unavailable peers and bindings removed from saved intent but still
+operating. Each observation carries `ConfigurationRevision`: use the applied
+revision and its binding identity whenever that ID remains applied, otherwise
+the saved revision for a saved-only binding. Saved-only observations cannot
+report active operation, native negotiation or a grant. Each configuration is
+bounded at 256 bindings; their union is bounded at 512 observations. Portal must
+show pending changes beside the actual applied listener/identity/permissions,
+rather than relabel an older operating revision as configured. `OperatorAdmin`
+supplies existing `AdminV1` for bounded discovered/candidate/trusted/connected views,
 selection, connect/confirm, cancel, retry and untrust. Trust action preconditions,
 PIN privacy, observation expiry and native identity checks remain those of
 `AdminV1`; Portal adds no parallel trust database or HA session contract.
@@ -139,14 +159,22 @@ HTTP/Ingress authentication does not establish native eeBUS trust.
 
 `ApplyParticipation` takes the complete candidate configuration and existing
 `MutationPreconditionV1` (native expected state revision and idempotency key).
-Gateway checks its saved-revision conflict first; the driver checks native state
-preconditions and the immutable binding targets. All new driver calls must have
-a context deadline of at most 30 seconds; timed-out application returns an
+The request is an in-process contract: its embedded `MutationPreconditionV1`
+intentionally inherits the admin serializer that refuses JSON output; it defines
+no public JSON request shape. Gateway checks its saved-revision conflict first;
+the driver checks native state preconditions and the immutable binding targets.
+All new driver calls must have a context deadline of at most 30 seconds; timed-out application returns an
 explicit recovery/error result and requires fresh inspection before retry.
 Idempotent retries reuse the key and identical payload, never launch competing
 apply operations. Error text is a fixed safe category, never a native payload.
 `ParticipationApplyResultV1` identifies native state revision, applied revision,
-state and failure; returning from a call is not evidence that a device operated.
+state and failure. Its validator requires a nonzero native state revision,
+known state/failure categories, a failure exactly when state is error, and a
+nonzero applied revision for an active result. An error result may retain the
+previous applied revision: the failed attempt's error and the older runtime's
+active observations are separate facts. Any result used for display must pass
+validation; a boundary error with no valid result requires fresh inspection.
+Returning from a call is not evidence that a device operated.
 Gateway saves atomically only after validation, retains the previous valid
 configuration on save failure, and displays a saved but unapplied revision after
 apply failure. Native persistence and generic configuration persistence are not
@@ -159,20 +187,26 @@ assumed to be one transaction: interrupted application is reconciled explicitly.
 | `configured` | Desired binding is saved; operation has not been established (including disabled or restart-pending configuration). |
 | `offline` | The bound participant is unavailable; saved identity, capability, permission and last evidence remain visible with age. |
 | `incompatible` | Native capability/version/direction compatibility is negatively established; control is unavailable. |
-| `active` | Current saved revision is applied, listener/peer are available, peer is trusted, capabilities are compatible, selected state is promoted and native negotiation is established. |
+| `active` | The observation references an enabled applied revision; listener/peer are available, peer is trusted, capabilities are compatible, selected state is promoted and native negotiation is established. Saved changes can remain pending or failed. |
 | `error` | Listener, persistence, authorization, negotiation or recovery failed; the safe failure category and control outcome are visible. |
 
 Compatibility is explicitly `unknown`, `compatible` or `incompatible`; admission
 is `unknown`, `candidate`, `qualified`, `promoted` or `unsupported`. The driver
-reports the producer's current admission for the configured selection, rather
-than elevating a candidate because it was selected in the UI. False/unknown trust,
+reports the producer's current admission for the observation revision's selection,
+rather than elevating a candidate because it was selected in the UI. False/unknown trust,
 availability or negotiation never establishes active operation. Inspection uses
 current capture time plus retained native evidence; a partial read failure must
 preserve each valid field and mark affected observations unavailable/stale.
-A binding disappears only through explicit configuration removal.
+An observation for a removed saved binding remains visible until native removal
+is applied; saving removal alone cannot hide a still-operating binding.
 
-`Granted` is the native negotiated permission subset of the saved permissions;
-active operation requires at least one such grant.
+`Granted` reports the native negotiated subset of the observation's applied
+permissions; active operation requires at least one such grant. A still-held
+control grant during pending revocation is reportable without restoring its
+eligibility. `ValidateParticipationControlV1` additionally requires enabled saved
+intent, presence of the same stable binding in that intent, and saved control
+permission. Saved removal, revocation or disable therefore rejects control even
+while the older listener/binding can truthfully remain observed as active.
 `ValidateParticipationControlV1` is a pure eligibility check, not authorization
 or dispatch. The actual native control owner must also require authenticated
 operator authority, action-time confirmation for the exact target/direction/
@@ -180,15 +214,15 @@ operation, current promotion and compatibility, a fresh non-expired observation,
 and its existing mutation/read-token/connection-generation preconditions. A
 stale snapshot or a saved control permission alone never suffices. Incoming
 peer control is subject to the same explicit target policy. No new generic
-control endpoint or executable command is defined here. A retained control outcome is historical, not a current grant. Accepted control
-means peer acceptance only, not verified effect; rejected or uncertain control is an
-error with `rejected` or `outcome_unknown`, never successful operation.
+control endpoint or executable command is defined here. A retained control outcome
+is historical, not a current grant. Accepted control means peer acceptance only,
+not verified effect; rejected or uncertain control is an error with `rejected` or `outcome_unknown`, never successful operation.
 
-`ParticipationProvenanceV1` retains the existing redacted evidence envelope (capture/data timestamps,
-object digests and validated content hash) and
-observed SHIP transport/SPINE data-model versions (null means unknown).
+`ParticipationProvenanceV1` retains the existing redacted evidence envelope
+(capture/data timestamps, object digests and validated content hash) and observed
+SHIP transport/SPINE data-model versions (null means unknown).
 A null envelope represents unavailable evidence; active state requires a hashed
-envelope. Bindings and evidence/loss collections are bounded at 256 records. Native
+envelope. Evidence/loss collections are bounded at 256 records. Native
 snapshots and the existing protected admin views retain full native detail under
 their own authorization/redaction boundary. A non-null `Losses` array is the
 producer's explicit semantic projection assessment: empty means assessed with no
@@ -227,8 +261,10 @@ operating authority. An unavailable/changed peer remains offline/incompatible;
 neither name matching nor discovery can reassign it. Failed apply/recovery keeps
 last-known-good fields and native identity; use at most one in-flight apply and
 three context-bounded attempts per operator request, then surface an error and
-require explicit retry. No background recovery may restore control after a
-revocation, removal or disable. The validators enforce shape, state prerequisites
+require explicit retry. Fresh inspection must retain the last applied snapshot
+and still-held grants after failed/timed-out application; it does not turn them
+into permission under the latest saved intent. No background recovery may restore
+control eligibility after a saved revocation, removal or disable. The validators enforce shape, state prerequisites
 and immutable targets; fixtures demonstrate persistence round trips and negative
 states only. Real atomic storage, timeout/cancellation, tombstones, cross-owner
 reconciliation and physical effects remain implementation/integration gates.
