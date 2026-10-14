@@ -405,7 +405,78 @@ type SelectionHandleV1
 type TrustedPartnerV1
 `)
 
+var issue137ParticipationExports = frozenExportInventory(`
+const ParticipationContractV1
+const ParticipationCompatibilityV1Unknown
+const ParticipationCompatibilityV1Compatible
+const ParticipationCompatibilityV1Incompatible
+const ParticipationAdmissionV1Unknown
+const ParticipationAdmissionV1Candidate
+const ParticipationAdmissionV1Qualified
+const ParticipationAdmissionV1Promoted
+const ParticipationAdmissionV1Unsupported
+const ParticipationControlOutcomeV1Accepted
+const ParticipationControlOutcomeV1NotRequested
+const ParticipationControlOutcomeV1Rejected
+const ParticipationControlOutcomeV1Unknown
+const ParticipationDirectionV1Receive
+const ParticipationDirectionV1Send
+const ParticipationFailureV1Authorization
+const ParticipationFailureV1Listener
+const ParticipationFailureV1Negotiation
+const ParticipationFailureV1None
+const ParticipationFailureV1Persistence
+const ParticipationFailureV1Recovery
+const ParticipationLossCodeV1Omitted
+const ParticipationLossCodeV1Transformed
+const ParticipationLossCodeV1Unknown
+const ParticipationPermissionV1Control
+const ParticipationPermissionV1Observe
+const ParticipationStateV1Active
+const ParticipationStateV1Configured
+const ParticipationStateV1Error
+const ParticipationStateV1Incompatible
+const ParticipationStateV1Offline
+func ParticipationConfigurationV1.Validate
+func ParticipationContributionV1.Validate
+func ParticipationApplyResultV1.Validate
+func ValidateParticipationChangeV1
+func ValidateParticipationControlV1
+type ParticipationApplyRequestV1
+type ParticipationApplyResultV1
+type ParticipationCompatibilityV1
+type ParticipationAdmissionV1
+type ParticipationBindingObservationV1
+type ParticipationBindingV1
+type ParticipationConfigurationV1
+type ParticipationContractVersionV1
+type ParticipationContributionV1
+type ParticipationControlOutcomeV1
+type ParticipationDirectionV1
+type ParticipationDriverV1
+type ParticipationFailureV1
+type ParticipationListenerV1
+type ParticipationLossCodeV1
+type ParticipationLossV1
+type ParticipationPermissionV1
+type ParticipationProvenanceV1
+type ParticipationStateV1
+`)
+
+var issue137ParticipationOperatorExports = frozenExportInventory(`
+func ParticipationConfigurationV1.Validate
+func ParticipationContributionV1.Validate
+func ParticipationApplyResultV1.Validate
+func ValidateParticipationChangeV1
+func ValidateParticipationControlV1
+type ParticipationApplyRequestV1
+type ParticipationDriverV1
+`)
+
 func init() {
+	for exported := range issue137ParticipationExports {
+		allowedRuntimeExports[exported] = struct{}{}
+	}
 	for exported := range postM9OperatorAdminRuntimeExports {
 		allowedRuntimeExports[exported] = struct{}{}
 	}
@@ -1439,6 +1510,9 @@ func inspectRuntimeExports(modulePath string, packages map[string]*packageInvent
 	}
 	for expected := range allowedRuntimeExports {
 		if snapshotOnlyContract {
+			if _, participation := issue137ParticipationExports[expected]; participation {
+				continue
+			}
 			if _, lifecycle := msp055RuntimeExports[expected]; lifecycle {
 				continue
 			}
@@ -1852,6 +1926,9 @@ func inspectStableContracts(root, modulePath string, fset *token.FileSet, packag
 				if _, operatorAdmin := postM9OperatorAdminRuntimeExports[manifestExport{Kind: "type", Name: name}]; operatorAdmin {
 					continue
 				}
+				if _, participation := issue137ParticipationOperatorExports[manifestExport{Kind: "type", Name: name}]; participation {
+					continue
+				}
 				if _, ok := allExpectedTypes[spec.importPath][name]; !ok {
 					violations = append(violations, fmt.Sprintf("%s: unexpected stable contract type %s", spec.importPath, name))
 				}
@@ -2009,6 +2086,9 @@ func fileDeclaresPostM9OperatorAdminSurface(file *ast.File) bool {
 	exports := make(map[manifestExport]struct{})
 	collectExports(file, exports)
 	for exported := range exports {
+		if _, participation := issue137ParticipationOperatorExports[exported]; participation {
+			return true
+		}
 		if _, operatorAdmin := postM9OperatorAdminRuntimeExports[exported]; operatorAdmin {
 			return true
 		}

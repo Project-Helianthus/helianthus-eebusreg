@@ -18,6 +18,7 @@ func TestStableContractSpecsInventoryOrderAndCopies(t *testing.T) {
 		{canonicalModulePath + "/eebusraw", "IdentityDocumentV1"},
 		{canonicalModulePath + "/eebusraw", "ReadAuthorizationV1"},
 		{canonicalModulePath + "/eebusevidence", "EnvelopeV1"},
+		{canonicalModulePath, "ParticipationContributionV1"},
 	}
 	if len(first) != len(want) {
 		t.Fatalf("stable contract count = %d, want %d", len(first), len(want))
@@ -37,7 +38,7 @@ func TestStableContractSpecsInventoryOrderAndCopies(t *testing.T) {
 		t.Fatal("stable contract specifications share mutable state across calls")
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%#v", second))))
-	const wantFingerprint = "9d56379f5f4fffb4ffb87b186b52953e1205f3a7b7928c196bc4d806cb9ff470"
+	const wantFingerprint = "fd51d21e9408646fe649eb1f0cc685f539d78328b84179e0faaeb5bf28c9ae2a"
 	if got != wantFingerprint {
 		t.Fatalf("stable contract fingerprint = %s, want %s", got, wantFingerprint)
 	}

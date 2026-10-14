@@ -4,8 +4,9 @@
 
 `helianthus-eebusreg` owns raw eeBUS runtime integration, protocol-native
 identity and qualification, evidence references, and bounded native snapshots.
-It is not the owner of universal semantics, consumer interpretation, gateway
-policy, or output bindings.
+It also owns the eeBUS participation and device-binding contract consumed by
+Gateway. Universal semantics, consumer interpretation, Gateway policy and
+bindings for other output protocols remain with their respective owners.
 
 Public packages are limited to `eebusruntime`, `eebusraw`, and `eebusevidence`.
 Keep SHIP/SPINE and vendor-specific types behind repository-local boundaries;
