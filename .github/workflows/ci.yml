@@ -6,12 +6,19 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   validate:
+    # stays GitHub-hosted: the protected store's filesystem preflight fails on the Synology container (val 3, eebusreg issue)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
+          clean: true
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
@@ -27,10 +34,13 @@ jobs:
           if-no-files-found: error
 
   build-container-proof:
+    # stays GitHub-hosted until the Synology runners are proven for Docker (CI migration val 2)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
+          clean: true
           persist-credentials: false
       - name: Run toolchain proof in build container
         run: |
@@ -43,7 +53,9 @@ jobs:
             sh -c 'apk add --no-cache bash git && export PATH=/usr/local/go/bin:$PATH && git config --global --add safe.directory /workspace && ./scripts/toolchain_boundary_proof.sh'
 
   api-surface-attestation:
-    runs-on: ubuntu-latest
+    # fork pull requests never run on the persistent runners
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || 'synology' }}
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
@@ -55,6 +67,7 @@ jobs:
       - name: Checkout exact source head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          clean: true
           persist-credentials: false
           ref: ${{ env.SOURCE_SHA }}
       - name: Set up Go
