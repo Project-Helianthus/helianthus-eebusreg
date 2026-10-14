@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	issue56EEBusGoVersion = "v0.7.1-helianthus.20"
-	issue56SHIPGoVersion  = "v0.6.1-helianthus.18"
+	issue56EEBusGoVersion = "v0.7.1-helianthus.21"
+	issue56SHIPGoVersion  = "v0.6.1-helianthus.19"
 )
 
 func TestIssue56DependencyPinsAreReleasedDirectAndWorkspaceFree(t *testing.T) {
@@ -141,7 +141,7 @@ func TestIssue56EEBusGoSourceContractKeepsCandidateCallbackOptionalAndOrdered(t 
 
 	issue56RequireAll(t, api,
 		"type PairingCandidateReader interface {",
-		"VisiblePairingCandidatesUpdated(service ServiceInterface, candidates []shipapi.PairingCandidateRef)",
+		"VisiblePairingCandidateDiscoverySnapshotUpdated(",
 		"type PairingCandidateQueuer interface {",
 		"QueuePairingCandidate(candidateRef, expectedSKI string) error",
 		"type PairingCandidateController interface {",
@@ -152,8 +152,9 @@ func TestIssue56EEBusGoSourceContractKeepsCandidateCallbackOptionalAndOrdered(t 
 	)
 	issue56RequireInOrder(t, hub,
 		"reader, ok := s.serviceHandler.(api.PairingCandidateReader)",
+		"reader, ok := s.serviceHandler.(legacyPairingCandidateReader)",
 		"cloneAndSortPairingCandidateRefs(candidates)",
-		"event.reader.VisiblePairingCandidatesUpdated(service, event.candidates)",
+		"event.legacyReader.VisiblePairingCandidatesUpdated(service, event.candidates)",
 	)
 	issue56RequireAll(t, service,
 		"func (s *Service) SelectPairingCandidate(",

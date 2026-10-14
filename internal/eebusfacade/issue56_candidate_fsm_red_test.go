@@ -765,10 +765,18 @@ func TestIssue56CandidateCallbackNeverFeedsRuntimeObservation(t *testing.T) {
 }
 
 func TestIssue56CandidateCapabilityRemainsOptionalAndPrivate(t *testing.T) {
-	var _ eebusapi.PairingCandidateReader = (*runtimeServiceReader)(nil)
-	var _ eebusapi.PairingCandidateReader = (*firstTrustFacade)(nil)
-	if _, leaked := any((*runtimeServiceHandler)(nil)).(eebusapi.PairingCandidateReader); leaked {
+	var _ pairingCandidateLegacyReader = (*runtimeServiceReader)(nil)
+	var _ pairingCandidateLegacyReader = (*firstTrustFacade)(nil)
+	if _, leaked := any((*runtimeServiceHandler)(nil)).(pairingCandidateLegacyReader); leaked {
 		t.Fatal("runtimeServiceHandler implements private candidate reader")
+	}
+	// Implementing the native snapshot reader would make helianthus-eebus-go
+	// stop dispatching the legacy callback this registry consumes.
+	if _, native := any((*runtimeServiceReader)(nil)).(eebusapi.PairingCandidateReader); native {
+		t.Fatal("runtimeServiceReader implements the native snapshot reader and would suppress the legacy callback")
+	}
+	if _, native := any((*firstTrustFacade)(nil)).(eebusapi.PairingCandidateReader); native {
+		t.Fatal("firstTrustFacade implements the native snapshot reader and would suppress the legacy callback")
 	}
 	for _, typ := range []reflect.Type{
 		reflect.TypeOf(RuntimeConfig{}),

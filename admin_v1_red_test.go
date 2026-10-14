@@ -203,8 +203,8 @@ func TestIssue124PinsTypedCallbackDependenciesExactly(t *testing.T) {
 		t.Fatalf("read go.mod: %v", err)
 	}
 	for _, want := range []string{
-		"github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.20",
-		"github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.18",
+		"github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.21",
+		"github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.19",
 	} {
 		if !strings.Contains(string(module), want) {
 			t.Errorf("go.mod missing required typed-callback dependency %q", want)
