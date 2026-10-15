@@ -42,7 +42,52 @@ type storeError struct {
 
 func newStoreError(result outcome, operation string, cause error) *storeError {
 	_ = cause
+	if result == outcomeFilesystemCapabilityUnavailable && capabilityCategory(operation) == "unknown" {
+		operation = "unknown"
+	}
 	return &storeError{result: result, operation: operation}
+}
+
+func capabilityCategory(operation string) string {
+	switch operation {
+	case "select_backend":
+		return "backend_selection"
+	case "probe_backend_policy":
+		return "backend_policy"
+	case "root_identity", "lock_identity", "stat_object", "stat_created_object", "resume_bootstrap", "probe_stable_identity":
+		return "stable_identity"
+	case "probe_atomic_replacement":
+		return "atomic_replacement"
+	case "probe_process_lock":
+		return "process_lock"
+	case "probe_nofollow_create":
+		return "nofollow_create"
+	case "probe_file_fsync":
+		return "file_fsync"
+	case "probe_directory_fsync":
+		return "directory_fsync"
+	case "inspect_acl", "probe_acl":
+		return "acl_inspection"
+	case "probe_cleanup":
+		return "cleanup"
+	case "probe_create":
+		return "file_create"
+	case "probe_close":
+		return "file_close"
+	case "probe_file_write":
+		return "file_write"
+	case "random_temp_name":
+		return "temporary_name"
+	default:
+		return "unknown"
+	}
+}
+
+func filesystemCapabilityDiagnostic(err error) string {
+	if typed, ok := err.(*storeError); ok && typed != nil && typed.result == outcomeFilesystemCapabilityUnavailable {
+		return capabilityCategory(typed.operation)
+	}
+	return "unknown"
 }
 
 func (e *storeError) Error() string {

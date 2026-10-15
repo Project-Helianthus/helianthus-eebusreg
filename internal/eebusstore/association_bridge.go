@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"log/slog"
 	"sort"
 	"sync"
 )
@@ -32,6 +33,7 @@ type AssociationBridge struct {
 func OpenAssociationBridge(root string, bindings []KeyProviderBinding) (*AssociationBridge, string) {
 	backend, err := newNativeSyscallBackend(nil)
 	if err != nil {
+		logFilesystemCapabilityFailure(err)
 		return nil, string(outcomeFilesystemCapabilityUnavailable)
 	}
 	providers := make(map[providerKey]protectedKeyProvider, len(bindings))
@@ -50,6 +52,7 @@ func OpenAssociationBridge(root string, bindings []KeyProviderBinding) (*Associa
 		retainUnavailableProtectedState: true,
 	}}
 	result := openStore(bridge.config)
+	logFilesystemCapabilityFailure(result.err)
 	if result.store == nil {
 		return nil, string(result.outcome)
 	}
@@ -71,11 +74,18 @@ func (bridge *AssociationBridge) Reload(ctx context.Context) (uint64, map[string
 		bridge.opened = nil
 	}
 	result := openStore(bridge.config)
+	logFilesystemCapabilityFailure(result.err)
 	if result.store == nil || result.state == nil {
 		return 0, nil, string(result.outcome)
 	}
 	bridge.opened = result.store
 	return selectedStoreGeneration(bridge.opened), associationMap(*result.state), string(result.outcome)
+}
+
+func logFilesystemCapabilityFailure(err error) {
+	if outcomeOf(err) == outcomeFilesystemCapabilityUnavailable {
+		slog.Warn(string(outcomeFilesystemCapabilityUnavailable), "capability", filesystemCapabilityDiagnostic(err))
+	}
 }
 
 func (bridge *AssociationBridge) SelectedGeneration() uint64 {
