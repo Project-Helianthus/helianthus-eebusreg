@@ -29,6 +29,35 @@ candidate, qualified, promoted, unsupported, and unknown states explicit.
    merge. Squash merge only with green applicable checks and review, then verify
    the remote integration branch. Never merge without requested authorization.
 
+## Production Go comments
+
+The [API boundary checker](internal/apiboundary/main.go), in
+`inspectGoBoundary`, checks comments in all non-test `.go` files outside `.git`,
+`vendor` and `docs` directories (case-insensitive for `docs`), skipping symlinks.
+`checkProductionComments` rejects every comment group except these three cases:
+
+- The file's package doc comment: one `// Package <name> …` line with non-empty
+  prose and at most 120 characters, including the `// ` prefix. Invalid package
+  comments fail with `package comment must be one concise line starting with Package <name>`.
+- Exactly one canonical `//go:build` line, in its own comment group before the
+  package clause and separated from it by at least one blank line, as checked by
+  `allowedCompilerCommentGroups` and `isCanonicalBuildConstraintGroup`.
+- A machine-only cgo preamble attached to an unaliased `import "C"`, accepted by
+  `allowedCompilerCommentGroups` and `isMachineOnlyCGOPreamble`.
+
+Doc comments on exported identifiers, license headers, `//go:generate`,
+`//go:embed` and other `//go:` lines are not exempt. Rejected non-package comment
+groups report `<path>:<line>: production Go comment is not allowed`.
+
+Put repository-local guidance in root `README.md` or `AGENTS.md`, and protocol
+and API prose in the separate `helianthus-docs-eebus` repository.
+`validateRepositoryPaths` and `isDocumentationPath` reject every other
+Markdown/documentation path; any `docs` path segment (case-insensitive) is also
+rejected by the same boundary gate.
+
+Run `./scripts/ci_local.sh`, which calls `scripts/api_boundary_gate.sh`, or run
+`./scripts/api_boundary_gate.sh` directly to verify enforcement.
+
 ## Safety, evidence, and privacy
 
 - Reads and discovery must be allowlisted, bounded, version-aware, and
