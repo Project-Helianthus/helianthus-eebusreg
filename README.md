@@ -40,15 +40,15 @@ canonical documentation.
 
 ## Current Public Maturity
 
-The inspected development baseline is
-[`ede40b929e9c2d9cbf0de20c4844e737d5e6af68`](https://github.com/Project-Helianthus/helianthus-eebusreg/commit/ede40b929e9c2d9cbf0de20c4844e737d5e6af68).
+The maturity summary below describes an inspected development snapshot; branch
+links can move and do not establish current release or qualification status.
 
 | State | Evidence at that baseline |
 | --- | --- |
-| Implemented | Public runtime v1 and native runtime v2 contracts, raw/evidence packages, bounded lifecycle handling, API-boundary gates, and deterministic native snapshot behavior are present. Native runtime v2 entered `main` at [`db7d7ae`](https://github.com/Project-Helianthus/helianthus-eebusreg/commit/db7d7aeb2bd466589a74222cecb5b5abeac7a741). |
-| Published module | The newest tag at the inspected baseline is [`v0.1.35`](https://github.com/Project-Helianthus/helianthus-eebusreg/tree/v0.1.35) at [`c0cd3a9`](https://github.com/Project-Helianthus/helianthus-eebusreg/commit/c0cd3a9625093f07b6d950f7563666d6b98c0b8c). It predates the native runtime v2 development baseline, so a tag or downstream module pin must not be treated as current `main`. |
+| Implemented | Public runtime v1 and native runtime v2 contracts, raw/evidence packages, bounded lifecycle handling, API-boundary gates, and deterministic native snapshot behavior are present. |
+| Published module | The newest tag at the inspected baseline is [`v0.1.35`](https://github.com/Project-Helianthus/helianthus-eebusreg/tree/v0.1.35). It predates the native runtime v2 development baseline, so a tag or downstream module pin must not be treated as current `main`. |
 | Offline-tested | Repository CI, API-surface gates, deterministic fixtures, fake peers, and replay-based interoperability checks exercise the code without a device. The clean-checkout commands below are the reproduction path. |
-| Candidate or unresolved | The [native runtime v2 documentation](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/f61f95c59d7dc454b5afb7271ccac6b7ea15c7cd/api/_candidate/msp-138-native-runtime-exposure-v1.md) is explicitly a candidate. Exact current SHIP, SPINE, and use-case revisions remain unresolved in the public source ledger, so normative mapping and conformance claims remain open. |
+| Candidate or unresolved | The [native runtime v2 documentation](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/api/_candidate/msp-138-native-runtime-exposure-v1.md) is explicitly a candidate. Exact current SHIP, SPINE, and use-case revisions remain unresolved in the public source ledger, so normative mapping and conformance claims remain open. |
 | Hardware-test-ready | No public record at this baseline establishes a complete exact-device procedure, integrated candidate, prerequisites, and acceptance evidence. The public G17/G19 design remains pending live validation. |
 | Physically verified | **Unknown.** Offline tests, a discovered peer, a successful build, or an implementation dependency do not establish device qualification or physical verification. |
 
@@ -58,13 +58,13 @@ packaging, installation, or exact-device support.
 
 ## Public Source And Documentation Boundary
 
-Use these public, immutable documentation references:
+Use these public documentation branch references (their contents can change):
 
-- [eeBUS normative source ledger](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/f61f95c59d7dc454b5afb7271ccac6b7ea15c7cd/protocols/eebus-normative-source-ledger.md): exact current SHIP, SPINE, and use-case revisions are unresolved; dependency declarations are not normative-source evidence.
-- [SHIP/SPINE overview and pending G17/G19 gates](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/f61f95c59d7dc454b5afb7271ccac6b7ea15c7cd/protocols/ship-spine-overview.md): public derived architecture and the pending live boundary.
-- [stable eeBUS runtime v1 reference](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/f61f95c59d7dc454b5afb7271ccac6b7ea15c7cd/api/eebusruntime-v1/reference.md): the published v1 API record.
-- [native runtime v2 candidate](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/f61f95c59d7dc454b5afb7271ccac6b7ea15c7cd/api/_candidate/msp-138-native-runtime-exposure-v1.md): direction and publication boundary, explicitly not a stable normative record.
-- [eeBUS documentation contribution policy](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/f61f95c59d7dc454b5afb7271ccac6b7ea15c7cd/development/contributing.md): provenance classes, redaction, canonical paths, and restricted-source quarantine.
+- [eeBUS normative source ledger](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/protocols/eebus-normative-source-ledger.md): exact current SHIP, SPINE, and use-case revisions are unresolved; dependency declarations are not normative-source evidence.
+- [SHIP/SPINE overview and pending G17/G19 gates](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/protocols/ship-spine-overview.md): public derived architecture and the pending live boundary.
+- [stable eeBUS runtime v1 reference](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/api/eebusruntime-v1/reference.md): the published v1 API record.
+- [native runtime v2 candidate](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/api/_candidate/msp-138-native-runtime-exposure-v1.md): direction and publication boundary, explicitly not a stable normative record.
+- [eeBUS documentation contribution policy](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/development/contributing.md): provenance classes, redaction, canonical paths, and restricted-source quarantine.
 
 Do not copy protected specifications, schemas, tables, screenshots, or
 restricted paraphrases into code, tests, issues, pull requests, or review
@@ -282,17 +282,15 @@ Docker is used only by the hosted build-container proof. No private Go module,
 Git credential, eeBUS device, network discovery, pairing action, or local
 workspace file is required.
 
-Clone the exact development baseline:
+Clone the development branch (its contents can change):
 
 ```bash
 git clone https://github.com/Project-Helianthus/helianthus-eebusreg.git
 cd helianthus-eebusreg
-git checkout --detach ede40b929e9c2d9cbf0de20c4844e737d5e6af68
 git rev-parse HEAD
 ```
 
-The last command must print
-`ede40b929e9c2d9cbf0de20c4844e737d5e6af68`.
+Keep the last command's output in the private review record when validating a specific checkout.
 
 Build every package:
 
@@ -315,12 +313,12 @@ GOWORK=off GOTOOLCHAIN=local go test -race . ./eebusraw \
 Expected result: one `ok` line for the root `eebusruntime` package and one for
 `eebusraw`.
 
-[`TestNativeSnapshotV2PreservesNativeRuntimeAndRawPayload`](https://github.com/Project-Helianthus/helianthus-eebusreg/blob/ede40b929e9c2d9cbf0de20c4844e737d5e6af68/native_snapshot_v2_test.go#L9)
+[`TestNativeSnapshotV2PreservesNativeRuntimeAndRawPayload`](https://github.com/Project-Helianthus/helianthus-eebusreg/blob/main/native_snapshot_v2_test.go#L9)
 constructs a synthetic read-only snapshot and proves that native runtime
 identity, service identity, an integer, and a floating-point value survive the
 public contract without being replaced by a semantic value.
 
-[`TestIdentityDocumentV1RejectsMalformedDigests`](https://github.com/Project-Helianthus/helianthus-eebusreg/blob/ede40b929e9c2d9cbf0de20c4844e737d5e6af68/eebusraw/identity_test.go#L434)
+[`TestIdentityDocumentV1RejectsMalformedDigests`](https://github.com/Project-Helianthus/helianthus-eebusreg/blob/main/eebusraw/identity_test.go#L434)
 is the fail-closed negative case. It supplies malformed identity and evidence
 digests and requires validation to reject every case. Invalid evidence cannot
 be promoted into a native identity document.
@@ -362,8 +360,8 @@ access, pairing, deployment, and writes are outside these commands.
 ## Contributing
 
 1. Read [`AGENTS.md`](./AGENTS.md), the canonical [eeBUS docs contribution
-   policy](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/f61f95c59d7dc454b5afb7271ccac6b7ea15c7cd/development/contributing.md),
-   and the [organization contribution guide](https://github.com/Project-Helianthus/.github/blob/0c09ded873cb5c8e2639957c0efad71bf6692de4/CONTRIBUTING.md).
+   policy](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/development/contributing.md),
+   and the [organization contribution guide](https://github.com/Project-Helianthus/.github/blob/main/CONTRIBUTING.md).
 2. Open one scoped issue, then create `issue/<number>-<slug>` from current
    `origin/main`.
 3. Put native identity, qualification, evidence, and runtime-contract changes
@@ -405,3 +403,76 @@ their declared AGPL-3.0-only implementation-policy lane or CC0-1.0 independently
 publishable-facts lane; those documentation licenses do not grant rights in
 third-party specifications, trademarks, patents, firmware, private captures,
 or confidential material.
+
+## Protected-store capability diagnostics
+
+This repository-local runbook interprets existing offline diagnostics; it does
+not establish eeBUS protocol facts or device qualification. The bridge logs
+`filesystem_capability_unavailable` with a bounded `capability` field on failed
+open/reload ([association_bridge.go](./internal/eebusstore/association_bridge.go)).
+The complete category mapping is `capabilityCategory` in
+[outcome.go](./internal/eebusstore/outcome.go). Categories name failed checks,
+not a kernel cause or a repair prescription.
+
+The checks below are implemented in [filesystem.go](./internal/eebusstore/filesystem.go)
+(`probeCapabilities`, `probeDirectory`, descriptor validation and file creation),
+with bootstrap admission in [store.go](./internal/eebusstore/store.go).
+
+| Category | Source operation(s) and check |
+| --- | --- |
+| `backend_selection` | `select_backend`: native backend unavailable or missing. |
+| `backend_policy` | `probe_backend_policy`: policy hook or filesystem-policy check fails. [Linux policy](./internal/eebusstore/backend_policy_linux.go) checks filesystem type against ext-family, XFS, Btrfs and overlayfs; [Darwin policy](./internal/eebusstore/backend_policy_darwin.go) requires APFS. Passing this check alone proves no other capability. |
+| `stable_identity` | `root_identity`, `lock_identity`, `stat_object`, `stat_created_object`, `resume_bootstrap`, `probe_stable_identity`: descriptor/stat identity availability or consistency; the probe requires nonzero directory device/inode identities on the same device, distinct file identities and matching descriptor/path identities. |
+| `atomic_replacement` | `probe_atomic_replacement`: hook, descriptor-relative `Renameat`, reopening, replacement identity and payload verification. |
+| `process_lock` | `probe_process_lock`: hook, contender open, exclusive nonblocking `Flock`, and contention returning `EWOULDBLOCK` or `EAGAIN`. |
+| `nofollow_create` | `probe_nofollow_create`: temporary symlink setup and hook, then `Openat` with `O_NOFOLLOW` must reject the symlink with `ELOOP`. |
+| `file_fsync` | `probe_file_fsync`: hook or probe file `Sync`. |
+| `directory_fsync` | `probe_directory_fsync`: hook or probe directory `Sync`. |
+| `acl_inspection` | `inspect_acl`, `probe_acl`: additional-access inspection cannot be completed (or the probe hook fails). See [Linux inspection](./internal/eebusstore/acl_linux.go) and [Darwin inspection](./internal/eebusstore/acl_darwin.go) (the [non-cgo variant](./internal/eebusstore/acl_darwin_nocgo.go) cannot inspect ACLs). Successfully detecting additional access instead yields `permissions_rejected`. |
+| `cleanup` | `probe_cleanup`: hook, unlink, directory synchronization or verification that probe artifacts are absent fails. Cleanup failure takes precedence over an earlier probe failure. |
+| `file_create` | `probe_create`: temporary-name generation, exclusive no-follow creation, descriptor validation or exhaustion of 16 collision attempts fails. |
+| `file_close` | `probe_close`: closing the probe target fails. |
+| `file_write` | `probe_file_write`: writing the synthetic probe payload fails. |
+| `temporary_name` | `random_temp_name`: random temporary-name generation outside the probe-create wrapper fails. |
+| `unknown` | Any unmapped operation or diagnostic without a matching typed capability error. Report UNKNOWN; do not infer a cause. |
+
+### Collecting bounded offline evidence
+
+Run only the existing synthetic-fixture tests in an isolated checkout, with no
+production store, device or credentials. The focused command is:
+
+```sh
+go test -count=1 -timeout=2m ./internal/eebusstore -run '^TestCapabilityDiagnostic'
+```
+
+[capability_diagnostic_test.go](./internal/eebusstore/capability_diagnostic_test.go)
+covers injected categories, non-probe mappings and unknown handling, successful
+bridge behavior, cleanup precedence with published bytes preserved, and a
+read-only synthetic directory. Its injected failures are expected assertions;
+a passing test is not an observed runner capability failure. Record any existing
+platform/root-dependent test skip as unverified coverage, never as a capability
+pass. Build/tool/environment errors are likewise not diagnostic categories.
+
+For a handoff, transcribe only the fixed outcome/category (when actually
+observed) and test PASS/FAIL result; inspect output locally rather than publishing
+raw logs. Exclude roots, paths, nested causes, timestamps, identities and store
+contents. Synthetic example: `outcome=filesystem_capability_unavailable,
+capability=file_create; test=PASS (injected fixture)`. If no category was
+observed, record `capability=unknown` and diagnosis UNKNOWN; do not manufacture
+one from a test name or filesystem type.
+
+Capability unavailable means admission could not prove a required filesystem
+property; it does not establish corrupt protected state. Separate outcomes such
+as `malformed_state`, `no_valid_manifest` or `no_valid_current` concern state
+validation and must retain their own classification. A failed preflight admits
+no state. Preserve existing published bytes and last-known-good evidence; do
+not delete/reinitialize the store, relax permissions, substitute a backend or
+bypass a check. The diagnostic intentionally discards nested causes.
+
+For the remaining runner investigation in [#140](https://github.com/Project-Helianthus/helianthus-eebusreg/issues/140),
+the missing evidence is an actual failing runner's bounded outcome/category and
+current offline test results, followed by separately authorized validation of
+any proposed remediation on that runner. Local or injected success does not
+supply that evidence. Kernel cause and runner repair remain UNKNOWN. This
+partial runbook child [#148](https://github.com/Project-Helianthus/helianthus-eebusreg/issues/148)
+changes no runtime/security behavior and leaves parent remediation open.
