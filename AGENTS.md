@@ -31,23 +31,32 @@ candidate, qualified, promoted, unsupported, and unknown states explicit.
 
 ## Production Go comments
 
-Do not add ordinary explanatory comments to production Go files, including
-internal packages. Keep explanatory prose in the repository's permitted Markdown
-documentation. The API boundary checker applies this rule to non-test Go files
-within its scan scope and reports `production Go comment is not allowed`.
+The [API boundary checker](internal/apiboundary/main.go), in
+`inspectGoBoundary`, checks comments in all non-test `.go` files outside `.git`,
+`vendor` and `docs` directories (case-insensitive for `docs`), skipping symlinks.
+`checkProductionComments` rejects every comment group except these three cases:
 
-Verify enforcement with `./scripts/api_boundary_gate.sh`, which runs
-`go run ./internal/apiboundary`. It is also reached by `./scripts/ci_local.sh`
-through the toolchain proof and API boundary steps; there is no separate comment
-gate script. See [the checker](internal/apiboundary/main.go)
-(`checkProductionComments`, `allowedCompilerCommentGroups`, and the scan in
-`inspectGoBoundary`) and [its regression tests](internal/apiboundary/docs_clean_test.go).
-The checker permits a constrained one-line package comment and narrowly
-recognized build constraints and machine-only cgo preambles; consult those
-functions for the exact conditions rather than assuming a general exemption.
-Preserve existing license notices and compiler directives; this guidance does
-not authorize removing them or expanding the checker's allowances. If such a
-notice or directive conflicts with the checker, report the conflict for review.
+- The file's package doc comment: one `// Package <name> …` line with non-empty
+  prose and at most 120 characters, including the `// ` prefix. Invalid package
+  comments fail with `package comment must be one concise line starting with Package <name>`.
+- Exactly one canonical `//go:build` line, in its own comment group before the
+  package clause and separated from it by at least one blank line, as checked by
+  `allowedCompilerCommentGroups` and `isCanonicalBuildConstraintGroup`.
+- A machine-only cgo preamble attached to an unaliased `import "C"`, accepted by
+  `allowedCompilerCommentGroups` and `isMachineOnlyCGOPreamble`.
+
+Doc comments on exported identifiers, license headers, `//go:generate`,
+`//go:embed` and other `//go:` lines are not exempt. Rejected non-package comment
+groups report `<path>:<line>: production Go comment is not allowed`.
+
+Put repository-local guidance in root `README.md` or `AGENTS.md`, and protocol
+and API prose in the separate `helianthus-docs-eebus` repository.
+`validateRepositoryPaths` and `isDocumentationPath` reject every other
+Markdown/documentation path; any `docs` path segment (case-insensitive) is also
+rejected by the same boundary gate.
+
+Run `./scripts/ci_local.sh`, which calls `scripts/api_boundary_gate.sh`, or run
+`./scripts/api_boundary_gate.sh` directly to verify enforcement.
 
 ## Safety, evidence, and privacy
 
