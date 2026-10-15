@@ -29,6 +29,26 @@ candidate, qualified, promoted, unsupported, and unknown states explicit.
    merge. Squash merge only with green applicable checks and review, then verify
    the remote integration branch. Never merge without requested authorization.
 
+## Production Go comments
+
+Do not add ordinary explanatory comments to production Go files, including
+internal packages. Keep explanatory prose in the repository's permitted Markdown
+documentation. The API boundary checker applies this rule to non-test Go files
+within its scan scope and reports `production Go comment is not allowed`.
+
+Verify enforcement with `./scripts/api_boundary_gate.sh`, which runs
+`go run ./internal/apiboundary`. It is also reached by `./scripts/ci_local.sh`
+through the toolchain proof and API boundary steps; there is no separate comment
+gate script. See [the checker](internal/apiboundary/main.go)
+(`checkProductionComments`, `allowedCompilerCommentGroups`, and the scan in
+`inspectGoBoundary`) and [its regression tests](internal/apiboundary/docs_clean_test.go).
+The checker permits a constrained one-line package comment and narrowly
+recognized build constraints and machine-only cgo preambles; consult those
+functions for the exact conditions rather than assuming a general exemption.
+Preserve existing license notices and compiler directives; this guidance does
+not authorize removing them or expanding the checker's allowances. If such a
+notice or directive conflicts with the checker, report the conflict for review.
+
 ## Safety, evidence, and privacy
 
 - Reads and discovery must be allowlisted, bounded, version-aware, and
