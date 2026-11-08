@@ -40,7 +40,7 @@ static int helianthus_acl_entry_count(int fd) {
 func TestDocsCleanOwnershipContract(t *testing.T) {
 	tool := buildAPIBoundary(t)
 
-	t.Run("repository README and concise package metadata are accepted", func(t *testing.T) {
+	t.Run("repository README and package documentation are accepted", func(t *testing.T) {
 		root := newSyntheticRepository(t)
 		output, err := runTool(t, tool, root)
 		if err != nil {
@@ -259,7 +259,6 @@ import (
 package eebusraw
 `)
 			},
-			want: []string{"package comment", "eebusraw/doc.go"},
 		},
 		{
 			name: "exported declaration comment",
@@ -270,7 +269,6 @@ package eebusraw
 type Envelope struct{}
 `)
 			},
-			want: []string{"comment", "eebusraw/api.go"},
 		},
 		{
 			name: "detached line prose comment",
@@ -280,7 +278,6 @@ type Envelope struct{}
 // Runtime policy and consumer behavior belong in external documentation.
 `)
 			},
-			want: []string{"comment", "eebusraw/prose.go"},
 		},
 		{
 			name: "detached block prose comment",
@@ -290,7 +287,6 @@ type Envelope struct{}
 /* Runtime policy and consumer behavior belong in external documentation. */
 `)
 			},
-			want: []string{"comment", "eebusraw/prose.go"},
 		},
 		{
 			name: "malformed go build constraint",
@@ -310,7 +306,6 @@ package eebusraw
 package eebusraw
 `)
 			},
-			want: []string{"comment", "eebusraw/platform.go"},
 		},
 		{
 			name: "legacy build constraint syntax",
@@ -320,7 +315,6 @@ package eebusraw
 package eebusraw
 `)
 			},
-			want: []string{"comment", "eebusraw/platform.go"},
 		},
 		{
 			name: "misplaced valid go build constraint",
@@ -341,7 +335,6 @@ package eebusraw
 package eebusraw
 `)
 			},
-			want: []string{"comment", "eebusraw/platform.go"},
 		},
 		{
 			name: "multiple canonical go build constraint groups",
@@ -356,134 +349,6 @@ package eebusraw
 			want: []string{"comment", "eebusraw/platform.go"},
 		},
 		{
-			name: "detached block comment in cgo file",
-			mutate: func(t *testing.T, root string) {
-				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
-
-/* Runtime policy belongs in external documentation. */
-
-/*
-#include <errno.h>
-*/
-import "C"
-`)
-			},
-			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
-		},
-		{
-			name: "grouped import declaration comment is not a cgo preamble",
-			mutate: func(t *testing.T, root string) {
-				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
-
-`+aclCGOPreamble+`
-import (
-	"C"
-	"errors"
-)
-`)
-			},
-			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
-		},
-		{
-			name: "conditional narrative region in cgo preamble",
-			mutate: func(t *testing.T, root string) {
-				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
-
-/*
-#include <errno.h>
-#if 0
-Runtime policy belongs in external documentation;
-#endif
-*/
-import "C"
-`)
-			},
-			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
-		},
-		{
-			name: "nested narrative comment in cgo preamble",
-			mutate: func(t *testing.T, root string) {
-				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
-
-/*
-#include <errno.h>
-// Runtime policy belongs in external documentation.
-*/
-import "C"
-`)
-			},
-			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
-		},
-		{
-			name: "narrative string literal in cgo preamble",
-			mutate: func(t *testing.T, root string) {
-				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
-
-/*
-#include <errno.h>
-static const char *policy = "Runtime policy belongs in external documentation.";
-*/
-import "C"
-`)
-			},
-			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
-		},
-		{
-			name: "empty cgo preamble",
-			mutate: func(t *testing.T, root string) {
-				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
-
-/*
-*/
-import "C"
-`)
-			},
-			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
-		},
-		{
-			name: "rune literal in cgo preamble",
-			mutate: func(t *testing.T, root string) {
-				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
-
-/*
-#include <errno.h>
-static const int policy = 'R';
-*/
-import "C"
-`)
-			},
-			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
-		},
-		{
-			name: "raw string delimiter in cgo preamble",
-			mutate: func(t *testing.T, root string) {
-				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
-
-/*
-#include <errno.h>
-static const char *policy = `+"`"+`Runtime policy`+"`"+`;
-*/
-import "C"
-`)
-			},
-			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
-		},
-		{
-			name: "narrative comment after cgo import",
-			mutate: func(t *testing.T, root string) {
-				writeFile(t, root, "internal/eebusstore/acl_darwin.go", `package eebusstore
-
-/*
-#include <errno.h>
-*/
-import "C"
-
-// Runtime policy belongs in external documentation.
-`)
-			},
-			want: []string{"comment", "internal/eebusstore/acl_darwin.go"},
-		},
-		{
 			name: "empty README",
 			mutate: func(t *testing.T, root string) {
 				writeFile(t, root, "README.md", " \n\t\n")
@@ -496,7 +361,11 @@ import "C"
 		t.Run(test.name, func(t *testing.T) {
 			root := newSyntheticRepository(t)
 			test.mutate(t, root)
-			expectRejected(t, tool, root, test.want...)
+			if len(test.want) != 0 {
+				expectRejected(t, tool, root, test.want...)
+			} else if output, err := runTool(t, tool, root); err != nil {
+				t.Fatalf("ordinary comment fixture was rejected: %v\n%s", err, output)
+			}
 		})
 	}
 

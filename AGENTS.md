@@ -29,31 +29,28 @@ candidate, qualified, promoted, unsupported, and unknown states explicit.
    merge. Squash merge only with green applicable checks and review, then verify
    the remote integration branch. Never merge without requested authorization.
 
-## Production Go comments
+## Go comments and documentation ownership
 
-The [API boundary checker](internal/apiboundary/main.go), in
-`inspectGoBoundary`, checks comments in all non-test `.go` files outside `.git`,
-`vendor` and `docs` directories (case-insensitive for `docs`), skipping symlinks.
-`checkProductionComments` rejects every comment group except these three cases:
+Comments explain the code; exported APIs have godoc. Review comments for useful
+information beyond the identifier name and reject boilerplate. Protocol semantics
+link to the canonical `helianthus-docs-eebus` repository. Never reproduce
+restricted-source material. Ordinary package and declaration documentation,
+license headers, and detached explanatory comments are permitted. The API boundary
+checker validates build constraints without imposing a prose-comment policy.
 
-- The file's package doc comment: one `// Package <name> …` line with non-empty
-  prose and at most 120 characters, including the `// ` prefix. Invalid package
-  comments fail with `package comment must be one concise line starting with Package <name>`.
-- Exactly one canonical `//go:build` line, in its own comment group before the
-  package clause and separated from it by at least one blank line, as checked by
-  `allowedCompilerCommentGroups` and `isCanonicalBuildConstraintGroup`.
-- A machine-only cgo preamble attached to an unaliased `import "C"`, accepted by
-  `allowedCompilerCommentGroups` and `isMachineOnlyCGOPreamble`.
+The documentation boundary follows the Board's 2026-07-10 instruction, quoted in
+[helianthus-execution-plans#59](https://github.com/Project-Helianthus/helianthus-execution-plans/issues/59):
 
-Doc comments on exported identifiers, license headers, `//go:generate`,
-`//go:embed` and other `//go:` lines are not exempt. Rejected non-package comment
-groups report `<path>:<line>: production Go comment is not allowed`.
+> „auzi, dar helianthus-eebusreg/docs nu ar trebui să fie în helianthus-docs-eebus?”
+>
+> „Chiar mi-as dori ca toata documentatia sa fie in afara codebase-ului, pe modelul helianthus-docs-ebus. Documentatia de protocol diferita de documentatia de arhitectura, diferita de documentatia de API in docs-eebus. In nici un alt repo nu am avut un docs/ si nici nu ar trebui sa avem.”
 
-Put repository-local guidance in root `README.md` or `AGENTS.md`, and protocol
-and API prose in the separate `helianthus-docs-eebus` repository.
-`validateRepositoryPaths` and `isDocumentationPath` reject every other
-Markdown/documentation path; any `docs` path segment (case-insensitive) is also
-rejected by the same boundary gate.
+Put repository-local guidance in root `README.md` or `AGENTS.md`. Protocol,
+architecture, API, harness, and user documentation belongs in the separate
+`helianthus-docs-eebus` repository. `validateRepositoryPaths` and
+`isDocumentationPath` reject other Markdown/documentation paths; any `docs` path
+segment (case-insensitive) is also rejected. Removing the comment prohibition does
+not permit moving native documentation into this repository.
 
 Run `./scripts/ci_local.sh`, which calls `scripts/api_boundary_gate.sh`, or run
 `./scripts/api_boundary_gate.sh` directly to verify enforcement.
