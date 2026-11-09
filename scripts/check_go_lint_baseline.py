@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check finite readability debt while keeping ordinary lint failures fatal."""
+"""Check finite lint debt while keeping new or increased findings fatal."""
 import argparse
 from collections import Counter
 import json
@@ -37,7 +37,7 @@ def load_baseline(path):
         path = PurePosixPath(row['path'])
         if path.is_absolute() or '..' in path.parts or str(path) != row['path'] or not row['path'].endswith('.go') or any(c in row['path'] for c in '*?[]\\') or any(c in row['symbol'] for c in '*?[]/\\'):
             raise ValueError('noncanonical baseline path')
-        if row['rule'] not in {'revive/exported', 'revive/package-comments', 'revive/var-naming'}:
+        if row['rule'] not in {'revive/exported', 'revive/package-comments', 'revive/var-naming', 'errcheck', 'ineffassign', 'unused'} and not re.fullmatch(r'(?:govet/[A-Za-z_][A-Za-z0-9_]*|staticcheck/[A-Z]+[0-9]+)', row['rule']):
             raise ValueError('rule cannot be exempted')
         key = tuple(row[k] for k in ('path', 'symbol', 'rule'))
         if key in counts or type(row['count']) is not int or row['count'] <= 0:
@@ -54,8 +54,28 @@ def diagnostic_key(issue):
     if '..' in PurePosixPath(path).parts or str(PurePosixPath(path)) != path or not path.endswith('.go') or any(c in path for c in '*?[]\\'):
         raise ValueError('invalid diagnostic path')
     text = issue['Text']
-    if issue['FromLinter'] != 'revive':
-        raise ValueError('unbaselined lint diagnostic: ' + text)
+    linter = issue['FromLinter']
+    if linter != 'revive':
+        if linter == 'errcheck':
+            match = re.fullmatch(r'Error return value(?: of `([^`]+)`)? is not checked', text)
+            if match:
+                return path, match[1] or '<unnamed>', linter
+        elif linter == 'ineffassign':
+            match = re.fullmatch(r'ineffectual assignment to ([A-Za-z_][A-Za-z0-9_]*)', text)
+            if match:
+                return path, match[1], linter
+        elif linter == 'unused':
+            match = re.fullmatch(r'.*\b([A-Za-z_][A-Za-z0-9_.]*) is unused', text)
+            if match:
+                return path, match[1], linter
+        elif linter in {'staticcheck', 'govet'}:
+            code_pattern = r'[A-Z]+[0-9]+' if linter == 'staticcheck' else r'[A-Za-z_][A-Za-z0-9_]*'
+            match = re.fullmatch('(' + code_pattern + r'):\s*(.+)', text)
+            if match:
+                token = re.search(r'`([^`]+)`|([A-Za-z_][A-Za-z0-9_.]*)', match[2])
+                symbol = (token[1] or token[2]) if token else '<check>'
+                return path, symbol, linter + '/' + match[1]
+        raise ValueError('unrecognized lint diagnostic: ' + text)
     rule, _, message = text.partition(': ')
     if rule == 'exported':
         match = re.match(r'exported (?:const|var|type|function|method) ([\w.]+)\b', message)

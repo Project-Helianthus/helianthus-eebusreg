@@ -81,9 +81,44 @@ class BaselineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             json.loads('{"version":1,"version":1}', object_pairs_hook=guard.unique_object)
 
+    def diagnostic(self, linter, text):
+        return guard.diagnostic_key(dict(Pos=dict(Filename='sample.go'), FromLinter=linter, Text=text))
+
+    def test_standard_linter_identities(self):
+        cases = [
+            ('errcheck', 'Error return value of `io.WriteString` is not checked', 'io.WriteString', 'errcheck'),
+            ('errcheck', 'Error return value is not checked', '<unnamed>', 'errcheck'),
+            ('ineffassign', 'ineffectual assignment to value', 'value', 'ineffassign'),
+            ('unused', 'func readValue is unused', 'readValue', 'unused'),
+            ('staticcheck', 'SA1019: `Reader.Read` is deprecated', 'Reader.Read', 'staticcheck/SA1019'),
+            ('staticcheck', 'QF1003: could use tagged switch', 'could', 'staticcheck/QF1003'),
+            ('staticcheck', 'S1000: !!!', '<check>', 'staticcheck/S1000'),
+            ('govet', 'printf: `fmt.Printf` format mismatch', 'fmt.Printf', 'govet/printf'),
+            ('govet', 'copylocks: call copies lock value', 'call', 'govet/copylocks'),
+        ]
+        for linter, text, symbol, rule in cases:
+            with self.subTest(linter=linter, text=text):
+                key = self.diagnostic(linter, text)
+                self.assertEqual(('sample.go', symbol, rule), key)
+                self.assertEqual({key: 2}, self.load([self.row(symbol=symbol, rule=rule)]))
+                self.assertTrue(guard.compare({key: 2}, {key: 3}))
+                self.assertTrue(guard.compare({key: 2}, {}))
+
     def test_unbaselined_linter(self):
-        with self.assertRaises(ValueError):
-            guard.diagnostic_key(dict(Pos=dict(Filename='sample.go'), FromLinter='govet', Text='synthetic'))
+        for linter in ('other', 'errcheck', 'ineffassign', 'unused', 'staticcheck', 'govet'):
+            with self.subTest(linter=linter), self.assertRaises(ValueError):
+                self.diagnostic(linter, 'synthetic')
+
+    def test_standard_rule_validation(self):
+        for rule in ('staticcheck', 'staticcheck/unknown', 'staticcheck/SA1019/extra',
+                     'govet/', 'govet/*', 'govet/analyzer/extra', 'other'):
+            with self.subTest(rule=rule), self.assertRaises(ValueError):
+                self.load([self.row(rule=rule)])
+
+    def test_symbol_validation(self):
+        for symbol in ('', ' ', '*', '?', '[value]', 'reader/read', 'reader\\read'):
+            with self.subTest(symbol=symbol), self.assertRaises(ValueError):
+                self.load([self.row(symbol=symbol, rule='errcheck')])
 
     def test_exported_identity(self):
         issue = dict(Pos=dict(Filename='sample.go'), FromLinter='revive', Text='exported: exported method Reader.ReadValue should have comment or be unexported')

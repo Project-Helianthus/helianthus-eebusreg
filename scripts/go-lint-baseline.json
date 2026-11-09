@@ -597,6 +597,12 @@
       "count": 1
     },
     {
+      "path": "admin_v1.go",
+      "symbol": "could",
+      "rule": "staticcheck/QF1001",
+      "count": 3
+    },
+    {
       "path": "eebusevidence/envelope.go",
       "symbol": "AuthScope",
       "rule": "revive/exported",
@@ -909,6 +915,12 @@
       "count": 1
     },
     {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "io.WriteString",
+      "rule": "errcheck",
+      "count": 8
+    },
+    {
       "path": "eebusevidence/envelope_v1.go",
       "symbol": "CaptureProvenanceRuntimeObservation",
       "rule": "revive/exported",
@@ -1104,6 +1116,18 @@
       "path": "eebusevidence/envelope_v1.go",
       "symbol": "ReferenceV1.Validate",
       "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "io.WriteString",
+      "rule": "errcheck",
+      "count": 5
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "should",
+      "rule": "staticcheck/S1016",
       "count": 1
     },
     {
@@ -1455,6 +1479,12 @@
       "count": 1
     },
     {
+      "path": "eebusraw/identity.go",
+      "symbol": "io.WriteString",
+      "rule": "errcheck",
+      "count": 6
+    },
+    {
       "path": "eebusraw/identity_v1.go",
       "symbol": "EndpointIdentityV1",
       "rule": "revive/exported",
@@ -1585,6 +1615,12 @@
       "symbol": "SessionIdentityV1.Validate",
       "rule": "revive/exported",
       "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "io.WriteString",
+      "rule": "errcheck",
+      "count": 4
     },
     {
       "path": "eebusraw/mutation_lab_profile_v1.go",
@@ -2337,6 +2373,24 @@
       "count": 1
     },
     {
+      "path": "internal/eebusadmin/admin_contract_test.go",
+      "symbol": "listener.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusadmin/admin_red_test.go",
+      "symbol": "connection.Close",
+      "rule": "errcheck",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusadmin/admin_red_test.go",
+      "symbol": "transport.close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
       "path": "internal/eebusadmin/transport_unix.go",
       "symbol": "Start",
       "rule": "revive/exported",
@@ -2385,6 +2439,132 @@
       "count": 1
     },
     {
+      "path": "internal/eebusfacade/facade.go",
+      "symbol": "requireConfigurationReaders",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/facade.go",
+      "symbol": "requireServiceReaders",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/first_trust.go",
+      "symbol": "could",
+      "rule": "staticcheck/QF1008",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/first_trust.go",
+      "symbol": "result",
+      "rule": "ineffassign",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_facade.go",
+      "symbol": "connection",
+      "rule": "ineffassign",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_facade.go",
+      "symbol": "this",
+      "rule": "staticcheck/SA4006",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusfacade/issue56_candidate_fsm_red_test.go",
+      "symbol": "restarted.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/issue70_durable_trust_replay_red_test.go",
+      "symbol": "backend.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/issue70_durable_trust_replay_red_test.go",
+      "symbol": "restarted.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/issue83_raw_feature_runtime_red_test.go",
+      "symbol": "containsIssue83String",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045ConfirmCandidate",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "nonce",
+      "rule": "ineffassign",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "proof",
+      "rule": "ineffassign",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "this",
+      "rule": "staticcheck/SA4006",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_coordinator.go",
+      "symbol": "coordinator.setWaitingLocked",
+      "rule": "errcheck",
+      "count": 3
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
+      "symbol": "backend.Close",
+      "rule": "errcheck",
+      "count": 5
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
+      "symbol": "restarted.Close",
+      "rule": "errcheck",
+      "count": 4
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "alternate.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "could",
+      "rule": "staticcheck/QF1008",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "response.Body.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_protected_identity_safety_red_test.go",
+      "symbol": "input.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
       "path": "internal/eebusfacade/operator_admin_v1.go",
       "symbol": "OperatorAdminV1ActiveAction",
       "rule": "revive/exported",
@@ -2418,6 +2598,42 @@
       "path": "internal/eebusfacade/raw_feature_runtime.go",
       "symbol": "RawFeatureBackend",
       "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_reference_key.go",
+      "symbol": "file.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_reference_key.go",
+      "symbol": "lock.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_reference_key.go",
+      "symbol": "mutationDirectory.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_reference_key.go",
+      "symbol": "parent.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_reference_key.go",
+      "symbol": "stateDirectory.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_remediation_test.go",
+      "symbol": "secondCoordinator.Close",
+      "rule": "errcheck",
       "count": 1
     },
     {
@@ -2469,9 +2685,165 @@
       "count": 1
     },
     {
+      "path": "internal/eebusfacade/runtime_integration_test.go",
+      "symbol": "connected",
+      "rule": "ineffassign",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime_protected_identity_native.go",
+      "symbol": "<unnamed>",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime_protected_identity_native.go",
+      "symbol": "coordinator.shutdown",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime_protected_witness_native.go",
+      "symbol": "directory.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime_protected_witness_native.go",
+      "symbol": "file.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime_protected_witness_native.go",
+      "symbol": "lock.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/trust_admin_projection.go",
+      "symbol": "could",
+      "rule": "staticcheck/QF1001",
+      "count": 1
+    },
+    {
       "path": "internal/eebusinteropsmoke/boundary_test.go",
       "symbol": "<package>",
       "rule": "revive/package-comments",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/fake_peer_test.go",
+      "symbol": "response.Body.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "advertisementWithdrawn",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "decodeReplayInput",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "derivedReplayTraceHash",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "finish",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "g19ReplayFixture",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "g19ReplayFixturePath",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "observerReady",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "postWithdrawalTracker",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "recordInboundAttempt",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "replayEvent",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "replayInput",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "replayNegativeObservations",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "replayNegativeObservationsFrom",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "replayTransition",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/report.go",
+      "symbol": "keyedDigestRef",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/report.go",
+      "symbol": "mustRandomBytes",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/report.go",
+      "symbol": "refLabel",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/report.go",
+      "symbol": "referenceKey",
+      "rule": "unused",
       "count": 1
     },
     {
@@ -2484,6 +2856,36 @@
       "path": "internal/eebusmutation/coordinator.go",
       "symbol": "NewCoordinator",
       "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "bindReadToken",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "issue85Bool",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "issue85StateNames",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "readTarget",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "reset",
+      "rule": "unused",
       "count": 1
     },
     {
@@ -2685,6 +3087,24 @@
       "count": 1
     },
     {
+      "path": "internal/eebusstore/capability_diagnostic_test.go",
+      "symbol": "directory.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/commit.go",
+      "symbol": "temporary.Close",
+      "rule": "errcheck",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusstore/control.go",
+      "symbol": "no",
+      "rule": "staticcheck/SA4003",
+      "count": 1
+    },
+    {
       "path": "internal/eebusstore/control_bridge.go",
       "symbol": "AssociationBridge.CommitControl",
       "rule": "revive/exported",
@@ -2781,9 +3201,51 @@
       "count": 1
     },
     {
+      "path": "internal/eebusstore/filesystem.go",
+      "symbol": "file.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/filesystem.go",
+      "symbol": "source.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/filesystem_lock_contract_test.go",
+      "symbol": "fmt.Fprintln",
+      "rule": "errcheck",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusstore/lock_reacquisition_test.go",
+      "symbol": "fmt.Fprintln",
+      "rule": "errcheck",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusstore/store.go",
+      "symbol": "configuredLock.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/store.go",
+      "symbol": "configuredRoot.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
       "path": "internal/toolchainproof/issue101_ship_release_red_test.go",
       "symbol": "<package>",
       "rule": "revive/package-comments",
+      "count": 1
+    },
+    {
+      "path": "issue77_raw_redaction_contract_red_test.go",
+      "symbol": "could",
+      "rule": "staticcheck/QF1011",
       "count": 1
     },
     {
@@ -3373,6 +3835,12 @@
       "symbol": "OpaqueValueV1.UnmarshalJSON",
       "rule": "revive/exported",
       "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "should",
+      "rule": "staticcheck/S1016",
+      "count": 4
     },
     {
       "path": "redacted_snapshot_v1.go",
