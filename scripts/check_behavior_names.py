@@ -22,9 +22,9 @@ CATEGORIES = {"filename", "identifier", "test"}
 TOKENS = re.compile(
     r"(?i:batch|wave|issue|ticket|phase|step|milestone|sprint)[_-]*[0-9]+"
     r"|IPv4(?![0-9])"
-    r"|(?<![A-Z])[A-Z]+[0-9]+(?:[A-F](?![a-z]))?"
-    r"|(?<![a-z])[a-z]{1,2}[0-9]+(?:[a-f](?![a-z]))?"
-    r"|(?<![a-z])[a-z]+[0-9]+(?:[a-f](?![a-z]))?"
+    r"|(?<![A-Z])[A-Z]+[0-9]+(?:[A-F](?![A-Za-z]))?"
+    r"|(?<![a-z])[a-z]{1,2}[0-9]+(?:[a-f](?![A-Za-z]))?"
+    r"|(?<![a-z])[a-z]+[0-9]+(?:[a-f](?![A-Za-z]))?"
 )
 
 

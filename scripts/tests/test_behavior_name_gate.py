@@ -39,6 +39,14 @@ class BehaviorNameGateTests(unittest.TestCase):
         self.source("package sample; func TestFC03Read() {}; func Testfc03Read() {}")
         self.assertEqual(self.check(), [])
 
+    def test_hex_suffix_does_not_consume_a_following_acronym(self):
+        self.source("package sample; func ReadSHA256API() {}; type UTF8ASCII struct{}; "
+                    "func INT64BE() {}; func ReadBASE64Decoder() {}")
+        self.assertEqual(self.check(), [])
+        self.assertEqual([m.group(0) for m in GATE.TOKENS.finditer("SHA256API")], ["SHA256"])
+        self.assertEqual([m.group(0) for m in GATE.TOKENS.finditer("INT64BE")], ["INT64"])
+        self.assertEqual([m.group(0) for m in GATE.TOKENS.finditer("AV22B")], ["AV22B"])
+
     def test_mixed_case_ipv4_matches_the_exact_exception(self):
         self.source("package sample; type IPv4Address struct{}; func ReadIPv4Address() {}")
         self.assertEqual(self.check(), [])
