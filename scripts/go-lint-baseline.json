@@ -1,0 +1,3978 @@
+{
+  "version": 1,
+  "golangci_lint": "2.11.4",
+  "entries": [
+    {
+      "path": "admin_v1.go",
+      "symbol": "ActiveActionV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ActiveActionV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ActiveActionV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ActiveActionV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminErrorCodeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminErrorCodeV1AdminBoundaryUnavailable",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminErrorV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminMutationResultV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminMutationResultV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminMutationResultV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminMutationResultV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminOutcomeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminSelectionResultV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminSelectionResultV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminSelectionResultV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminSelectionResultV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminSnapshotRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminSnapshotRequestV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminSnapshotRequestV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminSnapshotRequestV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminSnapshotV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminSnapshotV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminSnapshotV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminSnapshotV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminViewV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "AdminViewV1Trusted",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "CancelRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "CancelRequestV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "CancelRequestV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "CancelRequestV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "CandidateHandleV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "CandidateHandleV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "CandidateHandleV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "CandidateHandleV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "CandidateV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "CandidateV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "CandidateV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "CandidateV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ClosePairingWindowRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ClosePairingWindowRequestV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ClosePairingWindowRequestV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ClosePairingWindowRequestV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConfirmRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConfirmRequestV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConfirmRequestV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConfirmRequestV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConnectRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConnectRequestV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConnectRequestV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConnectRequestV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConnectResultV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConnectResultV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConnectResultV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConnectResultV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConnectedPartnerV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConnectedPartnerV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConnectedPartnerV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ConnectedPartnerV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "DiscoveredPartnerV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "DiscoveredPartnerV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "DiscoveredPartnerV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "DiscoveredPartnerV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "MutationPreconditionV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "MutationPreconditionV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "MutationPreconditionV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "MutationPreconditionV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ObservationHandleV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ObservationHandleV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ObservationHandleV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "ObservationHandleV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "OpenPairingWindowRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "OpenPairingWindowRequestV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "OpenPairingWindowRequestV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "OpenPairingWindowRequestV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "PartnerHandleV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "PartnerHandleV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "PartnerHandleV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "PartnerHandleV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "RetryTrustedRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "RetryTrustedRequestV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "RetryTrustedRequestV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "RetryTrustedRequestV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "SelectRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "SelectRequestV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "SelectRequestV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "SelectRequestV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "SelectionHandleV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "SelectionHandleV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "SelectionHandleV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "SelectionHandleV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "TrustedPartnerV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "TrustedPartnerV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "TrustedPartnerV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "TrustedPartnerV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "UntrustRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "UntrustRequestV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "UntrustRequestV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "UntrustRequestV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "could",
+      "rule": "staticcheck/QF1001",
+      "count": 3
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "AuthScope",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "AuthScope.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "AuthScope.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "AuthScope.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "AuthScope.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "AuthScopeReadRaw",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ContractVersion",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ContractVersion.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ContractVersion.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ContractVersion.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ContractVersion.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "DigestBytes",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Envelope",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Envelope.ComputeDataHash",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Envelope.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Envelope.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Envelope.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Envelope.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Envelope.WithDataHash",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "EnvelopeContractV1Alpha1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "NewEnvelope",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "NewObject",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "NewReference",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Object",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Object.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Object.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Object.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Object.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ObjectKind",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ObjectKind.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ObjectKind.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ObjectKind.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ObjectKind.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ObjectKindIdentity",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Reference",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Reference.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Reference.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Reference.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Reference.Matches",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Reference.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Scope",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Scope.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Scope.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Scope.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "Scope.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ScopeWholeRoot",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ToolID",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ToolID.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ToolID.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ToolID.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ToolID.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "ToolRuntimeStatus",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "io.WriteString",
+      "rule": "errcheck",
+      "count": 8
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "CaptureProvenanceRuntimeObservation",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "CaptureProvenanceV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "CaptureProvenanceV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "CaptureProvenanceV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "CaptureProvenanceV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "CaptureProvenanceV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "EnvelopeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "EnvelopeV1.ComputeDataHash",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "EnvelopeV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "EnvelopeV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "EnvelopeV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "EnvelopeV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "EnvelopeV1.WithDataHash",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "NewEnvelopeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "NewObjectV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "NewReferenceV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "ObjectV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "ObjectV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "ObjectV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "ObjectV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "ObjectV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "RawSnapshotScopeRoot",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "RawSnapshotScopeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "RawSnapshotScopeV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "RawSnapshotScopeV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "RawSnapshotScopeV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "RawSnapshotScopeV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "ReferenceV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "ReferenceV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "ReferenceV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "ReferenceV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "ReferenceV1.Matches",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "ReferenceV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "io.WriteString",
+      "rule": "errcheck",
+      "count": 5
+    },
+    {
+      "path": "eebusevidence/envelope_v1.go",
+      "symbol": "should",
+      "rule": "staticcheck/S1016",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/contract_validation_v1.go",
+      "symbol": "ValidateFeatureDataGetDataV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/contract_validation_v1.go",
+      "symbol": "ValidateFeatureDataSetRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/contract_validation_v1.go",
+      "symbol": "ValidateFeaturesGetDataV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/contract_validation_v1.go",
+      "symbol": "ValidateMutationGetRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/contract_validation_v1.go",
+      "symbol": "ValidateMutationRollbackRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/contract_validation_v1.go",
+      "symbol": "ValidateMutationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "ContractVersion",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "EndpointIdentity",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "EndpointIdentity.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "EndpointRole",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "EndpointRoleLocal",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "IDKind",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "IDKind.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "IDKind.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "IDKind.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "IDKind.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "IDKindLocalSKI",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "IdentityContractV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "IdentityContractV1Alpha1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "IdentityDocument",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "IdentityDocument.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "IdentityDocument.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "IdentityDocument.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "IdentityDocument.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "MaskTier",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "MaskTierRedacted",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "NewIdentityDocument",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "OpaqueBytes",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "OpaqueValue",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "OpaqueValue.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "OpaqueValue.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "OpaqueValue.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "OpaqueValue.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "PairingObservation",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "PairingObservation.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "PairingState",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "PairingStateUnknown",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "RedactID",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "RedactedID",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "RedactedID.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "RedactedID.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "RedactedID.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "RedactedID.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "SessionIdentity",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "SessionIdentity.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "SessionState",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "SessionStateUnknown",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "UnknownField",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "UnknownField.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "UnknownField.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "UnknownField.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "UnknownField.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "UnknownPath",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "UnknownPath.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "UnknownPath.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "UnknownPath.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "UnknownPath.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "UnknownPathDocument",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity.go",
+      "symbol": "io.WriteString",
+      "rule": "errcheck",
+      "count": 6
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "EndpointIdentityV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "EndpointIdentityV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "EndpointIdentityV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "EndpointIdentityV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "EndpointIdentityV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "EndpointRoleV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "EndpointRoleV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "EndpointRoleV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "EndpointRoleV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "EndpointRoleV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "EndpointRoleV1Local",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "IdentityDocumentV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "IdentityDocumentV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "IdentityDocumentV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "IdentityDocumentV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "IdentityDocumentV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "NewIdentityDocumentV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "SessionIdentityV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "SessionIdentityV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "SessionIdentityV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "SessionIdentityV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "SessionIdentityV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/identity_v1.go",
+      "symbol": "io.WriteString",
+      "rule": "errcheck",
+      "count": 4
+    },
+    {
+      "path": "eebusraw/mutation_lab_profile_v1.go",
+      "symbol": "MutationLabProfileContractV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/mutation_lab_profile_v1.go",
+      "symbol": "MutationLabProfileV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/mutation_lab_profile_v1.go",
+      "symbol": "MutationLabProfileV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/mutation_lab_profile_v1.go",
+      "symbol": "MutationLabProfileV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/mutation_lab_profile_v1.go",
+      "symbol": "MutationLabProfileV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/mutation_lab_profile_v1.go",
+      "symbol": "ValidateMutationLabProfileV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "AuthScopeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "AuthScopeV1RawRead",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ChangeabilityV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ChangeabilityV1Unknown",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ConstraintSetV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ConstraintSetV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ConstraintStatusV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ConstraintStatusV1Unknown",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ErrorCodeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ErrorCodeV1PermissionDenied",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ErrorDetailsV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ErrorDetailsV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ErrorV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ErrorV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureDataGetDataV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureDataGetDataV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureDataGetDataV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureDataGetDataV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureDataGetRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureDataGetRequestV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureLocatorV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureLocatorV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureLocatorV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureLocatorV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureRoleV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureRoleV1Client",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureTargetV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureTargetV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureTargetV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureTargetV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeatureTargetV1.Locator",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeaturesGetDataV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeaturesGetDataV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeaturesGetDataV1.ComputeDataHash",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeaturesGetDataV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeaturesGetDataV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeaturesGetRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FeaturesGetRequestV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FullOperationsV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FunctionDescriptorV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "FunctionDescriptorV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "MaskTierRaw",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "MaximumReadTargetsV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "NewErrorV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ObservationSourceV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ObservationSourceV1Live",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "OpaqueObservationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "OpaqueObservationV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "OpaqueObservationV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "OpaqueObservationV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "OperationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "OperationV1Read",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ProtocolMessageV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ProtocolMessageV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ProtocolMessageV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ProtocolMessageV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadAuthorizationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadAuthorizationV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadAuthorizationV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadFailureV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadFailureV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadFailureV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadFailureV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadObservationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadObservationV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadObservationV1.ComputeDataHash",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadObservationV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadObservationV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadTokenV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadTokenV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ReadTokenV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "RuntimeBindingV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "SourceLayerV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "SourceLayerV1Authorization",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ToolV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ToolV1FeaturesGet",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ValidateFeatureDataGetRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ValidateFeaturesGetRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_feature_v1.go",
+      "symbol": "ValidateReadAuthorizationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "ApplyVerificationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "AuditTransitionV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "ConflictEvidenceV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "ConstraintOverrideV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "FeatureDataSetRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "FeatureDataSetRequestV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "FeatureDataSetRequestV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "ModeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "ModeV1Apply",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "MutationGetRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "MutationRollbackRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "MutationRollbackRequestV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "MutationRollbackRequestV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "MutationStateV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "MutationStateV1Prepared",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "MutationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "NoContactEvidenceV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "NoEffectVerificationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "OutcomeEvidenceV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "RejectionVerificationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "RollbackV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "RollbackVerificationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "ValidateWriteAuthorizationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/raw_mutation_v1.go",
+      "symbol": "WriteAuthorizationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "CanonicalSHA256V1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "DecodeTypedValueV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "ErrSecretDetected",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "HashV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "NewTypedValueV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "TypedValueV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "TypedValueV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "TypedValueV1.ComputeHash",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "TypedValueV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "TypedValueV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "TypedValueV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "TypedValueV1.UnmarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "TypedValueV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "eebusraw/typed_value_v1.go",
+      "symbol": "TypedValueV1.Value",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/apiboundary/comment_policy_test.go",
+      "symbol": "<package>",
+      "rule": "revive/package-comments",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusadmin/admin_contract_test.go",
+      "symbol": "<package>",
+      "rule": "revive/package-comments",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusadmin/admin_contract_test.go",
+      "symbol": "listener.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusadmin/admin_red_test.go",
+      "symbol": "connection.Close",
+      "rule": "errcheck",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusadmin/admin_red_test.go",
+      "symbol": "transport.close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusadmin/transport_unix.go",
+      "symbol": "Start",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/facade.go",
+      "symbol": "APIShapeEvidence",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/facade.go",
+      "symbol": "BoundaryEvidence",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/facade.go",
+      "symbol": "EEBusGoModulePath",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/facade.go",
+      "symbol": "Evidence",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/facade.go",
+      "symbol": "ExpectedControlSurface",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/facade.go",
+      "symbol": "ModulePin",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/facade.go",
+      "symbol": "StaticEvidence",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/facade.go",
+      "symbol": "requireConfigurationReaders",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/facade.go",
+      "symbol": "requireServiceReaders",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/first_trust.go",
+      "symbol": "could",
+      "rule": "staticcheck/QF1008",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/first_trust.go",
+      "symbol": "result",
+      "rule": "ineffassign",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_facade.go",
+      "symbol": "connection",
+      "rule": "ineffassign",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_facade.go",
+      "symbol": "this",
+      "rule": "staticcheck/SA4006",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusfacade/issue56_candidate_fsm_red_test.go",
+      "symbol": "restarted.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/issue70_durable_trust_replay_red_test.go",
+      "symbol": "backend.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/issue70_durable_trust_replay_red_test.go",
+      "symbol": "restarted.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/issue83_raw_feature_runtime_red_test.go",
+      "symbol": "containsIssue83String",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045ConfirmCandidate",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "nonce",
+      "rule": "ineffassign",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "proof",
+      "rule": "ineffassign",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "this",
+      "rule": "staticcheck/SA4006",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_coordinator.go",
+      "symbol": "coordinator.setWaitingLocked",
+      "rule": "errcheck",
+      "count": 3
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
+      "symbol": "backend.Close",
+      "rule": "errcheck",
+      "count": 5
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
+      "symbol": "restarted.Close",
+      "rule": "errcheck",
+      "count": 4
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "alternate.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "could",
+      "rule": "staticcheck/QF1008",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "response.Body.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_protected_identity_safety_red_test.go",
+      "symbol": "input.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/operator_admin_v1.go",
+      "symbol": "OperatorAdminV1ActiveAction",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/operator_admin_v1.go",
+      "symbol": "OperatorAdminV1Backend",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/operator_admin_v1.go",
+      "symbol": "OperatorAdminV1Fact",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/operator_admin_v1.go",
+      "symbol": "OperatorAdminV1Snapshot",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/operator_admin_v1.go",
+      "symbol": "OperatorAdminV1Transition",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_feature_runtime.go",
+      "symbol": "RawFeatureBackend",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_reference_key.go",
+      "symbol": "file.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_reference_key.go",
+      "symbol": "lock.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_reference_key.go",
+      "symbol": "mutationDirectory.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_reference_key.go",
+      "symbol": "parent.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_reference_key.go",
+      "symbol": "stateDirectory.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_remediation_test.go",
+      "symbol": "secondCoordinator.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_runtime.go",
+      "symbol": "RawMutationBackend",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/raw_mutation_runtime.go",
+      "symbol": "RawMutationOutcomeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime.go",
+      "symbol": "Acquire",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime.go",
+      "symbol": "AcquireNativeRuntimeV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime.go",
+      "symbol": "Backend",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime.go",
+      "symbol": "RuntimeConfig",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime.go",
+      "symbol": "RuntimeLabProfile",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime.go",
+      "symbol": "RuntimeRemote",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime_integration_test.go",
+      "symbol": "connected",
+      "rule": "ineffassign",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime_protected_identity_native.go",
+      "symbol": "<unnamed>",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime_protected_identity_native.go",
+      "symbol": "coordinator.shutdown",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime_protected_witness_native.go",
+      "symbol": "directory.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime_protected_witness_native.go",
+      "symbol": "file.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/runtime_protected_witness_native.go",
+      "symbol": "lock.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusfacade/trust_admin_projection.go",
+      "symbol": "could",
+      "rule": "staticcheck/QF1001",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/boundary_test.go",
+      "symbol": "<package>",
+      "rule": "revive/package-comments",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/fake_peer_test.go",
+      "symbol": "response.Body.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "decodeReplayInput",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "derivedReplayTraceHash",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "g19ReplayFixture",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "g19ReplayFixturePath",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "postWithdrawalTracker",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "postWithdrawalTracker.advertisementWithdrawn",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "postWithdrawalTracker.finish",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "postWithdrawalTracker.observerReady",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "postWithdrawalTracker.recordInboundAttempt",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "replayEvent",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "replayInput",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "replayNegativeObservations",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "replayNegativeObservationsFrom",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "replayTransition",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/report.go",
+      "symbol": "keyedDigestRef",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/report.go",
+      "symbol": "mustRandomBytes",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/report.go",
+      "symbol": "refLabel",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/report.go",
+      "symbol": "referenceKey",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/clone.go",
+      "symbol": "<package>",
+      "rule": "revive/package-comments",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/coordinator.go",
+      "symbol": "NewCoordinator",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "issue85Bool",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "issue85EventLog.reset",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "issue85Harness.bindReadToken",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "issue85Harness.readTarget",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "issue85StateNames",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "Coordinator",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "CoordinatorConfig",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "CoordinatorDependencies",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "Executor",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "LabProfile",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "LabProfileContract",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "Persistence",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "PolicyDecision",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "PolicyProvider",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "ReadResult",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "ReadTokenBinding",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "ReadTokenVerifier",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "RuntimeBindingAuthority",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "Scheduler",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "Timer",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/types.go",
+      "symbol": "WriteResult",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusservicebridge/service.go",
+      "symbol": "ListenerPolicy",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusservicebridge/service.go",
+      "symbol": "NewServiceWithOptions",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusservicebridge/service.go",
+      "symbol": "OutgoingAttemptBridgeConfiguration",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusservicebridge/service.go",
+      "symbol": "Service",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusservicebridge/service.go",
+      "symbol": "Service.ListenerTerminal",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusservicebridge/service.go",
+      "symbol": "Service.Shutdown",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusservicebridge/service.go",
+      "symbol": "Service.StartWithPolicy",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusservicebridge/service.go",
+      "symbol": "ServiceOptions",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/acl_darwin.go",
+      "symbol": "<package>",
+      "rule": "revive/package-comments",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/association_bridge.go",
+      "symbol": "AssociationBridge",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/association_bridge.go",
+      "symbol": "AssociationBridge.Close",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/association_bridge.go",
+      "symbol": "AssociationBridge.Commit",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/association_bridge.go",
+      "symbol": "AssociationBridge.Reload",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/association_bridge.go",
+      "symbol": "AssociationBridge.SelectedGeneration",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/association_bridge.go",
+      "symbol": "KeyProvider",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/association_bridge.go",
+      "symbol": "KeyProviderBinding",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/association_bridge.go",
+      "symbol": "OpenAssociationBridge",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/capability_diagnostic_test.go",
+      "symbol": "directory.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/commit.go",
+      "symbol": "temporary.Close",
+      "rule": "errcheck",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusstore/control.go",
+      "symbol": "no",
+      "rule": "staticcheck/SA4003",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "AssociationBridge.CommitControl",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "AssociationBridge.ObserveControlPublication",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "AssociationBridge.PrepareControl",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "AssociationBridge.ReloadControl",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "ControlAssociation",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "ControlAttempt",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "ControlGenerationBinding",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "ControlManifestBinding",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "ControlPendingPublication",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "ControlPublication",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "ControlQuarantine",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "ControlReceipt",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "ControlRecord",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "ControlTombstone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "ControlView",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/control_bridge.go",
+      "symbol": "PreparedControlPublication",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/filesystem.go",
+      "symbol": "file.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/filesystem.go",
+      "symbol": "source.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/filesystem_lock_contract_test.go",
+      "symbol": "fmt.Fprintln",
+      "rule": "errcheck",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusstore/lock_reacquisition_test.go",
+      "symbol": "fmt.Fprintln",
+      "rule": "errcheck",
+      "count": 2
+    },
+    {
+      "path": "internal/eebusstore/store.go",
+      "symbol": "configuredLock.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusstore/store.go",
+      "symbol": "configuredRoot.Close",
+      "rule": "errcheck",
+      "count": 1
+    },
+    {
+      "path": "internal/toolchainproof/issue101_ship_release_red_test.go",
+      "symbol": "<package>",
+      "rule": "revive/package-comments",
+      "count": 1
+    },
+    {
+      "path": "issue77_raw_redaction_contract_red_test.go",
+      "symbol": "could",
+      "rule": "staticcheck/QF1011",
+      "count": 1
+    },
+    {
+      "path": "native_runtime_v2.go",
+      "symbol": "NativeRuntimeV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_runtime_v2.go",
+      "symbol": "NewNativeRuntimeV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeDegradationV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeDeviceV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeEntityV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeFeatureV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeObservationV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativePairingObservationV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeRuntimeObservationV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeServiceV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeSessionV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeSnapshotContractV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeSnapshotMetaV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeSnapshotV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeSnapshotV2.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeSnapshotV2.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeUseCaseV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NativeValueV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "native_snapshot_v2.go",
+      "symbol": "NewNativeSnapshotV2",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationAdmissionV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationAdmissionV1Unknown",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationApplyResultV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationBindingObservationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationBindingV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationCompatibilityV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationCompatibilityV1Unknown",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationConfigurationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationContractV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationContractVersionV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationContributionV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationControlOutcomeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationControlOutcomeV1NotRequested",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationDirectionV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationDirectionV1Send",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationFailureV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationFailureV1None",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationListenerV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationLossCodeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationLossCodeV1Omitted",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationLossV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationPermissionV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationPermissionV1Observe",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationProvenanceV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationStateV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_contract_v1.go",
+      "symbol": "ParticipationStateV1Configured",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_driver_v1.go",
+      "symbol": "ParticipationApplyRequestV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_driver_v1.go",
+      "symbol": "ParticipationApplyResultV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_driver_v1.go",
+      "symbol": "ParticipationConfigurationV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_driver_v1.go",
+      "symbol": "ParticipationContributionV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_driver_v1.go",
+      "symbol": "ParticipationDriverV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_driver_v1.go",
+      "symbol": "ValidateParticipationChangeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "participation_driver_v1.go",
+      "symbol": "ValidateParticipationControlV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_feature_runtime.go",
+      "symbol": "RawFeatureRuntimeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_mutation_runtime.go",
+      "symbol": "RawMutationOutcomeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_mutation_runtime.go",
+      "symbol": "RawMutationOutcomeV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_mutation_runtime.go",
+      "symbol": "RawMutationRuntimeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "DegradationReasonV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "DegradationReasonV1MissingDiscovery",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "DegradationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "DeviceV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "EntityV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "FeatureRoleV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "FeatureRoleV1Unspecified",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "FeatureV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "NewSnapshotV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "ObservedRuntimeStateV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "ObservedRuntimeStateV1Unknown",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "ObservedSessionStateV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "ObservedSessionStateV1Unknown",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "PairingObservationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "RuntimeObservationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "ServiceKindV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "ServiceKindV1Local",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "ServiceV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "SessionV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "SnapshotContractV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "SnapshotMetaV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "SnapshotV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "SnapshotV1.Clone",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "SnapshotV1.ComputeDataHash",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "SnapshotV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "SnapshotV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "SnapshotV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "SnapshotV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_v1.go",
+      "symbol": "UseCaseV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "MetadataV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "MetadataV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "MetadataV1.UnmarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "MetadataValueV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "MetadataValueV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "MetadataValueV1.UnmarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "OpaqueObservationV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "OpaqueScalarV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "OpaqueScalarV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "OpaqueScalarV1.UnmarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "OpaqueValueV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "OpaqueValueV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "OpaqueValueV1.UnmarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "raw_snapshot_value_v1.go",
+      "symbol": "should",
+      "rule": "staticcheck/S1016",
+      "count": 4
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "BuildRedactedSnapshotV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "RedactedDeviceV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "RedactedEntityV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "RedactedFeatureV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "RedactedServiceV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "RedactedSessionV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "RedactedSnapshotMetaV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "RedactedSnapshotV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "RedactedSnapshotV1.Format",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "RedactedSnapshotV1.GoString",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "RedactedSnapshotV1.MarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "RedactedSnapshotV1.UnmarshalJSON",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "RedactedSnapshotV1.Validate",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "redacted_snapshot_v1.go",
+      "symbol": "RedactedUseCaseV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "runtime.go",
+      "symbol": "Config",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "runtime.go",
+      "symbol": "ErrRuntimeDisabled",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "runtime.go",
+      "symbol": "New",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "runtime.go",
+      "symbol": "NewOperatorRuntimeV1",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "runtime.go",
+      "symbol": "PairingPolicy",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "runtime.go",
+      "symbol": "PairingPolicyClosed",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "runtime.go",
+      "symbol": "Remote",
+      "rule": "revive/exported",
+      "count": 1
+    },
+    {
+      "path": "runtime.go",
+      "symbol": "Runtime",
+      "rule": "revive/exported",
+      "count": 1
+    }
+  ]
+}
