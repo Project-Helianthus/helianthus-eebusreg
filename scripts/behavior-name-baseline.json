@@ -1,6 +1,31 @@
 {
   "version": 1,
-  "exceptions": [],
+  "exceptions": [
+    {
+      "token": "SHA256",
+      "reason": "Standard digest algorithm name."
+    },
+    {
+      "token": "V6",
+      "reason": "Standard IP version label."
+    },
+    {
+      "token": "IPV4",
+      "reason": "Standard IP version label."
+    },
+    {
+      "token": "UTF8",
+      "reason": "Standard character encoding name."
+    },
+    {
+      "token": "UTF16",
+      "reason": "Standard character encoding name."
+    },
+    {
+      "token": "INT64",
+      "reason": "Standard fixed-width integer type name."
+    }
+  ],
   "baseline": [
     {
       "path": "admin_v1.go",
@@ -2684,6 +2709,11 @@
     },
     {
       "path": "internal/apiboundary/docs_clean_test.go",
+      "symbol": "msp035FixtureSourceRoot",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/apiboundary/docs_clean_test.go",
       "symbol": "writeIssue129NativeRuntimeV2Fixture",
       "category": "identifier"
     },
@@ -2929,6 +2959,11 @@
     },
     {
       "path": "internal/apiboundary/main.go",
+      "symbol": "msp055RuntimeExports",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/apiboundary/main.go",
       "symbol": "nativeV2",
       "category": "identifier"
     },
@@ -2941,6 +2976,11 @@
       "path": "internal/apiboundary/msp05p_scope_guard_test.go",
       "symbol": "TestMSP05PCodeRepositoryHasNoDocsTree",
       "category": "test"
+    },
+    {
+      "path": "internal/apiboundary/msp05p_scope_guard_test.go",
+      "symbol": "msp05p_scope_guard_test.go",
+      "category": "filename"
     },
     {
       "path": "internal/apiboundary/participation_contract_spec.go",
@@ -2981,6 +3021,21 @@
       "path": "internal/apiboundary/runtime_lifecycle_test.go",
       "symbol": "TestPostM9OperatorAdminV1ContractIsExactlyAllowlisted",
       "category": "test"
+    },
+    {
+      "path": "internal/apiboundary/runtime_lifecycle_test.go",
+      "symbol": "msp055LifecycleExports",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/apiboundary/runtime_lifecycle_test.go",
+      "symbol": "msp05pHistoricalRuntimeExportProjection",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/apiboundary/runtime_lifecycle_test.go",
+      "symbol": "msp05pRuntimeExportInventory",
+      "category": "identifier"
     },
     {
       "path": "internal/apiboundary/runtime_lifecycle_test.go",
@@ -3158,6 +3213,16 @@
       "category": "test"
     },
     {
+      "path": "internal/apisurface/msp045_projection_freeze_test.go",
+      "symbol": "msp045FrozenPublicAPIHash",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/apisurface/msp045_projection_freeze_test.go",
+      "symbol": "msp045_projection_freeze_test.go",
+      "category": "filename"
+    },
+    {
       "path": "internal/apisurface/msp04b_public_freeze_test.go",
       "symbol": "TestMSP04BG16RootSurfaceHasNoMutationOrCandidateDetail",
       "category": "test"
@@ -3168,6 +3233,16 @@
       "category": "test"
     },
     {
+      "path": "internal/apisurface/msp04b_public_freeze_test.go",
+      "symbol": "msp04bFrozenPublicAPIHash",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/apisurface/msp04b_public_freeze_test.go",
+      "symbol": "msp04b_public_freeze_test.go",
+      "category": "filename"
+    },
+    {
       "path": "internal/apisurface/msp04c_public_freeze_test.go",
       "symbol": "TestMSP04CG16PublicGoAPIRemainsAtTheMSP04BFrozenHash",
       "category": "test"
@@ -3176,6 +3251,11 @@
       "path": "internal/apisurface/msp04c_public_freeze_test.go",
       "symbol": "TestMSP04CG16PublicPackagesExposeNoRecoveryMutationSurface",
       "category": "test"
+    },
+    {
+      "path": "internal/apisurface/msp04c_public_freeze_test.go",
+      "symbol": "msp04c_public_freeze_test.go",
+      "category": "filename"
     },
     {
       "path": "internal/apisurface/msp05p_api_v1_cleanup_red_test.go",
@@ -3249,12 +3329,27 @@
     },
     {
       "path": "internal/apisurface/msp05p_initial_v1_attestation_test.go",
+      "symbol": "msp05pRootSurface",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/apisurface/msp05p_initial_v1_attestation_test.go",
       "symbol": "msp05p_initial_v1_attestation_test.go",
       "category": "filename"
     },
     {
       "path": "internal/apisurface/msp05p_initial_v1_attestation_test.go",
+      "symbol": "msp0625RawSymbol",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/apisurface/msp05p_initial_v1_attestation_test.go",
       "symbol": "sortedMSP05PKeys",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusadmin/admin_contract_test.go",
+      "symbol": "msp04bAdminEcho",
       "category": "identifier"
     },
     {
@@ -3280,6 +3375,16 @@
     {
       "path": "internal/eebusadmin/admin_red_test.go",
       "symbol": "assertMSP04BMode",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusadmin/admin_red_test.go",
+      "symbol": "msp04bCanonicalRuntimeDir",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusadmin/admin_red_test.go",
+      "symbol": "msp04bCountingReader",
       "category": "identifier"
     },
     {
@@ -3315,6 +3420,11 @@
     {
       "path": "internal/eebusfacade/first_trust_contract_test.go",
       "symbol": "advanceMSP04BClock",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_contract_test.go",
+      "symbol": "msp04bLateStore",
       "category": "identifier"
     },
     {
@@ -3495,6 +3605,61 @@
     {
       "path": "internal/eebusfacade/first_trust_red_test.go",
       "symbol": "confirmMSP04B",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_red_test.go",
+      "symbol": "msp04bBindings",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_red_test.go",
+      "symbol": "msp04bClock",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_red_test.go",
+      "symbol": "msp04bCoordinatorContract",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_red_test.go",
+      "symbol": "msp04bDifferentFingerprint",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_red_test.go",
+      "symbol": "msp04bEffectsSpy",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_red_test.go",
+      "symbol": "msp04bEventLog",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_red_test.go",
+      "symbol": "msp04bFixture",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_red_test.go",
+      "symbol": "msp04bLabel",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_red_test.go",
+      "symbol": "msp04bRemote",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_red_test.go",
+      "symbol": "msp04bServiceSpy",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_red_test.go",
+      "symbol": "msp04bStoreSpy",
       "category": "identifier"
     },
     {
@@ -5419,6 +5584,166 @@
     },
     {
       "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045AcquireHarness",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045AcquireOptions",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045AddTombstone",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045AdminEndpoint",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045Anchor",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045AssertSamePublicSnapshot",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045AssertStructShape",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045AssertTrust",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045Bridge",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045CandidateRequest",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045Capture",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045Clock",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045ConfirmCandidate",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045InstallPublisher",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045Manifest",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045ManifestFrom",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045Opaque",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045PrepareCandidate",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045ProductSetup",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045RandomBytes",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045RandomSKI",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045RealEnvironment",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045RevocationRequest",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045RunInitialPublication",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045RunToken",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045RuntimeHarness",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045Service",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045SetAnchorOutcomes",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045SetBridgeOutcome",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045StaticOpaque",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045WaitForTrust",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "msp045_projection_red_test.go",
+      "category": "filename"
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
       "symbol": "newMSP045ProductHarness",
       "category": "identifier"
     },
@@ -5451,6 +5776,46 @@
       "path": "internal/eebusfacade/msp04c_admin_red_test.go",
       "symbol": "TestMSP04CAdminRejectsUnknownFieldsAndOperationReuse",
       "category": "test"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_admin_red_test.go",
+      "symbol": "msp04cAdminOutcome",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_admin_red_test.go",
+      "symbol": "msp04cAdminPayload",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_admin_red_test.go",
+      "symbol": "msp04cAdminString",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_admin_red_test.go",
+      "symbol": "msp04cCloneAdminFields",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_admin_red_test.go",
+      "symbol": "msp04cRepairFields",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_admin_red_test.go",
+      "symbol": "msp04cRevocationFields",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_admin_red_test.go",
+      "symbol": "msp04c_admin_red_test.go",
+      "category": "filename"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_backoff.go",
+      "symbol": "msp04c_backoff.go",
+      "category": "filename"
     },
     {
       "path": "internal/eebusfacade/msp04c_backoff_red_test.go",
@@ -5501,6 +5866,16 @@
       "path": "internal/eebusfacade/msp04c_backoff_red_test.go",
       "symbol": "assertMSP04CRetryTuple",
       "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_backoff_red_test.go",
+      "symbol": "msp04c_backoff_red_test.go",
+      "category": "filename"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_coordinator.go",
+      "symbol": "msp04c_coordinator.go",
+      "category": "filename"
     },
     {
       "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
@@ -5589,6 +5964,101 @@
     },
     {
       "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cAnchorSpy",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cAssociation",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cCandidateBinding",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cClock",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cCombinedStates",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cDigest",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cEffectsSpy",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cEventLog",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cFixture",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cManifest",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cOrdinal",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cOrdinalReader",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cPending",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cRepairRequest",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cStoreSpy",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cSubject",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cText",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04cTombstone",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "msp04c_recovery_red_test.go",
+      "category": "filename"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
       "symbol": "newMSP04CEffectsSpy",
       "category": "identifier"
     },
@@ -5601,6 +6071,11 @@
       "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
       "symbol": "openMSP04CCandidate",
       "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_revocation_repair.go",
+      "symbol": "msp04c_revocation_repair.go",
+      "category": "filename"
     },
     {
       "path": "internal/eebusfacade/msp04c_revocation_repair_red_test.go",
@@ -5664,6 +6139,26 @@
     },
     {
       "path": "internal/eebusfacade/msp04c_revocation_repair_red_test.go",
+      "symbol": "msp04cContainsTombstone",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_revocation_repair_red_test.go",
+      "symbol": "msp04cExactRepairRequest",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_revocation_repair_red_test.go",
+      "symbol": "msp04cRevocationRequest",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_revocation_repair_red_test.go",
+      "symbol": "msp04c_revocation_repair_red_test.go",
+      "category": "filename"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_revocation_repair_red_test.go",
       "symbol": "waitMSP04CResult",
       "category": "identifier"
     },
@@ -5683,6 +6178,11 @@
       "category": "identifier"
     },
     {
+      "path": "internal/eebusfacade/msp04c_runtime_integration_test.go",
+      "symbol": "msp04c_runtime_integration_test.go",
+      "category": "filename"
+    },
+    {
       "path": "internal/eebusfacade/msp04c_types.go",
       "symbol": "bindingSHA256",
       "category": "identifier"
@@ -5691,6 +6191,11 @@
       "path": "internal/eebusfacade/msp04c_types.go",
       "symbol": "expectedManifestSHA256",
       "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_types.go",
+      "symbol": "msp04c_types.go",
+      "category": "filename"
     },
     {
       "path": "internal/eebusfacade/msp04cr2_bridge_adoption_red_test.go",
@@ -5934,6 +6439,51 @@
     },
     {
       "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
+      "symbol": "msp04crArtifact",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
+      "symbol": "msp04crEventLog",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
+      "symbol": "msp04crMonotonicClock",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
+      "symbol": "msp04crRecordingAnchor",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
+      "symbol": "msp04crRetrySnapshot",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
+      "symbol": "msp04crRetryTrace",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
+      "symbol": "msp04crRuntimeFixture",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
+      "symbol": "msp04crService",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
+      "symbol": "msp04cr_runtime_composition_red_test.go",
+      "category": "filename"
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr_runtime_composition_red_test.go",
       "symbol": "newMSP04CRRuntimeFixture",
       "category": "identifier"
     },
@@ -5956,6 +6506,11 @@
       "path": "internal/eebusfacade/msp05p_dependency_attestation_red_test.go",
       "symbol": "TestMSP05PRuntimeEvidencePinsReviewedEEBusGo",
       "category": "test"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_dependency_attestation_red_test.go",
+      "symbol": "msp05p_dependency_attestation_red_test.go",
+      "category": "filename"
     },
     {
       "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
@@ -5981,6 +6536,46 @@
       "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
       "symbol": "TestMSP05PServiceBackendReportsListenerTerminalAndClaimsPublisherOnce",
       "category": "test"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "msp05pOrderedAdminEndpoint",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "msp05pProductionConfig",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "msp05pProductionRun",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "msp05pProductionScopedEndpoint",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "msp05pProductionStateDigest",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "msp05pProductionWaitRun",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "msp05pScopedService",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
+      "symbol": "msp05p_production_runtime_red_test.go",
+      "category": "filename"
     },
     {
       "path": "internal/eebusfacade/msp05p_production_runtime_red_test.go",
@@ -6013,6 +6608,11 @@
       "category": "identifier"
     },
     {
+      "path": "internal/eebusfacade/msp05p_protected_identity_red_test.go",
+      "symbol": "msp05p_protected_identity_red_test.go",
+      "category": "filename"
+    },
+    {
       "path": "internal/eebusfacade/msp05p_protected_identity_review_red_test.go",
       "symbol": "TestMSP05PProtectedIdentityReviewDurableAnchorSurvivesProviderRestart",
       "category": "test"
@@ -6031,6 +6631,51 @@
       "path": "internal/eebusfacade/msp05p_protected_identity_review_red_test.go",
       "symbol": "TestMSP05PProtectedIdentityReviewSamePathDirectoryRecreationRetainsIdentity",
       "category": "test"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_protected_identity_review_red_test.go",
+      "symbol": "msp05pReviewCopyStateTree",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_protected_identity_review_red_test.go",
+      "symbol": "msp05pReviewCopyStateTreeInto",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_protected_identity_review_red_test.go",
+      "symbol": "msp05pReviewDigest",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_protected_identity_review_red_test.go",
+      "symbol": "msp05pReviewPendingPublication",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_protected_identity_review_red_test.go",
+      "symbol": "msp05pReviewReplaceStateTreeContents",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_protected_identity_review_red_test.go",
+      "symbol": "msp05p_protected_identity_review_red_test.go",
+      "category": "filename"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_protected_identity_review_red_test.go",
+      "symbol": "provider1",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_protected_identity_review_red_test.go",
+      "symbol": "provider2",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_protected_identity_review_red_test.go",
+      "symbol": "provider3",
+      "category": "identifier"
     },
     {
       "path": "internal/eebusfacade/msp05p_protected_identity_safety_red_test.go",
@@ -6056,6 +6701,16 @@
       "path": "internal/eebusfacade/msp05p_protected_identity_safety_red_test.go",
       "symbol": "copyMSP05PStoreTree",
       "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_protected_identity_safety_red_test.go",
+      "symbol": "msp05pLoadError",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/msp05p_protected_identity_safety_red_test.go",
+      "symbol": "msp05p_protected_identity_safety_red_test.go",
+      "category": "filename"
     },
     {
       "path": "internal/eebusfacade/native_runtime_v2.go",
@@ -6864,6 +7519,11 @@
     },
     {
       "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "hex40Pattern",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
       "symbol": "hmacSHA256RefPattern",
       "category": "identifier"
     },
@@ -6935,6 +7595,66 @@
     {
       "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
       "symbol": "compactMSP04CCommands",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cArtifact",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cArtifactCase",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cArtifactCommand",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cArtifactInput",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cArtifactToolchain",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cCaseIDAllowed",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cCommandAPIFreeze",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cCommandAllowed",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cCommandDiffCheck",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cCommandUnit",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cCommitPattern",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cExpectedSubcase",
       "category": "identifier"
     },
     {
@@ -7059,6 +7779,56 @@
     },
     {
       "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cOutcomeAllowed",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cPassStatus",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cReasonAllowed",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cRequiredSubcases",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cSeededLabel",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cStateAllowed",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cStatusAllowed",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cSubcase",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04cSubcaseObservation",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
+      "symbol": "msp04c_artifact.go",
+      "category": "filename"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
       "symbol": "newMSP04CArtifact",
       "category": "identifier"
     },
@@ -7099,6 +7869,11 @@
     },
     {
       "path": "internal/eebusinteropsmoke/msp04c_report_red_test.go",
+      "symbol": "msp04c_report_red_test.go",
+      "category": "filename"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04c_report_red_test.go",
       "symbol": "validMSP04CArtifactInput",
       "category": "identifier"
     },
@@ -7106,6 +7881,16 @@
       "path": "internal/eebusinteropsmoke/msp04cr_runtime_composition_red_test.go",
       "symbol": "TestMSP04CRGatesConsumeExecutedProductionComposition",
       "category": "test"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04cr_runtime_composition_red_test.go",
+      "symbol": "msp04crExecutedArtifact",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusinteropsmoke/msp04cr_runtime_composition_red_test.go",
+      "symbol": "msp04cr_runtime_composition_red_test.go",
+      "category": "filename"
     },
     {
       "path": "internal/eebusinteropsmoke/msp04cr_runtime_composition_red_test.go",
@@ -8128,6 +8913,11 @@
       "category": "identifier"
     },
     {
+      "path": "internal/eebusstore/msp045_projection_schema_freeze_test.go",
+      "symbol": "msp045_projection_schema_freeze_test.go",
+      "category": "filename"
+    },
+    {
       "path": "internal/eebusstore/msp04b_policy_boundary_test.go",
       "symbol": "TestMSP04BStoreRemainsMechanicalAndPolicyFree",
       "category": "test"
@@ -8136,6 +8926,11 @@
       "path": "internal/eebusstore/msp04b_policy_boundary_test.go",
       "symbol": "TestMSP04CAssociationBridgePreservesFrozenSurfaceAndAddsMechanicalControl",
       "category": "test"
+    },
+    {
+      "path": "internal/eebusstore/msp04b_policy_boundary_test.go",
+      "symbol": "msp04b_policy_boundary_test.go",
+      "category": "filename"
     },
     {
       "path": "internal/eebusstore/msp04c_control_red_test.go",
@@ -8161,6 +8956,21 @@
       "path": "internal/eebusstore/msp04c_control_red_test.go",
       "symbol": "TestMSP04CStoreProductionCodeContainsNoRecoveryPolicy",
       "category": "test"
+    },
+    {
+      "path": "internal/eebusstore/msp04c_control_red_test.go",
+      "symbol": "msp04cStoreControlFixture",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusstore/msp04c_control_red_test.go",
+      "symbol": "msp04cStoreOrdinal",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusstore/msp04c_control_red_test.go",
+      "symbol": "msp04c_control_red_test.go",
+      "category": "filename"
     },
     {
       "path": "internal/eebusstore/msp04cr2_attempt_reservation_red_test.go",
@@ -8376,6 +9186,11 @@
       "path": "internal/toolchainproof/msp05p_dependency_attestation_red_test.go",
       "symbol": "TestMSP05PToolchainScriptDeclaresReviewedRuntimeClosure",
       "category": "test"
+    },
+    {
+      "path": "internal/toolchainproof/msp05p_dependency_attestation_red_test.go",
+      "symbol": "msp05p_dependency_attestation_red_test.go",
+      "category": "filename"
     },
     {
       "path": "issue120_admin_v1_closure_red_test.go",
@@ -10055,6 +10870,11 @@
     {
       "path": "runtime_configuration_contract_test.go",
       "symbol": "assertMSP05PStructFields",
+      "category": "identifier"
+    },
+    {
+      "path": "runtime_configuration_contract_test.go",
+      "symbol": "msp05pField",
       "category": "identifier"
     },
     {

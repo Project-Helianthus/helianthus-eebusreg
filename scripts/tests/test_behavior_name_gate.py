@@ -138,6 +138,21 @@ func Generic[XY92 any]() {}
         self.source("package modbus; func CaseCX74() {}")
         self.assertTrue(self.check())
 
+    def test_lowercase_delivery_codes_are_rejected(self):
+        for name in ["msp06Read", "msp06_read.go", "hex40Pattern", "TestMsp06Read"]:
+            with self.subTest(name=name):
+                entry = {"path": name, "symbol": name, "category": "filename"}
+                self.assertTrue(GATE.violations([entry], set()))
+        self.source("package modbus; func msp06Read() {}")
+        self.assertIn(("read.go", "msp06Read", "identifier"), self.check())
+
+    def test_standard_vocabulary_is_classified(self):
+        vocabulary, _ = GATE.load_policy(GATE.BASELINE)
+        for name in ["ReadSHA256Digest", "IPv6Address", "UTF8Valid", "sha256Hex"]:
+            with self.subTest(name=name):
+                entry = {"path": "read.go", "symbol": name, "category": "identifier"}
+                self.assertEqual(GATE.violations([entry], vocabulary), [])
+
     def test_no_wildcard_baseline(self):
         self.data["baseline"] = [{"path": "*.go", "symbol": "XY73", "category": "identifier"}]
         self.save()
