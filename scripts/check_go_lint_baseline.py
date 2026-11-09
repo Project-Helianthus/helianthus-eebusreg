@@ -65,9 +65,10 @@ def diagnostic_key(issue):
             if match:
                 return path, match[1], linter
         elif linter == 'unused':
-            match = re.fullmatch(r'.*\b([A-Za-z_][A-Za-z0-9_.]*) is unused', text)
+            match = re.fullmatch(r'(?:func|var|const|type|field) ((?:\(\*?[A-Za-z_][A-Za-z0-9_]*\)|[A-Za-z_][A-Za-z0-9_]*)(?:\.[A-Za-z_][A-Za-z0-9_]*)?) is unused', text)
             if match:
-                return path, match[1], linter
+                symbol = match[1].translate(str.maketrans('', '', '()*'))
+                return path, symbol, linter
         elif linter in {'staticcheck', 'govet'}:
             code_pattern = r'[A-Z]+[0-9]+' if linter == 'staticcheck' else r'[A-Za-z_][A-Za-z0-9_]*'
             match = re.fullmatch('(' + code_pattern + r'):\s*(.+)', text)

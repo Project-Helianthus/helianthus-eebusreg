@@ -104,6 +104,18 @@ class BaselineTests(unittest.TestCase):
                 self.assertTrue(guard.compare({key: 2}, {key: 3}))
                 self.assertTrue(guard.compare({key: 2}, {}))
 
+    def test_unused_receiver_identity(self):
+        for receiver in ('Reader', '(*Reader)', '(Reader)'):
+            with self.subTest(receiver=receiver):
+                key = self.diagnostic('unused', f'func {receiver}.readValue is unused')
+                self.assertEqual(('sample.go', 'Reader.readValue', 'unused'), key)
+                expected = self.load([self.row(symbol=key[1], rule='unused', count=1)])
+                other = self.diagnostic('unused', 'func (*OtherReader).readValue is unused')
+                self.assertNotEqual(key, other)
+                errors = guard.compare(expected, {other: 1})
+                self.assertTrue(any('new or increased debt' in error for error in errors))
+                self.assertTrue(any('unused exemption' in error for error in errors))
+
     def test_unbaselined_linter(self):
         for linter in ('other', 'errcheck', 'ineffassign', 'unused', 'staticcheck', 'govet'):
             with self.subTest(linter=linter), self.assertRaises(ValueError):

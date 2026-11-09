@@ -2740,12 +2740,6 @@
     },
     {
       "path": "internal/eebusinteropsmoke/live_gate.go",
-      "symbol": "advertisementWithdrawn",
-      "rule": "unused",
-      "count": 1
-    },
-    {
-      "path": "internal/eebusinteropsmoke/live_gate.go",
       "symbol": "decodeReplayInput",
       "rule": "unused",
       "count": 1
@@ -2753,12 +2747,6 @@
     {
       "path": "internal/eebusinteropsmoke/live_gate.go",
       "symbol": "derivedReplayTraceHash",
-      "rule": "unused",
-      "count": 1
-    },
-    {
-      "path": "internal/eebusinteropsmoke/live_gate.go",
-      "symbol": "finish",
       "rule": "unused",
       "count": 1
     },
@@ -2776,19 +2764,31 @@
     },
     {
       "path": "internal/eebusinteropsmoke/live_gate.go",
-      "symbol": "observerReady",
-      "rule": "unused",
-      "count": 1
-    },
-    {
-      "path": "internal/eebusinteropsmoke/live_gate.go",
       "symbol": "postWithdrawalTracker",
       "rule": "unused",
       "count": 1
     },
     {
       "path": "internal/eebusinteropsmoke/live_gate.go",
-      "symbol": "recordInboundAttempt",
+      "symbol": "postWithdrawalTracker.advertisementWithdrawn",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "postWithdrawalTracker.finish",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "postWithdrawalTracker.observerReady",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusinteropsmoke/live_gate.go",
+      "symbol": "postWithdrawalTracker.recordInboundAttempt",
       "rule": "unused",
       "count": 1
     },
@@ -2860,31 +2860,31 @@
     },
     {
       "path": "internal/eebusmutation/issue85_test_helpers_test.go",
-      "symbol": "bindReadToken",
-      "rule": "unused",
-      "count": 1
-    },
-    {
-      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
       "symbol": "issue85Bool",
       "rule": "unused",
       "count": 1
     },
     {
       "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "issue85EventLog.reset",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "issue85Harness.bindReadToken",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "issue85Harness.readTarget",
+      "rule": "unused",
+      "count": 1
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
       "symbol": "issue85StateNames",
-      "rule": "unused",
-      "count": 1
-    },
-    {
-      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
-      "symbol": "readTarget",
-      "rule": "unused",
-      "count": 1
-    },
-    {
-      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
-      "symbol": "reset",
       "rule": "unused",
       "count": 1
     },
