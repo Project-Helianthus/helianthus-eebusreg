@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "violations": [
+    {
+      "path": "admin_v1.go",
+      "symbol": "<file>",
+      "metric": "file_lines",
+      "value": 1713
+    },
+    {
+      "path": "admin_v1.go",
+      "symbol": "<file>",
+      "metric": "functions_per_file",
+      "value": 188
+    },
+    {
+      "path": "admin_v1_red_test.go",
+      "symbol": "<file>",
+      "metric": "file_lines",
+      "value": 1812
+    },
+    {
+      "path": "admin_v1_red_test.go",
+      "symbol": "<file>",
+      "metric": "functions_per_file",
+      "value": 106
+    },
+    {
+      "path": "eebusevidence/envelope.go",
+      "symbol": "<file>",
+      "metric": "functions_per_file",
+      "value": 66
+    },
+    {
+      "path": "eebusraw/contract_validation_v1.go",
+      "symbol": "<file>",
+      "metric": "file_lines",
+      "value": 1159
+    },
+    {
+      "path": "internal/apiboundary/docs_clean_test.go",
+      "symbol": "<file>",
+      "metric": "functions_per_file",
+      "value": 83
+    },
+    {
+      "path": "internal/apiboundary/docs_clean_test.go",
+      "symbol": "TestDocsCleanOwnershipContract",
+      "metric": "function_lines",
+      "value": 388
+    },
+    {
+      "path": "internal/apiboundary/main.go",
+      "symbol": "<file>",
+      "metric": "file_lines",
+      "value": 2390
+    },
+    {
+      "path": "internal/apiboundary/main.go",
+      "symbol": "inspectGoBoundary",
+      "metric": "function_lines",
+      "value": 175
+    },
+    {
+      "path": "internal/apiboundary/stable_contract_specs.go",
+      "symbol": "stableReadAuthorizationV1ContractSpec",
+      "metric": "function_lines",
+      "value": 360
+    },
+    {
+      "path": "internal/apiboundary/stable_contract_specs.go",
+      "symbol": "stableSnapshotV1ContractSpec",
+      "metric": "function_lines",
+      "value": 219
+    },
+    {
+      "path": "internal/eebusfacade/first_trust.go",
+      "symbol": "<file>",
+      "metric": "file_lines",
+      "value": 1581
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_facade.go",
+      "symbol": "<file>",
+      "metric": "file_lines",
+      "value": 1246
+    },
+    {
+      "path": "internal/eebusfacade/first_trust_red_test.go",
+      "symbol": "<file>",
+      "metric": "functions_per_file",
+      "value": 62
+    },
+    {
+      "path": "internal/eebusfacade/issue60_transient_trust_red_test.go",
+      "symbol": "<file>",
+      "metric": "functions_per_file",
+      "value": 78
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "<file>",
+      "metric": "file_lines",
+      "value": 1539
+    },
+    {
+      "path": "internal/eebusfacade/msp045_projection_red_test.go",
+      "symbol": "<file>",
+      "metric": "functions_per_file",
+      "value": 154
+    },
+    {
+      "path": "internal/eebusfacade/msp04c_recovery_red_test.go",
+      "symbol": "<file>",
+      "metric": "functions_per_file",
+      "value": 89
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr2_predial.go",
+      "symbol": "(*firstTrustCoordinator).prepareOutgoingAttemptLocked",
+      "metric": "function_lines",
+      "value": 155
+    },
+    {
+      "path": "internal/eebusfacade/msp04cr2_predial.go",
+      "symbol": "<file>",
+      "metric": "file_lines",
+      "value": 1178
+    },
+    {
+      "path": "internal/eebusfacade/operator_admin_v1.go",
+      "symbol": "<file>",
+      "metric": "file_lines",
+      "value": 1574
+    },
+    {
+      "path": "internal/eebusfacade/operator_admin_v1.go",
+      "symbol": "<file>",
+      "metric": "functions_per_file",
+      "value": 74
+    },
+    {
+      "path": "internal/eebusfacade/raw_feature_runtime.go",
+      "symbol": "<file>",
+      "metric": "file_lines",
+      "value": 1479
+    },
+    {
+      "path": "internal/eebusfacade/runtime.go",
+      "symbol": "<file>",
+      "metric": "file_lines",
+      "value": 2517
+    },
+    {
+      "path": "internal/eebusfacade/runtime.go",
+      "symbol": "<file>",
+      "metric": "functions_per_file",
+      "value": 112
+    },
+    {
+      "path": "internal/eebusfacade/runtime.go",
+      "symbol": "acquireRuntimeWithSnapshotSerializer",
+      "metric": "function_lines",
+      "value": 239
+    },
+    {
+      "path": "internal/eebusmutation/coordinator.go",
+      "symbol": "(*rawMutationCoordinator).FeaturesDataSet",
+      "metric": "function_lines",
+      "value": 207
+    },
+    {
+      "path": "internal/eebusmutation/issue85_test_helpers_test.go",
+      "symbol": "<file>",
+      "metric": "functions_per_file",
+      "value": 107
+    },
+    {
+      "path": "participation_contract_v1_test.go",
+      "symbol": "<file>",
+      "metric": "functions_per_file",
+      "value": 64
+    }
+  ]
+}

@@ -1,0 +1,110 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"go/ast"
+	"go/format"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+type request struct {
+	Root  string
+	Paths []string
+}
+type measurement struct {
+	Path   string `json:"path"`
+	Symbol string `json:"symbol"`
+	Metric string `json:"metric"`
+	Value  int    `json:"value"`
+}
+type visitor struct {
+	set          *token.FileSet
+	path, symbol string
+	ordinal      int
+	values       map[string]int
+	rows         *[]measurement
+	count        *int
+}
+
+func (v *visitor) Visit(n ast.Node) ast.Visitor {
+	if n == nil {
+		return nil
+	}
+	symbol := ""
+	switch node := n.(type) {
+	case *ast.FuncDecl:
+		symbol = node.Name.Name
+		if node.Recv != nil {
+			var b bytes.Buffer
+			if err := format.Node(&b, v.set, node.Recv.List[0].Type); err != nil {
+				panic(err)
+			}
+			symbol = "(" + b.String() + ")." + symbol
+		}
+		if symbol == "init" {
+			v.ordinal++
+			symbol = fmt.Sprintf("init#%d", v.ordinal)
+		}
+	case *ast.ValueSpec:
+		names := []string{}
+		for _, name := range node.Names {
+			names = append(names, name.Name)
+		}
+		if v.values == nil {
+			v.values = map[string]int{}
+		}
+		name := strings.Join(names, ",")
+		v.values[name]++
+		symbol := fmt.Sprintf("%s/value:%s#%d", v.symbol, name, v.values[name])
+		return &visitor{v.set, v.path, symbol, 0, nil, v.rows, v.count}
+	case *ast.FuncLit:
+		v.ordinal++
+		symbol = fmt.Sprintf("%s/literal#%d", v.symbol, v.ordinal)
+	}
+	if symbol == "" {
+		return v
+	}
+	*v.count++
+	span := v.set.PositionFor(n.End(), false).Line - v.set.PositionFor(n.Pos(), false).Line + 1
+	*v.rows = append(*v.rows, measurement{v.path, symbol, "function_lines", span})
+	return &visitor{v.set, v.path, symbol, 0, nil, v.rows, v.count}
+}
+func run() error {
+	var req request
+	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
+		return err
+	}
+	rows := []measurement{}
+	for _, path := range req.Paths {
+		data, err := os.ReadFile(filepath.Join(req.Root, filepath.FromSlash(path)))
+		if err != nil {
+			return err
+		}
+		set := token.NewFileSet()
+		file, err := parser.ParseFile(set, path, data, parser.AllErrors)
+		if err != nil {
+			return err
+		}
+		lines := bytes.Count(data, []byte("\n"))
+		if len(data) > 0 && data[len(data)-1] != '\n' {
+			lines++
+		}
+		rows = append(rows, measurement{path, "<file>", "file_lines", lines})
+		count := 0
+		ast.Walk(&visitor{set, path, "<file>", 0, nil, &rows, &count}, file)
+		rows = append(rows, measurement{path, "<file>", "functions_per_file", count})
+	}
+	return json.NewEncoder(os.Stdout).Encode(rows)
+}
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}

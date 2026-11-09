@@ -1,0 +1,20 @@
+name: Go size ratchet
+on:
+  pull_request:
+  push:
+permissions:
+  contents: read
+jobs:
+  size-ratchet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Test size ratchet
+        run: python3 -m unittest discover -s scripts/tests -p test_size_ratchet.py -v
+      - name: Check measured debt
+        run: python3 scripts/check_size_ratchet.py
