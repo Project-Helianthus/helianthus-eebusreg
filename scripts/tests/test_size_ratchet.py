@@ -74,14 +74,52 @@ class SizeRatchetTests(unittest.TestCase):
                             cases += 1
         self.assertEqual(cases, 36)
 
-    def test_debt_reduction_deletion_and_new_violation(self):
-        debt = {"path": "runtime.go", "symbol": "F", "metric": "function_lines", "value": 170}
-        baseline = self.baseline([debt])
-        for value in (170, 169, 151, 150, 80):
-            self.assertFalse(guard.evaluate([dict(debt, value=value)], baseline)[1])
-        self.assertFalse(guard.evaluate([], baseline)[1])
-        self.assertTrue(guard.evaluate([debt], [])[1])
-        self.assertTrue(guard.evaluate([dict(debt, value=171)], baseline)[1])
+    def test_debt_reduction_requires_tightening_before_regrowth(self):
+        cases = (("file_lines", "<file>", 1713, 1200, 1000),
+                 ("function_lines", "F", 170, 160, 150),
+                 ("functions_per_file", "<file>", 70, 65, 60))
+        for metric, symbol, original, reduced, cleared in cases:
+            with self.subTest(metric=metric):
+                debt = {"path": "runtime.go", "symbol": symbol,
+                        "metric": metric, "value": original}
+                baseline = self.baseline([debt])
+                self.assertFalse(guard.evaluate([debt], baseline)[1])
+                smaller = dict(debt, value=reduced)
+                with self.assertRaisesRegex(ValueError, "tighten or remove"):
+                    guard.evaluate([smaller], baseline)
+                tightened = self.baseline([smaller])
+                self.assertFalse(guard.evaluate([smaller], tightened)[1])
+                self.assertEqual(guard.evaluate([debt], tightened)[1], [debt])
+                for rows in ([dict(debt, value=cleared)], []):
+                    with self.assertRaisesRegex(ValueError, "tighten or remove"):
+                        guard.evaluate(rows, baseline)
+                    self.assertFalse(guard.evaluate(rows, [])[1])
+                self.assertEqual(guard.evaluate([debt], [])[1], [debt])
+                self.assertEqual(guard.evaluate([dict(debt, value=original + 1)],
+                                                baseline)[1],
+                                 [dict(debt, value=original + 1)])
+
+    def test_directory_read_errors_are_fatal(self):
+        self.write("visible.go", "package sample\n")
+        self.write("internal/hidden.go", "package sample\n")
+        real_scandir = guard.os.scandir
+
+        def unreadable(path):
+            if Path(path) == self.tree / "internal":
+                raise PermissionError("unreadable internal directory")
+            return real_scandir(path)
+
+        with patch.object(guard.os, "scandir", side_effect=unreadable):
+            with self.assertRaisesRegex(PermissionError, "unreadable internal"):
+                guard.discover(self.tree)
+            self.write("scripts/size-baseline.json", '{"version":1,"violations":[]}')
+            errors = io.StringIO()
+            with patch("sys.argv", ["guard", "--root", str(self.tree)]), \
+                    patch.object(guard, "build_parser") as build, \
+                    contextlib.redirect_stderr(errors):
+                self.assertEqual(guard.main(), 2)
+            build.assert_not_called()
+            self.assertIn("unreadable internal", errors.getvalue())
 
     def test_each_identity_and_value_field_is_independent(self):
         debt = {"path": "runtime.go", "symbol": "F", "metric": "function_lines", "value": 170}
@@ -94,10 +132,13 @@ class SizeRatchetTests(unittest.TestCase):
         }
         for field, changed in mutations.items():
             with self.subTest(field=field):
-                self.assertEqual(guard.evaluate([changed], baseline)[1], [changed])
+                if field != "value":
+                    with self.assertRaisesRegex(ValueError, "tighten or remove"):
+                        guard.evaluate([changed], baseline)
+                self.assertEqual(guard.evaluate([debt, changed], baseline)[1], [changed])
         # Vary metric alone on a valid file identity as well.
         file_debt = dict(debt, symbol="<file>", metric="file_lines", value=1001)
-        self.assertTrue(guard.evaluate([dict(file_debt, metric="functions_per_file")],
+        self.assertTrue(guard.evaluate([file_debt, dict(file_debt, metric="functions_per_file")],
                                        self.baseline([file_debt]))[1])
 
     def test_malformed_baselines_fail_closed(self):

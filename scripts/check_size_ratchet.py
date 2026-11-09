@@ -5,7 +5,7 @@ Named functions and methods use their declared identity. Literals use a lexical
 ordinal within their enclosing function or value declaration; inserting a sibling
 may change its identity and therefore requires clearing any resulting hard debt.
 Generated Go is measured too: a generated header alone proves no ownership.
-Existing baseline debt remains release debt; this guard only prevents growth.
+Existing baseline debt remains release debt; reductions must tighten the baseline.
 """
 import argparse
 import json
@@ -39,7 +39,10 @@ def key(row):
 
 def discover(root):
     paths, exclusions = [], []
-    for parent, dirs, files in os.walk(root, followlinks=False):
+    def traversal_error(error):
+        raise error
+
+    for parent, dirs, files in os.walk(root, followlinks=False, onerror=traversal_error):
         for name in sorted(dirs[:]):
             path = Path(parent) / name
             rel = path.relative_to(root).as_posix()
@@ -121,6 +124,12 @@ def load_baseline(path):
 
 def evaluate(rows, baseline):
     allowed = {key(row): row["value"] for row in baseline}
+    measured = {key(row): row["value"] for row in rows}
+    stale = [row for row in baseline
+             if key(row) not in measured or measured[key(row)] < row["value"]]
+    if stale:
+        raise ValueError("tighten or remove reduced/deleted baseline debt: "
+                         + json.dumps(stale, sort_keys=True))
     soft, failures = [], []
     for row in rows:
         low, high = limits(row)
