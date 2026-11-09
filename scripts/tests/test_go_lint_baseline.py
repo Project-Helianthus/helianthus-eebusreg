@@ -1,6 +1,7 @@
 """Synthetic tests for finite diagnostic identities and tool failures."""
 import importlib.util
 import json
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -124,3 +125,20 @@ class BaselineTests(unittest.TestCase):
                 self.load([self.row(path=path)])
         with self.assertRaises(ValueError):
             self.load([self.row(symbol='*')])
+
+    def test_baseline_platform_matches_workflow_runner(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / '.github' / 'workflows' / 'go-readability.yml').read_text()
+        self.assertIn('runs-on: macos-latest', workflow)
+        self.assertNotIn('ubuntu', workflow)
+        entries = guard.load_baseline(root / 'scripts' / 'go-lint-baseline.json')
+        for path, _symbol, _rule in entries:
+            source = root / path
+            self.assertTrue(source.is_file(), path)
+            first = source.read_text().splitlines()[0]
+            if first.startswith('//go:build'):
+                expression = first[len('//go:build'):].strip()
+                tags = {'darwin', 'cgo', 'unix'}
+                evaluated = re.sub(r'[A-Za-z_][A-Za-z0-9_.]*', lambda m: str(m[0] in tags), expression)
+                evaluated = evaluated.replace('&&', ' and ').replace('||', ' or ').replace('!', ' not ')
+                self.assertTrue(eval(evaluated, {'__builtins__': {}}, {'True': True, 'False': False}), path)
