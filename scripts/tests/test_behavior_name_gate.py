@@ -39,6 +39,13 @@ class BehaviorNameGateTests(unittest.TestCase):
         self.source("package sample; func TestFC03Read() {}; func Testfc03Read() {}")
         self.assertEqual(self.check(), [])
 
+    def test_mixed_case_ipv4_matches_the_exact_exception(self):
+        self.source("package sample; type IPv4Address struct{}; func ReadIPv4Address() {}")
+        self.assertEqual(self.check(), [])
+        self.data["exceptions"] = [e for e in self.data["exceptions"] if e["token"] != "IPV4"]
+        self.save()
+        self.assertEqual(len(self.check()), 2)
+
     def test_payloads_comments_and_uses_are_not_declarations(self):
         self.source('''package modbus
 // XY73 and Batch73 are prose.
