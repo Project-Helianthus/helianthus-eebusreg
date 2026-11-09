@@ -24,6 +24,10 @@
     {
       "token": "INT64",
       "reason": "Standard fixed-width integer type name."
+    },
+    {
+      "token": "BASE64",
+      "reason": "Standard binary-to-text encoding name."
     }
   ],
   "baseline": [
@@ -10886,6 +10890,16 @@
       "path": "testdata/issue77/vr940-raw-snapshot-v1.json",
       "symbol": "vr940-raw-snapshot-v1.json",
       "category": "filename"
+    },
+    {
+      "path": "internal/eebusstore/manifest_recovery_contract_test.go",
+      "symbol": "TestOpenAccepts128ArtifactsIndependentOfReferencedGenerations",
+      "category": "test"
+    },
+    {
+      "path": "internal/eebusstore/manifest_recovery_contract_test.go",
+      "symbol": "TestOpenRejects129UnreferencedGenerationsAtArtifactBound",
+      "category": "test"
     }
   ]
 }

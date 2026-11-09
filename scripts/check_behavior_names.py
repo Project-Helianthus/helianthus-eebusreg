@@ -24,7 +24,7 @@ TOKENS = re.compile(
     r"|IPv4(?![0-9])"
     r"|(?<![A-Z])[A-Z]+[0-9]+(?:[A-F](?![a-z]))?"
     r"|(?<![a-z])[a-z]{1,2}[0-9]+(?:[a-f](?![a-z]))?"
-    r"|(?<![A-Za-z])[a-z]+[0-9]+(?:[a-f](?![a-z]))?"
+    r"|(?<![a-z])[a-z]+[0-9]+(?:[a-f](?![a-z]))?"
 )
 
 
@@ -88,10 +88,21 @@ def inventory(root):
     return entries
 
 
+def allowed(match, vocabulary):
+    """A token is allowed if it, or a suffix of its letter run, is exact
+    vocabulary (a capitalised word glued to a protocol token)."""
+    start = match.start()
+    while start and match.string[start - 1].isupper():
+        start -= 1
+    token = match.string[start:match.end()].upper()
+    letters = len(token) - len(token.lstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+    return any(token[i:] in vocabulary for i in range(letters))
+
+
 def violations(entries, vocabulary):
     return sorted({(entry["path"], entry["symbol"], entry["category"])
                    for entry in entries
-                   if any(m.group().upper() not in vocabulary
+                   if any(not allowed(m, vocabulary)
                           for m in TOKENS.finditer(entry["symbol"]))})
 
 

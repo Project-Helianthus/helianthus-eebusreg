@@ -146,12 +146,14 @@ func Generic[XY92 any]() {}
         self.assertTrue(self.check())
 
     def test_lowercase_delivery_codes_are_rejected(self):
-        for name in ["msp06Read", "msp06_read.go", "hex40Pattern", "TestMsp06Read"]:
+        for name in ["msp06Read", "msp06_read.go", "hex40Pattern", "TestMsp06Read", "Readmsp73", "ReadMsp73x", "Readmsp73.go"]:
             with self.subTest(name=name):
                 entry = {"path": name, "symbol": name, "category": "filename"}
                 self.assertTrue(GATE.violations([entry], set()))
-        self.source("package modbus; func msp06Read() {}")
-        self.assertIn(("read.go", "msp06Read", "identifier"), self.check())
+        self.source("package modbus; func msp06Read() {}; func Readmsp73() {}")
+        found = self.check()
+        self.assertIn(("read.go", "msp06Read", "identifier"), found)
+        self.assertIn(("read.go", "Readmsp73", "identifier"), found)
 
     def test_standard_vocabulary_is_classified(self):
         vocabulary, _ = GATE.load_policy(GATE.BASELINE)
