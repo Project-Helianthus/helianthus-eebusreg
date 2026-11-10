@@ -15,13 +15,17 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
 
+// ContractVersion identifies a supported evidence envelope contract.
 type ContractVersion string
 
 const (
+	// EnvelopeContractV1Alpha1 selects the helianthus.eebus.raw.evidence-envelope.v1alpha1 value.
 	EnvelopeContractV1Alpha1 ContractVersion = "helianthus.eebus.raw.evidence-envelope.v1alpha1"
-	EnvelopeContractV1       ContractVersion = "helianthus.eebus.raw.evidence-envelope.v1"
+	// EnvelopeContractV1 selects the helianthus.eebus.raw.evidence-envelope.v1 value.
+	EnvelopeContractV1 ContractVersion = "helianthus.eebus.raw.evidence-envelope.v1"
 )
 
+// Validate accepts only the alpha and version 1 contract identifiers.
 func (c ContractVersion) Validate() error {
 	if c != EnvelopeContractV1Alpha1 && c != EnvelopeContractV1 {
 		return errors.New("unsupported evidence contract")
@@ -29,6 +33,7 @@ func (c ContractVersion) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (c ContractVersion) MarshalJSON() ([]byte, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
@@ -36,6 +41,7 @@ func (c ContractVersion) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(c))
 }
 
+// String returns the supported value or "invalid-contract" when validation fails.
 func (c ContractVersion) String() string {
 	if err := c.Validate(); err != nil {
 		return "invalid-contract"
@@ -43,27 +49,39 @@ func (c ContractVersion) String() string {
 	return string(c)
 }
 
+// GoString returns the same safe representation as String.
 func (c ContractVersion) GoString() string {
 	return c.String()
 }
 
+// Format writes the safe String representation for any format verb.
 func (c ContractVersion) Format(s fmt.State, verb rune) {
 	io.WriteString(s, c.String())
 }
 
+// ToolID identifies an allowed evidence tool.
 type ToolID string
 
 const (
+	// ToolRuntimeStatus selects the eebus.v1.runtime.status.get value.
 	ToolRuntimeStatus ToolID = "eebus.v1.runtime.status.get"
-	ToolServicesList  ToolID = "eebus.v1.services.list"
-	ToolServicesGet   ToolID = "eebus.v1.services.get"
-	ToolSessionsList  ToolID = "eebus.v1.sessions.list"
-	ToolSessionsGet   ToolID = "eebus.v1.sessions.get"
-	ToolTopologyGet   ToolID = "eebus.v1.topology.get"
-	ToolCapture       ToolID = "eebus.v1.snapshot.capture"
+	// ToolServicesList selects the eebus.v1.services.list value.
+	ToolServicesList ToolID = "eebus.v1.services.list"
+	// ToolServicesGet selects the eebus.v1.services.get value.
+	ToolServicesGet ToolID = "eebus.v1.services.get"
+	// ToolSessionsList selects the eebus.v1.sessions.list value.
+	ToolSessionsList ToolID = "eebus.v1.sessions.list"
+	// ToolSessionsGet selects the eebus.v1.sessions.get value.
+	ToolSessionsGet ToolID = "eebus.v1.sessions.get"
+	// ToolTopologyGet selects the eebus.v1.topology.get value.
+	ToolTopologyGet ToolID = "eebus.v1.topology.get"
+	// ToolCapture selects the eebus.v1.snapshot.capture value.
+	ToolCapture ToolID = "eebus.v1.snapshot.capture"
+	// ToolPairingStatus selects the eebus.v1.pairing.status.get value.
 	ToolPairingStatus ToolID = "eebus.v1.pairing.status.get"
 )
 
+// Validate rejects tool identifiers outside the supported set.
 func (t ToolID) Validate() error {
 	switch t {
 	case ToolRuntimeStatus, ToolServicesList, ToolServicesGet, ToolSessionsList, ToolSessionsGet, ToolTopologyGet, ToolCapture, ToolPairingStatus:
@@ -73,6 +91,7 @@ func (t ToolID) Validate() error {
 	}
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (t ToolID) MarshalJSON() ([]byte, error) {
 	if err := t.Validate(); err != nil {
 		return nil, err
@@ -80,6 +99,7 @@ func (t ToolID) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(t))
 }
 
+// String returns the supported value or "invalid-tool" when validation fails.
 func (t ToolID) String() string {
 	if err := t.Validate(); err != nil {
 		return "invalid-tool"
@@ -87,27 +107,39 @@ func (t ToolID) String() string {
 	return string(t)
 }
 
+// GoString returns the same safe representation as String.
 func (t ToolID) GoString() string {
 	return t.String()
 }
 
+// Format writes the safe String representation for any format verb.
 func (t ToolID) Format(s fmt.State, verb rune) {
 	io.WriteString(s, t.String())
 }
 
+// Scope identifies an allowed alpha envelope scope.
 type Scope string
 
 const (
-	ScopeWholeRoot     Scope = "whole-root"
+	// ScopeWholeRoot selects the whole-root value.
+	ScopeWholeRoot Scope = "whole-root"
+	// ScopeRuntimeStatus selects the runtime-status value.
 	ScopeRuntimeStatus Scope = "runtime-status"
-	ScopeServices      Scope = "services"
-	ScopeService       Scope = "service"
-	ScopeSessions      Scope = "sessions"
-	ScopeSession       Scope = "session"
-	ScopeTopology      Scope = "topology"
+	// ScopeServices selects the services value.
+	ScopeServices Scope = "services"
+	// ScopeService selects the service value.
+	ScopeService Scope = "service"
+	// ScopeSessions selects the sessions value.
+	ScopeSessions Scope = "sessions"
+	// ScopeSession selects the session value.
+	ScopeSession Scope = "session"
+	// ScopeTopology selects the topology value.
+	ScopeTopology Scope = "topology"
+	// ScopePairingStatus selects the pairing-status value.
 	ScopePairingStatus Scope = "pairing-status"
 )
 
+// Validate rejects scopes outside the supported alpha set.
 func (s Scope) Validate() error {
 	switch s {
 	case ScopeWholeRoot, ScopeRuntimeStatus, ScopeServices, ScopeService, ScopeSessions, ScopeSession, ScopeTopology, ScopePairingStatus:
@@ -117,6 +149,7 @@ func (s Scope) Validate() error {
 	}
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (s Scope) MarshalJSON() ([]byte, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
@@ -124,6 +157,7 @@ func (s Scope) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(s))
 }
 
+// String returns the supported value or "invalid-scope" when validation fails.
 func (s Scope) String() string {
 	if err := s.Validate(); err != nil {
 		return "invalid-scope"
@@ -131,20 +165,25 @@ func (s Scope) String() string {
 	return string(s)
 }
 
+// GoString returns the same safe representation as String.
 func (s Scope) GoString() string {
 	return s.String()
 }
 
+// Format writes the safe String representation for any format verb.
 func (s Scope) Format(st fmt.State, verb rune) {
 	io.WriteString(st, s.String())
 }
 
+// AuthScope identifies the authorization scope bound to evidence.
 type AuthScope string
 
 const (
+	// AuthScopeReadRaw selects the eebus.raw.read value.
 	AuthScopeReadRaw AuthScope = "eebus.raw.read"
 )
 
+// Validate accepts only the raw-read scope.
 func (a AuthScope) Validate() error {
 	if a != AuthScopeReadRaw {
 		return errors.New("unsupported auth scope")
@@ -152,6 +191,7 @@ func (a AuthScope) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (a AuthScope) MarshalJSON() ([]byte, error) {
 	if err := a.Validate(); err != nil {
 		return nil, err
@@ -159,6 +199,7 @@ func (a AuthScope) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(a))
 }
 
+// String returns the supported value or "invalid-auth-scope" when validation fails.
 func (a AuthScope) String() string {
 	if err := a.Validate(); err != nil {
 		return "invalid-auth-scope"
@@ -166,24 +207,33 @@ func (a AuthScope) String() string {
 	return string(a)
 }
 
+// GoString returns the same safe representation as String.
 func (a AuthScope) GoString() string {
 	return a.String()
 }
 
+// Format writes the safe String representation for any format verb.
 func (a AuthScope) Format(s fmt.State, verb rune) {
 	io.WriteString(s, a.String())
 }
 
+// ObjectKind classifies an evidence object.
 type ObjectKind string
 
 const (
+	// ObjectKindIdentity selects the identity value.
 	ObjectKindIdentity ObjectKind = "identity"
+	// ObjectKindTopology selects the topology value.
 	ObjectKindTopology ObjectKind = "topology"
-	ObjectKindService  ObjectKind = "service"
-	ObjectKindSession  ObjectKind = "session"
-	ObjectKindUnknown  ObjectKind = "unknown"
+	// ObjectKindService selects the service value.
+	ObjectKindService ObjectKind = "service"
+	// ObjectKindSession selects the session value.
+	ObjectKindSession ObjectKind = "session"
+	// ObjectKindUnknown selects the unknown value.
+	ObjectKindUnknown ObjectKind = "unknown"
 )
 
+// Validate rejects kinds outside the supported set.
 func (k ObjectKind) Validate() error {
 	switch k {
 	case ObjectKindIdentity, ObjectKindTopology, ObjectKindService, ObjectKindSession, ObjectKindUnknown:
@@ -193,6 +243,7 @@ func (k ObjectKind) Validate() error {
 	}
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (k ObjectKind) MarshalJSON() ([]byte, error) {
 	if err := k.Validate(); err != nil {
 		return nil, err
@@ -200,6 +251,7 @@ func (k ObjectKind) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(k))
 }
 
+// String returns the supported value or "invalid-object-kind" when validation fails.
 func (k ObjectKind) String() string {
 	if err := k.Validate(); err != nil {
 		return "invalid-object-kind"
@@ -207,23 +259,33 @@ func (k ObjectKind) String() string {
 	return string(k)
 }
 
+// GoString returns the same safe representation as String.
 func (k ObjectKind) GoString() string {
 	return k.String()
 }
 
+// Format writes the safe String representation for any format verb.
 func (k ObjectKind) Format(s fmt.State, verb rune) {
 	io.WriteString(s, k.String())
 }
 
+// Reference binds an alpha envelope to a redacted runtime and read context.
 type Reference struct {
-	Runtime   eebusraw.RedactedID `json:"runtime"`
-	Contract  ContractVersion     `json:"contract"`
-	Tool      ToolID              `json:"tool"`
-	Scope     Scope               `json:"scope"`
-	MaskTier  eebusraw.MaskTier   `json:"mask_tier"`
-	AuthScope AuthScope           `json:"auth_scope"`
+	// Runtime identifies the runtime using a redacted identifier with a required digest.
+	Runtime eebusraw.RedactedID `json:"runtime"`
+	// Contract selects the envelope contract version.
+	Contract ContractVersion `json:"contract"`
+	// Tool identifies the tool bound to this reference.
+	Tool ToolID `json:"tool"`
+	// Scope limits the represented snapshot or operation.
+	Scope Scope `json:"scope"`
+	// MaskTier must be the redacted tier.
+	MaskTier eebusraw.MaskTier `json:"mask_tier"`
+	// AuthScope records the effective raw-read authorization scope.
+	AuthScope AuthScope `json:"auth_scope"`
 }
 
+// NewReference constructs an alpha reference with the redacted tier; callers must validate it.
 func NewReference(runtime eebusraw.RedactedID, tool ToolID, scope Scope, authScope AuthScope) Reference {
 	return Reference{
 		Runtime:   runtime,
@@ -235,6 +297,7 @@ func NewReference(runtime eebusraw.RedactedID, tool ToolID, scope Scope, authSco
 	}
 }
 
+// Validate checks the runtime digest, alpha contract, tool, scope, redacted tier and authorization.
 func (r Reference) Validate() error {
 	if err := r.Runtime.Validate(); err != nil {
 		return fmt.Errorf("runtime: %w", err)
@@ -263,6 +326,7 @@ func (r Reference) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (r Reference) MarshalJSON() ([]byte, error) {
 	type alias Reference
 	if err := r.Validate(); err != nil {
@@ -271,6 +335,7 @@ func (r Reference) MarshalJSON() ([]byte, error) {
 	return json.Marshal(alias(r))
 }
 
+// Matches compares every reference field for equality.
 func (r Reference) Matches(other Reference) bool {
 	return r.Runtime == other.Runtime &&
 		r.Contract == other.Contract &&
@@ -280,26 +345,36 @@ func (r Reference) Matches(other Reference) bool {
 		r.AuthScope == other.AuthScope
 }
 
+// String returns a fixed redacted representation without exposing fields.
 func (r Reference) String() string {
 	return "reference:" + redactedValue
 }
 
+// GoString returns the same safe representation as String.
 func (r Reference) GoString() string {
 	return r.String()
 }
 
+// Format writes the safe String representation for any format verb.
 func (r Reference) Format(s fmt.State, verb rune) {
 	io.WriteString(s, r.String())
 }
 
+// Object holds redacted metadata for an alpha evidence object.
 type Object struct {
-	Kind          ObjectKind              `json:"kind"`
-	Digest        string                  `json:"digest"`
-	Size          int                     `json:"size"`
-	DataTimestamp time.Time               `json:"data_timestamp"`
-	Unknown       []eebusraw.UnknownField `json:"unknown,omitempty"`
+	// Kind classifies the represented evidence object.
+	Kind ObjectKind `json:"kind"`
+	// Digest holds the lowercase SHA-256 digest of the object.
+	Digest string `json:"digest"`
+	// Size records the object size, which must not be negative.
+	Size int `json:"size"`
+	// DataTimestamp records the time associated with the data.
+	DataTimestamp time.Time `json:"data_timestamp"`
+	// Unknown preserves unknown fields as opaque values.
+	Unknown []eebusraw.UnknownField `json:"unknown,omitempty"`
 }
 
+// NewObject constructs object metadata with its timestamp converted to UTC; callers must validate it.
 func NewObject(kind ObjectKind, digest string, size int, dataTimestamp time.Time) Object {
 	return Object{
 		Kind:          kind,
@@ -309,11 +384,13 @@ func NewObject(kind ObjectKind, digest string, size int, dataTimestamp time.Time
 	}
 }
 
+// DigestBytes returns the lowercase SHA-256 digest of raw bytes with the algorithm prefix.
 func DigestBytes(raw []byte) string {
 	sum := sha256.Sum256(raw)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// Validate checks the kind, digest, nonnegative size, nonzero timestamp and unknown fields.
 func (o Object) Validate() error {
 	if err := o.Kind.Validate(); err != nil {
 		return fmt.Errorf("kind: %w", err)
@@ -338,6 +415,7 @@ func (o Object) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (o Object) MarshalJSON() ([]byte, error) {
 	if err := o.Validate(); err != nil {
 		return nil, err
@@ -345,26 +423,36 @@ func (o Object) MarshalJSON() ([]byte, error) {
 	return json.Marshal(newObjectJSON(o))
 }
 
+// String returns a fixed redacted representation without exposing fields.
 func (o Object) String() string {
 	return "object:" + redactedValue
 }
 
+// GoString returns the same safe representation as String.
 func (o Object) GoString() string {
 	return o.String()
 }
 
+// Format writes the safe String representation for any format verb.
 func (o Object) Format(s fmt.State, verb rune) {
 	io.WriteString(s, o.String())
 }
 
+// Envelope holds an alpha reference and redacted object metadata.
 type Envelope struct {
-	Reference     Reference `json:"ref"`
-	CapturedAt    time.Time `json:"captured_at"`
+	// Reference binds the envelope to its validated context.
+	Reference Reference `json:"ref"`
+	// CapturedAt records when the envelope was captured.
+	CapturedAt time.Time `json:"captured_at"`
+	// DataTimestamp records the time associated with the data.
 	DataTimestamp time.Time `json:"data_timestamp"`
-	Objects       []Object  `json:"objects,omitempty"`
-	DataHash      string    `json:"data_hash,omitempty"`
+	// Objects contains the represented object metadata.
+	Objects []Object `json:"objects,omitempty"`
+	// DataHash optionally holds the canonical content hash.
+	DataHash string `json:"data_hash,omitempty"`
 }
 
+// NewEnvelope constructs an envelope with UTC timestamps and detached object and unknown-field slices.
 func NewEnvelope(ref Reference, capturedAt time.Time, dataTimestamp time.Time, objects []Object) Envelope {
 	return Envelope{
 		Reference:     ref,
@@ -374,6 +462,7 @@ func NewEnvelope(ref Reference, capturedAt time.Time, dataTimestamp time.Time, o
 	}
 }
 
+// Validate checks the reference, nonzero timestamps, objects and any supplied content hash.
 func (e Envelope) Validate() error {
 	return e.validate(true)
 }
@@ -405,6 +494,7 @@ func (e Envelope) validate(checkDataHash bool) error {
 	return nil
 }
 
+// ComputeDataHash validates content and hashes the canonical reference, data timestamp and sorted objects; capture time and the existing hash are excluded.
 func (e Envelope) ComputeDataHash() (string, error) {
 	if err := e.validate(false); err != nil {
 		return "", err
@@ -418,6 +508,7 @@ func (e Envelope) computeDataHash() string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// WithDataHash returns a detached object copy with the canonical data hash, or an error if content is invalid.
 func (e Envelope) WithDataHash() (Envelope, error) {
 	hash, err := e.ComputeDataHash()
 	if err != nil {
@@ -428,6 +519,7 @@ func (e Envelope) WithDataHash() (Envelope, error) {
 	return e, nil
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (e Envelope) MarshalJSON() ([]byte, error) {
 	if err := e.Validate(); err != nil {
 		return nil, err
@@ -449,14 +541,17 @@ func (e Envelope) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// String returns a fixed redacted representation without exposing fields.
 func (e Envelope) String() string {
 	return "envelope:" + redactedValue
 }
 
+// GoString returns the same safe representation as String.
 func (e Envelope) GoString() string {
 	return e.String()
 }
 
+// Format writes the safe String representation for any format verb.
 func (e Envelope) Format(s fmt.State, verb rune) {
 	io.WriteString(s, e.String())
 }

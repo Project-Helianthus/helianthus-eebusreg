@@ -38,12 +38,15 @@ restricted-source material. Ordinary package and declaration documentation,
 license headers, and detached explanatory comments are permitted. The API boundary
 checker validates build constraints without imposing a prose-comment policy.
 
-The documentation boundary follows the Board's 2026-07-10 instruction, quoted in
-[helianthus-execution-plans#59](https://github.com/Project-Helianthus/helianthus-execution-plans/issues/59):
+The documentation boundary follows the Board's 2026-07-10 instruction, recorded
+historically in the retired helianthus-execution-plans issue 59:
 
 > „auzi, dar helianthus-eebusreg/docs nu ar trebui să fie în helianthus-docs-eebus?”
 >
 > „Chiar mi-as dori ca toata documentatia sa fie in afara codebase-ului, pe modelul helianthus-docs-ebus. Documentatia de protocol diferita de documentatia de arhitectura, diferita de documentatia de API in docs-eebus. In nici un alt repo nu am avut un docs/ si nici nu ar trebui sa avem.”
+
+Current work is tracked in the owning repository issues and release projects;
+canonical documentation belongs in `helianthus-docs-eebus`.
 
 Put repository-local guidance in root `README.md` or `AGENTS.md`. Protocol,
 architecture, API, harness, and user documentation belongs in the separate
