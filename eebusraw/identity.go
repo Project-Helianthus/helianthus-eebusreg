@@ -11,30 +11,44 @@ import (
 	"time"
 )
 
+// ContractVersion identifies the identity document contract used for validation and encoding.
 type ContractVersion string
 
+// IdentityContractV1Alpha1 selects the alpha identity contract.
 const IdentityContractV1Alpha1 ContractVersion = "helianthus.eebus.raw.identity.v1alpha1"
 
+// IdentityContractV1 selects the v1 identity contract.
 const IdentityContractV1 ContractVersion = "helianthus.eebus.raw.identity.v1"
 
+// MaskTier identifies the permitted representation of sensitive values.
 type MaskTier string
 
 const (
+	// MaskTierRedacted requires sensitive values to be masked.
 	MaskTierRedacted MaskTier = "redacted"
 )
 
 const redactedValue = "[redacted]"
 
+// IdentityDocument holds a redacted alpha identity snapshot and validates its endpoint roles.
 type IdentityDocument struct {
-	Contract   ContractVersion    `json:"contract"`
-	MaskTier   MaskTier           `json:"mask_tier"`
-	CapturedAt time.Time          `json:"captured_at"`
-	Local      EndpointIdentity   `json:"local"`
-	Remotes    []EndpointIdentity `json:"remotes,omitempty"`
-	Sessions   []SessionIdentity  `json:"sessions,omitempty"`
-	Unknown    []UnknownField     `json:"unknown,omitempty"`
+	// Contract selects the document contract.
+	Contract ContractVersion `json:"contract"`
+	// MaskTier specifies the required redaction tier.
+	MaskTier MaskTier `json:"mask_tier"`
+	// CapturedAt records when the snapshot was captured.
+	CapturedAt time.Time `json:"captured_at"`
+	// Local contains the local endpoint identity.
+	Local EndpointIdentity `json:"local"`
+	// Remotes contains observed remote endpoint identities.
+	Remotes []EndpointIdentity `json:"remotes,omitempty"`
+	// Sessions contains observed session identities.
+	Sessions []SessionIdentity `json:"sessions,omitempty"`
+	// Unknown retains unknown fields in masked form.
+	Unknown []UnknownField `json:"unknown,omitempty"`
 }
 
+// NewIdentityDocument constructs an alpha document with a UTC timestamp and redacted mask tier.
 func NewIdentityDocument(capturedAt time.Time, local EndpointIdentity) IdentityDocument {
 	return IdentityDocument{
 		Contract:   IdentityContractV1Alpha1,
@@ -44,6 +58,7 @@ func NewIdentityDocument(capturedAt time.Time, local EndpointIdentity) IdentityD
 	}
 }
 
+// Validate checks the contract, mask tier, timestamp, endpoint roles and nested values.
 func (d IdentityDocument) Validate() error {
 	if d.Contract != IdentityContractV1Alpha1 {
 		return fmt.Errorf("identity contract must be %q", IdentityContractV1Alpha1)
@@ -81,6 +96,7 @@ func (d IdentityDocument) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (d IdentityDocument) MarshalJSON() ([]byte, error) {
 	type alias IdentityDocument
 	if err := d.Validate(); err != nil {
@@ -89,32 +105,44 @@ func (d IdentityDocument) MarshalJSON() ([]byte, error) {
 	return json.Marshal(alias(d))
 }
 
+// String returns a safe representation for display.
 func (d IdentityDocument) String() string {
 	return "identity_document:" + redactedValue
 }
 
+// GoString returns the same safe representation as String.
 func (d IdentityDocument) GoString() string {
 	return d.String()
 }
 
+// Format writes the safe representation for any formatting verb.
 func (d IdentityDocument) Format(s fmt.State, verb rune) {
 	io.WriteString(s, d.String())
 }
 
+// EndpointRole identifies whether an endpoint is local or remote.
 type EndpointRole string
 
 const (
-	EndpointRoleLocal  EndpointRole = "local"
+	// EndpointRoleLocal marks the local endpoint.
+	EndpointRoleLocal EndpointRole = "local"
+	// EndpointRoleRemote marks a remote endpoint.
 	EndpointRoleRemote EndpointRole = "remote"
 )
 
+// EndpointIdentity holds a redacted endpoint, its pairing observation and unknown fields.
 type EndpointIdentity struct {
-	Role    EndpointRole       `json:"role"`
-	ID      RedactedID         `json:"id"`
+	// Role identifies the endpoint as local or remote.
+	Role EndpointRole `json:"role"`
+	// ID contains the redacted identifier.
+	ID RedactedID `json:"id"`
+	// Pairing records the pairing observation.
 	Pairing PairingObservation `json:"pairing,omitempty"`
-	Unknown []UnknownField     `json:"unknown,omitempty"`
+	// Unknown retains unknown fields in masked form.
+	Unknown []UnknownField `json:"unknown,omitempty"`
 }
 
+// Validate checks the value against its contract and returns an error on invalid input.
 func (e EndpointIdentity) Validate() error {
 	if e.Role != EndpointRoleLocal && e.Role != EndpointRoleRemote {
 		return errors.New("endpoint role must be local or remote")
@@ -133,19 +161,27 @@ func (e EndpointIdentity) Validate() error {
 	return nil
 }
 
+// PairingState records an observed pairing state, not qualification.
 type PairingState string
 
 const (
-	PairingStateUnknown  PairingState = "unknown"
+	// PairingStateUnknown records an unknown pairing state.
+	PairingStateUnknown PairingState = "unknown"
+	// PairingStateUnpaired records an unpaired observation.
 	PairingStateUnpaired PairingState = "unpaired"
-	PairingStatePaired   PairingState = "paired"
-	PairingStateDenied   PairingState = "denied"
+	// PairingStatePaired records a paired observation.
+	PairingStatePaired PairingState = "paired"
+	// PairingStateDenied records a denied pairing observation.
+	PairingStateDenied PairingState = "denied"
 )
 
+// PairingObservation records a pairing state without asserting qualification.
 type PairingObservation struct {
+	// State records the observed state.
 	State PairingState `json:"state,omitempty"`
 }
 
+// Validate accepts an empty or recognized observation and rejects other states.
 func (p PairingObservation) Validate() error {
 	switch p.State {
 	case "", PairingStateUnknown, PairingStateUnpaired, PairingStatePaired, PairingStateDenied:
@@ -155,22 +191,33 @@ func (p PairingObservation) Validate() error {
 	}
 }
 
+// SessionState identifies an observed session state.
 type SessionState string
 
 const (
-	SessionStateUnknown      SessionState = "unknown"
-	SessionStateObserved     SessionState = "observed"
+	// SessionStateUnknown records an unknown session state.
+	SessionStateUnknown SessionState = "unknown"
+	// SessionStateObserved records an observed session.
+	SessionStateObserved SessionState = "observed"
+	// SessionStateDisconnected records a disconnected session.
 	SessionStateDisconnected SessionState = "disconnected"
-	SessionStateDegraded     SessionState = "degraded"
+	// SessionStateDegraded records a degraded session.
+	SessionStateDegraded SessionState = "degraded"
 )
 
+// SessionIdentity holds a redacted session and its remote identity.
 type SessionIdentity struct {
-	ID       RedactedID     `json:"id"`
-	RemoteID RedactedID     `json:"remote_id"`
-	State    SessionState   `json:"state"`
-	Unknown  []UnknownField `json:"unknown,omitempty"`
+	// ID contains the redacted identifier.
+	ID RedactedID `json:"id"`
+	// RemoteID contains the redacted remote identifier.
+	RemoteID RedactedID `json:"remote_id"`
+	// State records the observed state.
+	State SessionState `json:"state"`
+	// Unknown retains unknown fields in masked form.
+	Unknown []UnknownField `json:"unknown,omitempty"`
 }
 
+// Validate checks the value against its contract and returns an error on invalid input.
 func (s SessionIdentity) Validate() error {
 	if err := s.ID.Validate(); err != nil {
 		return fmt.Errorf("session id: %w", err)
@@ -191,16 +238,23 @@ func (s SessionIdentity) Validate() error {
 	return nil
 }
 
+// IDKind identifies the category of a redacted identifier.
 type IDKind string
 
 const (
-	IDKindLocalSKI               IDKind = "local-ski"
-	IDKindRemoteSKI              IDKind = "remote-ski"
+	// IDKindLocalSKI labels a local SKI.
+	IDKindLocalSKI IDKind = "local-ski"
+	// IDKindRemoteSKI labels a remote SKI.
+	IDKindRemoteSKI IDKind = "remote-ski"
+	// IDKindCertificateFingerprint labels a certificate fingerprint.
 	IDKindCertificateFingerprint IDKind = "certificate-fingerprint"
-	IDKindPeer                   IDKind = "peer"
-	IDKindSession                IDKind = "session"
+	// IDKindPeer labels a peer identifier.
+	IDKindPeer IDKind = "peer"
+	// IDKindSession labels a session identifier.
+	IDKindSession IDKind = "session"
 )
 
+// Validate checks the value against its contract and returns an error on invalid input.
 func (k IDKind) Validate() error {
 	switch k {
 	case IDKindLocalSKI, IDKindRemoteSKI, IDKindCertificateFingerprint, IDKindPeer, IDKindSession:
@@ -210,6 +264,7 @@ func (k IDKind) Validate() error {
 	}
 }
 
+// String returns a safe representation for display.
 func (k IDKind) String() string {
 	if err := k.Validate(); err != nil {
 		return "invalid-kind"
@@ -217,6 +272,7 @@ func (k IDKind) String() string {
 	return string(k)
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (k IDKind) MarshalJSON() ([]byte, error) {
 	if err := k.Validate(); err != nil {
 		return nil, err
@@ -224,20 +280,27 @@ func (k IDKind) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(k))
 }
 
+// GoString returns the same safe representation as String.
 func (k IDKind) GoString() string {
 	return k.String()
 }
 
+// Format writes the safe representation for any formatting verb.
 func (k IDKind) Format(s fmt.State, verb rune) {
 	io.WriteString(s, k.String())
 }
 
+// RedactedID holds a masked identifier and an optional comparison digest.
 type RedactedID struct {
-	Kind   IDKind `json:"kind"`
+	// Kind identifies the category of identifier.
+	Kind IDKind `json:"kind"`
+	// Masked contains the required redaction marker.
 	Masked string `json:"masked"`
+	// Digest holds an optional SHA-256 comparison digest.
 	Digest string `json:"digest,omitempty"`
 }
 
+// RedactID masks a nonblank identifier and computes its SHA-256 digest.
 func RedactID(kind IDKind, raw string) (RedactedID, error) {
 	if err := kind.Validate(); err != nil {
 		return RedactedID{}, err
@@ -253,6 +316,7 @@ func RedactID(kind IDKind, raw string) (RedactedID, error) {
 	}, nil
 }
 
+// Validate checks the value against its contract and returns an error on invalid input.
 func (r RedactedID) Validate() error {
 	if err := r.Kind.Validate(); err != nil {
 		return err
@@ -266,6 +330,7 @@ func (r RedactedID) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (r RedactedID) MarshalJSON() ([]byte, error) {
 	type alias RedactedID
 	if err := r.Validate(); err != nil {
@@ -274,28 +339,38 @@ func (r RedactedID) MarshalJSON() ([]byte, error) {
 	return json.Marshal(alias(r))
 }
 
+// String returns a safe representation for display.
 func (r RedactedID) String() string {
 	return r.Kind.String() + ":" + redactedValue
 }
 
+// GoString returns the same safe representation as String.
 func (r RedactedID) GoString() string {
 	return r.String()
 }
 
+// Format writes the safe representation for any formatting verb.
 func (r RedactedID) Format(s fmt.State, verb rune) {
 	io.WriteString(s, r.String())
 }
 
+// UnknownPath identifies an allowed location for an unknown field.
 type UnknownPath string
 
 const (
+	// UnknownPathDocument locates document-level unknown fields.
 	UnknownPathDocument UnknownPath = "/document/unknown"
-	UnknownPathDevice   UnknownPath = "/device/unknown"
-	UnknownPathLocal    UnknownPath = "/local/unknown"
-	UnknownPathRemote   UnknownPath = "/remote/unknown"
-	UnknownPathSession  UnknownPath = "/session/unknown"
+	// UnknownPathDevice locates device-level unknown fields.
+	UnknownPathDevice UnknownPath = "/device/unknown"
+	// UnknownPathLocal locates local endpoint unknown fields.
+	UnknownPathLocal UnknownPath = "/local/unknown"
+	// UnknownPathRemote locates remote endpoint unknown fields.
+	UnknownPathRemote UnknownPath = "/remote/unknown"
+	// UnknownPathSession locates session unknown fields.
+	UnknownPathSession UnknownPath = "/session/unknown"
 )
 
+// Validate checks the value against its contract and returns an error on invalid input.
 func (p UnknownPath) Validate() error {
 	switch p {
 	case UnknownPathDocument, UnknownPathDevice, UnknownPathLocal, UnknownPathRemote, UnknownPathSession:
@@ -305,6 +380,7 @@ func (p UnknownPath) Validate() error {
 	}
 }
 
+// String returns a safe representation for display.
 func (p UnknownPath) String() string {
 	if err := p.Validate(); err != nil {
 		return "/invalid/unknown"
@@ -312,6 +388,7 @@ func (p UnknownPath) String() string {
 	return string(p)
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (p UnknownPath) MarshalJSON() ([]byte, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -319,19 +396,25 @@ func (p UnknownPath) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(p))
 }
 
+// GoString returns the same safe representation as String.
 func (p UnknownPath) GoString() string {
 	return p.String()
 }
 
+// Format writes the safe representation for any formatting verb.
 func (p UnknownPath) Format(s fmt.State, verb rune) {
 	io.WriteString(s, p.String())
 }
 
+// UnknownField retains an unrecognized value in masked form at an allowed path.
 type UnknownField struct {
-	Path  UnknownPath `json:"path"`
+	// Path identifies the allowed unknown-field location.
+	Path UnknownPath `json:"path"`
+	// Value contains the masked unknown value.
 	Value OpaqueValue `json:"value"`
 }
 
+// Validate checks the value against its contract and returns an error on invalid input.
 func (u UnknownField) Validate() error {
 	if err := u.Path.Validate(); err != nil {
 		return err
@@ -342,6 +425,7 @@ func (u UnknownField) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (u UnknownField) MarshalJSON() ([]byte, error) {
 	type alias UnknownField
 	if err := u.Validate(); err != nil {
@@ -350,24 +434,32 @@ func (u UnknownField) MarshalJSON() ([]byte, error) {
 	return json.Marshal(alias(u))
 }
 
+// String returns a safe representation for display.
 func (u UnknownField) String() string {
 	return "unknown_field:" + redactedValue
 }
 
+// GoString returns the same safe representation as String.
 func (u UnknownField) GoString() string {
 	return u.String()
 }
 
+// Format writes the safe representation for any formatting verb.
 func (u UnknownField) Format(s fmt.State, verb rune) {
 	io.WriteString(s, u.String())
 }
 
+// OpaqueValue retains a masked value with optional digest and size.
 type OpaqueValue struct {
+	// Masked contains the required redaction marker.
 	Masked string `json:"masked"`
+	// Digest holds an optional SHA-256 comparison digest.
 	Digest string `json:"digest,omitempty"`
-	Size   int    `json:"size,omitempty"`
+	// Size records the original byte count.
+	Size int `json:"size,omitempty"`
 }
 
+// OpaqueBytes masks bytes and records their SHA-256 digest and length.
 func OpaqueBytes(raw []byte) OpaqueValue {
 	sum := sha256.Sum256(raw)
 	return OpaqueValue{
@@ -377,6 +469,7 @@ func OpaqueBytes(raw []byte) OpaqueValue {
 	}
 }
 
+// Validate checks the value against its contract and returns an error on invalid input.
 func (o OpaqueValue) Validate() error {
 	if o.Masked != redactedValue {
 		return errors.New("opaque value must be redacted")
@@ -390,6 +483,7 @@ func (o OpaqueValue) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (o OpaqueValue) MarshalJSON() ([]byte, error) {
 	type alias OpaqueValue
 	if err := o.Validate(); err != nil {
@@ -398,14 +492,17 @@ func (o OpaqueValue) MarshalJSON() ([]byte, error) {
 	return json.Marshal(alias(o))
 }
 
+// String returns a safe representation for display.
 func (o OpaqueValue) String() string {
 	return "opaque:" + redactedValue
 }
 
+// GoString returns the same safe representation as String.
 func (o OpaqueValue) GoString() string {
 	return o.String()
 }
 
+// Format writes the safe representation for any formatting verb.
 func (o OpaqueValue) Format(s fmt.State, verb rune) {
 	io.WriteString(s, o.String())
 }
