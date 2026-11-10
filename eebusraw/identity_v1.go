@@ -12,13 +12,17 @@ import (
 	"time"
 )
 
+// EndpointRoleV1 identifies the local or remote endpoint in a versioned identity.
 type EndpointRoleV1 string
 
 const (
-	EndpointRoleV1Local  EndpointRoleV1 = "local"
+	// EndpointRoleV1Local marks the local endpoint in v1.
+	EndpointRoleV1Local EndpointRoleV1 = "local"
+	// EndpointRoleV1Remote marks a remote endpoint in v1.
 	EndpointRoleV1Remote EndpointRoleV1 = "remote"
 )
 
+// Validate checks the value against its contract and returns an error on invalid input.
 func (r EndpointRoleV1) Validate() error {
 	switch r {
 	case EndpointRoleV1Local, EndpointRoleV1Remote:
@@ -28,6 +32,7 @@ func (r EndpointRoleV1) Validate() error {
 	}
 }
 
+// String returns a safe representation for display.
 func (r EndpointRoleV1) String() string {
 	if err := r.Validate(); err != nil {
 		return "invalid-role"
@@ -35,6 +40,7 @@ func (r EndpointRoleV1) String() string {
 	return string(r)
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (r EndpointRoleV1) MarshalJSON() ([]byte, error) {
 	if err := r.Validate(); err != nil {
 		return nil, err
@@ -42,20 +48,28 @@ func (r EndpointRoleV1) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(r))
 }
 
+// GoString returns the same safe representation as String.
 func (r EndpointRoleV1) GoString() string {
 	return r.String()
 }
 
+// Format writes the safe representation for any formatting verb.
 func (r EndpointRoleV1) Format(s fmt.State, verb rune) {
 	io.WriteString(s, r.String())
 }
 
+// EndpointIdentityV1 holds a redacted endpoint and unknown fields for the v1 contract.
+// Its identifier requires a lowercase SHA-256 digest.
 type EndpointIdentityV1 struct {
-	Role    EndpointRoleV1 `json:"role"`
-	ID      RedactedID     `json:"id"`
+	// Role identifies the endpoint as local or remote.
+	Role EndpointRoleV1 `json:"role"`
+	// ID contains the redacted identifier.
+	ID RedactedID `json:"id"`
+	// Unknown retains unknown fields in masked form.
 	Unknown []UnknownField `json:"unknown,omitempty"`
 }
 
+// Validate checks the value against its contract and returns an error on invalid input.
 func (e EndpointIdentityV1) Validate() error {
 	if err := e.Role.Validate(); err != nil {
 		return errors.New("endpoint role must be local or remote")
@@ -71,6 +85,7 @@ func (e EndpointIdentityV1) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the endpoint and sorts its unknown fields before encoding.
 func (e EndpointIdentityV1) MarshalJSON() ([]byte, error) {
 	if err := e.Validate(); err != nil {
 		return nil, err
@@ -87,24 +102,33 @@ func (e EndpointIdentityV1) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// String returns a safe representation for display.
 func (e EndpointIdentityV1) String() string {
 	return "endpoint_identity_v1:" + redactedValue
 }
 
+// GoString returns the same safe representation as String.
 func (e EndpointIdentityV1) GoString() string {
 	return e.String()
 }
 
+// Format writes the safe representation for any formatting verb.
 func (e EndpointIdentityV1) Format(s fmt.State, verb rune) {
 	io.WriteString(s, e.String())
 }
 
+// SessionIdentityV1 holds redacted session and remote identifiers for the v1 contract.
+// Both identifiers require lowercase SHA-256 digests.
 type SessionIdentityV1 struct {
-	ID       RedactedID     `json:"id"`
-	RemoteID RedactedID     `json:"remote_id"`
-	Unknown  []UnknownField `json:"unknown,omitempty"`
+	// ID contains the redacted identifier.
+	ID RedactedID `json:"id"`
+	// RemoteID contains the redacted remote identifier.
+	RemoteID RedactedID `json:"remote_id"`
+	// Unknown retains unknown fields in masked form.
+	Unknown []UnknownField `json:"unknown,omitempty"`
 }
 
+// Validate checks the value against its contract and returns an error on invalid input.
 func (s SessionIdentityV1) Validate() error {
 	if err := validateRedactedIDV1(s.ID); err != nil {
 		return fmt.Errorf("session id: %w", err)
@@ -120,6 +144,7 @@ func (s SessionIdentityV1) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the session and sorts its unknown fields before encoding.
 func (s SessionIdentityV1) MarshalJSON() ([]byte, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
@@ -136,28 +161,40 @@ func (s SessionIdentityV1) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// String returns a safe representation for display.
 func (s SessionIdentityV1) String() string {
 	return "session_identity_v1:" + redactedValue
 }
 
+// GoString returns the same safe representation as String.
 func (s SessionIdentityV1) GoString() string {
 	return s.String()
 }
 
+// Format writes the safe representation for any formatting verb.
 func (s SessionIdentityV1) Format(state fmt.State, verb rune) {
 	io.WriteString(state, s.String())
 }
 
+// IdentityDocumentV1 holds a redacted v1 snapshot with canonical JSON ordering.
 type IdentityDocumentV1 struct {
-	Contract   ContractVersion      `json:"contract"`
-	MaskTier   MaskTier             `json:"mask_tier"`
-	CapturedAt time.Time            `json:"captured_at"`
-	Local      EndpointIdentityV1   `json:"local"`
-	Remotes    []EndpointIdentityV1 `json:"remotes,omitempty"`
-	Sessions   []SessionIdentityV1  `json:"sessions,omitempty"`
-	Unknown    []UnknownField       `json:"unknown,omitempty"`
+	// Contract selects the document contract.
+	Contract ContractVersion `json:"contract"`
+	// MaskTier specifies the required redaction tier.
+	MaskTier MaskTier `json:"mask_tier"`
+	// CapturedAt records when the snapshot was captured.
+	CapturedAt time.Time `json:"captured_at"`
+	// Local contains the local endpoint identity.
+	Local EndpointIdentityV1 `json:"local"`
+	// Remotes contains observed remote endpoint identities.
+	Remotes []EndpointIdentityV1 `json:"remotes,omitempty"`
+	// Sessions contains observed session identities.
+	Sessions []SessionIdentityV1 `json:"sessions,omitempty"`
+	// Unknown retains unknown fields in masked form.
+	Unknown []UnknownField `json:"unknown,omitempty"`
 }
 
+// NewIdentityDocumentV1 constructs a v1 document with a UTC timestamp and a copy of the local unknown fields.
 func NewIdentityDocumentV1(capturedAt time.Time, local EndpointIdentityV1) IdentityDocumentV1 {
 	return IdentityDocumentV1{
 		Contract:   IdentityContractV1,
@@ -167,6 +204,7 @@ func NewIdentityDocumentV1(capturedAt time.Time, local EndpointIdentityV1) Ident
 	}
 }
 
+// Validate checks roles, timestamps, nested values and duplicate identity keys.
 func (d IdentityDocumentV1) Validate() error {
 	if d.Contract != IdentityContractV1 {
 		return fmt.Errorf("identity contract must be %q", IdentityContractV1)
@@ -216,6 +254,7 @@ func (d IdentityDocumentV1) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the snapshot, sorts its collections and encodes the timestamp in UTC.
 func (d IdentityDocumentV1) MarshalJSON() ([]byte, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
@@ -240,14 +279,17 @@ func (d IdentityDocumentV1) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// String returns a safe representation for display.
 func (d IdentityDocumentV1) String() string {
 	return "identity_document_v1:" + redactedValue
 }
 
+// GoString returns the same safe representation as String.
 func (d IdentityDocumentV1) GoString() string {
 	return d.String()
 }
 
+// Format writes the safe representation for any formatting verb.
 func (d IdentityDocumentV1) Format(s fmt.State, verb rune) {
 	io.WriteString(s, d.String())
 }
