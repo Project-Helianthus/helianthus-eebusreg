@@ -14,12 +14,15 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
 
+// CaptureProvenanceV1 identifies the source of a version 1 capture.
 type CaptureProvenanceV1 string
 
 const (
+	// CaptureProvenanceRuntimeObservation selects the runtime-observation value.
 	CaptureProvenanceRuntimeObservation CaptureProvenanceV1 = "runtime-observation"
 )
 
+// Validate accepts only runtime observation provenance.
 func (p CaptureProvenanceV1) Validate() error {
 	if p != CaptureProvenanceRuntimeObservation {
 		return errors.New("unsupported capture provenance")
@@ -27,6 +30,7 @@ func (p CaptureProvenanceV1) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (p CaptureProvenanceV1) MarshalJSON() ([]byte, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -34,6 +38,7 @@ func (p CaptureProvenanceV1) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(p))
 }
 
+// String returns the supported value or "invalid-capture-provenance" when validation fails.
 func (p CaptureProvenanceV1) String() string {
 	if err := p.Validate(); err != nil {
 		return "invalid-capture-provenance"
@@ -41,25 +46,35 @@ func (p CaptureProvenanceV1) String() string {
 	return string(p)
 }
 
+// GoString returns the same safe representation as String.
 func (p CaptureProvenanceV1) GoString() string {
 	return p.String()
 }
 
+// Format writes the safe String representation for any format verb.
 func (p CaptureProvenanceV1) Format(s fmt.State, verb rune) {
 	io.WriteString(s, p.String())
 }
 
+// RawSnapshotScopeV1 identifies the raw snapshot scope represented by version 1.
 type RawSnapshotScopeV1 string
 
 const (
-	RawSnapshotScopeRoot     RawSnapshotScopeV1 = "raw-root"
+	// RawSnapshotScopeRoot selects the raw-root value.
+	RawSnapshotScopeRoot RawSnapshotScopeV1 = "raw-root"
+	// RawSnapshotScopeIdentity selects the raw-identity value.
 	RawSnapshotScopeIdentity RawSnapshotScopeV1 = "raw-identity"
+	// RawSnapshotScopeTopology selects the raw-topology value.
 	RawSnapshotScopeTopology RawSnapshotScopeV1 = "raw-topology"
+	// RawSnapshotScopeServices selects the raw-services value.
 	RawSnapshotScopeServices RawSnapshotScopeV1 = "raw-services"
+	// RawSnapshotScopeSessions selects the raw-sessions value.
 	RawSnapshotScopeSessions RawSnapshotScopeV1 = "raw-sessions"
-	RawSnapshotScopeUnknown  RawSnapshotScopeV1 = "raw-unknown"
+	// RawSnapshotScopeUnknown selects the raw-unknown value.
+	RawSnapshotScopeUnknown RawSnapshotScopeV1 = "raw-unknown"
 )
 
+// Validate rejects scopes outside the supported version 1 set.
 func (s RawSnapshotScopeV1) Validate() error {
 	switch s {
 	case RawSnapshotScopeRoot, RawSnapshotScopeIdentity, RawSnapshotScopeTopology, RawSnapshotScopeServices, RawSnapshotScopeSessions, RawSnapshotScopeUnknown:
@@ -69,6 +84,7 @@ func (s RawSnapshotScopeV1) Validate() error {
 	}
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (s RawSnapshotScopeV1) MarshalJSON() ([]byte, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
@@ -76,6 +92,7 @@ func (s RawSnapshotScopeV1) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(s))
 }
 
+// String returns the supported value or "invalid-raw-snapshot-scope" when validation fails.
 func (s RawSnapshotScopeV1) String() string {
 	if err := s.Validate(); err != nil {
 		return "invalid-raw-snapshot-scope"
@@ -83,23 +100,33 @@ func (s RawSnapshotScopeV1) String() string {
 	return string(s)
 }
 
+// GoString returns the same safe representation as String.
 func (s RawSnapshotScopeV1) GoString() string {
 	return s.String()
 }
 
+// Format writes the safe String representation for any format verb.
 func (s RawSnapshotScopeV1) Format(state fmt.State, verb rune) {
 	io.WriteString(state, s.String())
 }
 
+// ReferenceV1 binds a version 1 envelope to a redacted runtime and read context.
 type ReferenceV1 struct {
-	Runtime           eebusraw.RedactedID `json:"runtime"`
-	Contract          ContractVersion     `json:"contract"`
+	// Runtime identifies the runtime using a redacted identifier with a required digest.
+	Runtime eebusraw.RedactedID `json:"runtime"`
+	// Contract selects the envelope contract version.
+	Contract ContractVersion `json:"contract"`
+	// CaptureProvenance identifies the source of the capture.
 	CaptureProvenance CaptureProvenanceV1 `json:"capture_provenance"`
-	Scope             RawSnapshotScopeV1  `json:"scope"`
-	MaskTier          eebusraw.MaskTier   `json:"mask_tier"`
-	AuthScope         AuthScope           `json:"auth_scope"`
+	// Scope limits the represented snapshot or operation.
+	Scope RawSnapshotScopeV1 `json:"scope"`
+	// MaskTier must be the redacted tier.
+	MaskTier eebusraw.MaskTier `json:"mask_tier"`
+	// AuthScope records the effective raw-read authorization scope.
+	AuthScope AuthScope `json:"auth_scope"`
 }
 
+// NewReferenceV1 constructs a version 1 reference with the redacted tier; callers must validate it.
 func NewReferenceV1(runtime eebusraw.RedactedID, provenance CaptureProvenanceV1, scope RawSnapshotScopeV1, authScope AuthScope) ReferenceV1 {
 	return ReferenceV1{
 		Runtime:           runtime,
@@ -111,6 +138,7 @@ func NewReferenceV1(runtime eebusraw.RedactedID, provenance CaptureProvenanceV1,
 	}
 }
 
+// Validate checks the runtime digest, version 1 contract, provenance, scope, redacted tier and raw-read authorization.
 func (r ReferenceV1) Validate() error {
 	if err := r.Runtime.Validate(); err != nil {
 		return fmt.Errorf("runtime: %w", err)
@@ -139,6 +167,7 @@ func (r ReferenceV1) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (r ReferenceV1) MarshalJSON() ([]byte, error) {
 	type alias ReferenceV1
 	if err := r.Validate(); err != nil {
@@ -147,6 +176,7 @@ func (r ReferenceV1) MarshalJSON() ([]byte, error) {
 	return json.Marshal(alias(r))
 }
 
+// Matches compares every reference field for equality.
 func (r ReferenceV1) Matches(other ReferenceV1) bool {
 	return r.Runtime == other.Runtime &&
 		r.Contract == other.Contract &&
@@ -156,26 +186,36 @@ func (r ReferenceV1) Matches(other ReferenceV1) bool {
 		r.AuthScope == other.AuthScope
 }
 
+// String returns a fixed redacted representation without exposing fields.
 func (r ReferenceV1) String() string {
 	return "reference_v1:" + redactedValue
 }
 
+// GoString returns the same safe representation as String.
 func (r ReferenceV1) GoString() string {
 	return r.String()
 }
 
+// Format writes the safe String representation for any format verb.
 func (r ReferenceV1) Format(s fmt.State, verb rune) {
 	io.WriteString(s, r.String())
 }
 
+// ObjectV1 holds redacted metadata for a version 1 evidence object.
 type ObjectV1 struct {
-	Kind          ObjectKind              `json:"kind"`
-	Digest        string                  `json:"digest"`
-	Size          int                     `json:"size"`
-	DataTimestamp time.Time               `json:"data_timestamp"`
-	Unknown       []eebusraw.UnknownField `json:"unknown,omitempty"`
+	// Kind classifies the represented evidence object.
+	Kind ObjectKind `json:"kind"`
+	// Digest holds the lowercase SHA-256 digest of the object.
+	Digest string `json:"digest"`
+	// Size records the object size, which must not be negative.
+	Size int `json:"size"`
+	// DataTimestamp records the time associated with the data.
+	DataTimestamp time.Time `json:"data_timestamp"`
+	// Unknown preserves unknown fields as opaque values.
+	Unknown []eebusraw.UnknownField `json:"unknown,omitempty"`
 }
 
+// NewObjectV1 constructs version 1 object metadata with its timestamp converted to UTC; callers must validate it.
 func NewObjectV1(kind ObjectKind, digest string, size int, dataTimestamp time.Time) ObjectV1 {
 	return ObjectV1{
 		Kind:          kind,
@@ -185,6 +225,7 @@ func NewObjectV1(kind ObjectKind, digest string, size int, dataTimestamp time.Ti
 	}
 }
 
+// Validate checks the kind, digest, nonnegative size, JSON-compatible timestamp and unknown fields.
 func (o ObjectV1) Validate() error {
 	if err := o.Kind.Validate(); err != nil {
 		return fmt.Errorf("kind: %w", err)
@@ -209,6 +250,7 @@ func (o ObjectV1) Validate() error {
 	return nil
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (o ObjectV1) MarshalJSON() ([]byte, error) {
 	if err := o.Validate(); err != nil {
 		return nil, err
@@ -216,26 +258,36 @@ func (o ObjectV1) MarshalJSON() ([]byte, error) {
 	return json.Marshal(newObjectJSON(objectV1AsObject(o)))
 }
 
+// String returns a fixed redacted representation without exposing fields.
 func (o ObjectV1) String() string {
 	return "object_v1:" + redactedValue
 }
 
+// GoString returns the same safe representation as String.
 func (o ObjectV1) GoString() string {
 	return o.String()
 }
 
+// Format writes the safe String representation for any format verb.
 func (o ObjectV1) Format(s fmt.State, verb rune) {
 	io.WriteString(s, o.String())
 }
 
+// EnvelopeV1 holds a version 1 reference and redacted object metadata.
 type EnvelopeV1 struct {
-	Reference     ReferenceV1 `json:"ref"`
-	CapturedAt    time.Time   `json:"captured_at"`
-	DataTimestamp time.Time   `json:"data_timestamp"`
-	Objects       []ObjectV1  `json:"objects,omitempty"`
-	DataHash      string      `json:"data_hash,omitempty"`
+	// Reference binds the envelope to its validated context.
+	Reference ReferenceV1 `json:"ref"`
+	// CapturedAt records when the envelope was captured.
+	CapturedAt time.Time `json:"captured_at"`
+	// DataTimestamp records the time associated with the data.
+	DataTimestamp time.Time `json:"data_timestamp"`
+	// Objects contains the represented object metadata.
+	Objects []ObjectV1 `json:"objects,omitempty"`
+	// DataHash optionally holds the canonical content hash.
+	DataHash string `json:"data_hash,omitempty"`
 }
 
+// NewEnvelopeV1 constructs a version 1 envelope with UTC timestamps and detached object and unknown-field slices.
 func NewEnvelopeV1(ref ReferenceV1, capturedAt time.Time, dataTimestamp time.Time, objects []ObjectV1) EnvelopeV1 {
 	return EnvelopeV1{
 		Reference:     ref,
@@ -245,6 +297,7 @@ func NewEnvelopeV1(ref ReferenceV1, capturedAt time.Time, dataTimestamp time.Tim
 	}
 }
 
+// Validate checks the reference, JSON-compatible timestamps, objects and any supplied content hash.
 func (e EnvelopeV1) Validate() error {
 	return e.validate(true)
 }
@@ -276,6 +329,7 @@ func (e EnvelopeV1) validate(checkDataHash bool) error {
 	return nil
 }
 
+// ComputeDataHash validates content and hashes the canonical reference, data timestamp and sorted objects; capture time and the existing hash are excluded.
 func (e EnvelopeV1) ComputeDataHash() (string, error) {
 	if err := e.validate(false); err != nil {
 		return "", err
@@ -288,6 +342,7 @@ func (e EnvelopeV1) computeDataHash() string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// WithDataHash returns a detached object copy with the canonical data hash, or an error if content is invalid.
 func (e EnvelopeV1) WithDataHash() (EnvelopeV1, error) {
 	hash, err := e.ComputeDataHash()
 	if err != nil {
@@ -298,6 +353,7 @@ func (e EnvelopeV1) WithDataHash() (EnvelopeV1, error) {
 	return e, nil
 }
 
+// MarshalJSON validates the value before encoding it as JSON.
 func (e EnvelopeV1) MarshalJSON() ([]byte, error) {
 	if err := e.Validate(); err != nil {
 		return nil, err
@@ -318,14 +374,17 @@ func (e EnvelopeV1) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// String returns a fixed redacted representation without exposing fields.
 func (e EnvelopeV1) String() string {
 	return "envelope_v1:" + redactedValue
 }
 
+// GoString returns the same safe representation as String.
 func (e EnvelopeV1) GoString() string {
 	return e.String()
 }
 
+// Format writes the safe String representation for any format verb.
 func (e EnvelopeV1) Format(s fmt.State, verb rune) {
 	io.WriteString(s, e.String())
 }
