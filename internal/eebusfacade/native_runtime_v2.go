@@ -23,7 +23,7 @@ type nativeRuntimeSnapshotV2Payload struct {
 	Devices      []nativeRuntimeDeviceV2Payload      `json:"devices"`
 	Entities     []nativeRuntimeEntityV2Payload      `json:"entities"`
 	Features     []nativeRuntimeFeatureV2Payload     `json:"features"`
-	UseCases     []nativeRuntimeUseCaseV2Payload     `json:"usecases"`
+	UseCases     []nativeRuntimeUseCaseV2Payload     `json:"use_cases"`
 	Observations []nativeRuntimeObservationV2Payload `json:"observations"`
 }
 

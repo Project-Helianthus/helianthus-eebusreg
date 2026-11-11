@@ -1638,7 +1638,7 @@ type runtimeSnapshotPayload struct {
 	Devices  []runtimeDevicePayload     `json:"devices"`
 	Entities []runtimeEntityPayload     `json:"entities"`
 	Features []runtimeFeaturePayload    `json:"features"`
-	UseCases []runtimeUseCasePayload    `json:"usecases"`
+	UseCases []runtimeUseCasePayload    `json:"use_cases"`
 	Opaque   []runtimeOpaquePayload     `json:"opaque"`
 }
 

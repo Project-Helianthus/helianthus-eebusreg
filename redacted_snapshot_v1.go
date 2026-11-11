@@ -24,7 +24,7 @@ type RedactedSnapshotV1 struct {
 	Devices  []RedactedDeviceV1      `json:"devices"`
 	Entities []RedactedEntityV1      `json:"entities"`
 	Features []RedactedFeatureV1     `json:"features"`
-	UseCases []RedactedUseCaseV1     `json:"usecases"`
+	UseCases []RedactedUseCaseV1     `json:"use_cases"`
 }
 
 type RedactedSnapshotMetaV1 struct {
@@ -510,7 +510,7 @@ func (snapshot RedactedSnapshotV1) computeDataHash() (string, error) {
 		Devices       []RedactedDeviceV1      `json:"devices"`
 		Entities      []RedactedEntityV1      `json:"entities"`
 		Features      []RedactedFeatureV1     `json:"features"`
-		UseCases      []RedactedUseCaseV1     `json:"usecases"`
+		UseCases      []RedactedUseCaseV1     `json:"use_cases"`
 	}{
 		Contract: canonical.Meta.Contract, Runtime: canonical.Meta.Runtime,
 		LocalSKI: canonical.Meta.LocalSKI, MaskTier: canonical.Meta.MaskTier,

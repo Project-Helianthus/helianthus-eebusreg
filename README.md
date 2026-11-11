@@ -476,3 +476,9 @@ any proposed remediation on that runner. Local or injected success does not
 supply that evidence. Kernel cause and runner repair remain UNKNOWN. This
 partial runbook child [#148](https://github.com/Project-Helianthus/helianthus-eebusreg/issues/148)
 changes no runtime/security behavior and leaves parent remediation open.
+
+Snapshot structural JSON uses `use_cases` in native, raw and redacted views.
+Consumers adopt this contract in one coordinated wave. See the public
+[naming contract](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/architecture/naming-contract.md)
+and [announcement](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/CHANGELOG.md).
+Native object keys and Go `UseCases` members retain their existing spelling.

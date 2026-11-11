@@ -247,6 +247,7 @@
     "issue77_raw_redaction_contract_red_test.go",
     "issue79_raw_local_ski_red_test.go",
     "mutation_lab_profile_runtime_red_test.go",
+    "naming_contract_test.go",
     "native_runtime_v2.go",
     "native_snapshot_v2.go",
     "native_snapshot_v2_test.go",
@@ -128550,8 +128551,8 @@
     },
     {
       "owning_file": "native_snapshot_v2.go",
-      "identity": "eebusruntime:NativeSnapshotV2.UseCases:serialized:usecases",
-      "current_name": "usecases",
+      "identity": "eebusruntime:NativeSnapshotV2.UseCases:serialized:use_cases",
+      "current_name": "use_cases",
       "target": "use_cases",
       "kind": "serialized_key",
       "role_decomposition": [
@@ -128573,7 +128574,10 @@
         "ebusgateway/mcp/eebus_v1_operator_boundary_red_test.go",
         "ebusgateway/mcp/eebus_v1_review_remediation_test.go",
         "ebusgateway/mcp/testdata/issue743/vr940-raw-snapshot-v1.json"
-      ]
+      ],
+      "previous_name": "usecases",
+      "adoption_status": "adopted",
+      "consumer_obligation": "Consume use_cases exclusively in the coordinated consumer wave; historical correspondence is never a runtime alias."
     },
     {
       "owning_file": "native_snapshot_v2.go",
@@ -156970,8 +156974,8 @@
     },
     {
       "owning_file": "redacted_snapshot_v1.go",
-      "identity": "eebusruntime:RedactedSnapshotV1.UseCases:serialized:usecases",
-      "current_name": "usecases",
+      "identity": "eebusruntime:RedactedSnapshotV1.UseCases:serialized:use_cases",
+      "current_name": "use_cases",
       "target": "use_cases",
       "kind": "serialized_key",
       "role_decomposition": [
@@ -156993,7 +156997,10 @@
         "ebusgateway/mcp/eebus_v1_operator_boundary_red_test.go",
         "ebusgateway/mcp/eebus_v1_review_remediation_test.go",
         "ebusgateway/mcp/testdata/issue743/vr940-raw-snapshot-v1.json"
-      ]
+      ],
+      "previous_name": "usecases",
+      "adoption_status": "adopted",
+      "consumer_obligation": "Consume use_cases exclusively in the coordinated consumer wave; historical correspondence is never a runtime alias."
     },
     {
       "owning_file": "redacted_snapshot_v1.go",
@@ -167849,8 +167856,8 @@
     },
     {
       "owning_file": "raw_snapshot_v1.go",
-      "identity": "eebusruntime:SnapshotV1.UseCases:serialized:usecases",
-      "current_name": "usecases",
+      "identity": "eebusruntime:SnapshotV1.UseCases:serialized:use_cases",
+      "current_name": "use_cases",
       "target": "use_cases",
       "kind": "serialized_key",
       "role_decomposition": [
@@ -167872,7 +167879,10 @@
         "ebusgateway/mcp/eebus_v1_operator_boundary_red_test.go",
         "ebusgateway/mcp/eebus_v1_review_remediation_test.go",
         "ebusgateway/mcp/testdata/issue743/vr940-raw-snapshot-v1.json"
-      ]
+      ],
+      "previous_name": "usecases",
+      "adoption_status": "adopted",
+      "consumer_obligation": "Consume use_cases exclusively in the coordinated consumer wave; historical correspondence is never a runtime alias."
     },
     {
       "owning_file": "admin_v1.go",
@@ -195117,6 +195127,13 @@
     "go_use_cases": "unchanged",
     "structural_mapping": {
       "usecases": "use_cases"
+    },
+    "snapshot_structural_adoption": {
+      "emitted_key": "use_cases",
+      "status": "adopted",
+      "native_object_keys": "unchanged raw evidence",
+      "qualification": "unchanged",
+      "evidence_class": "S"
     }
   }
 }

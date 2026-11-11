@@ -74,7 +74,7 @@ type SnapshotV1 struct {
 	Devices  []DeviceV1             `json:"devices"`
 	Entities []EntityV1             `json:"entities"`
 	Features []FeatureV1            `json:"features"`
-	UseCases []UseCaseV1            `json:"usecases"`
+	UseCases []UseCaseV1            `json:"use_cases"`
 	Opaque   []OpaqueObservationV1  `json:"opaque"`
 }
 
@@ -347,7 +347,7 @@ func (snapshot SnapshotV1) computeDataHash() (string, error) {
 		Devices       []DeviceV1             `json:"devices"`
 		Entities      []EntityV1             `json:"entities"`
 		Features      []FeatureV1            `json:"features"`
-		UseCases      []UseCaseV1            `json:"usecases"`
+		UseCases      []UseCaseV1            `json:"use_cases"`
 		Opaque        []OpaqueObservationV1  `json:"opaque"`
 	}{
 		Contract: canonical.Meta.Contract, Runtime: canonical.Meta.Runtime,
