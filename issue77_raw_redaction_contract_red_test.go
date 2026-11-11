@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func issue77FixtureHashValue(t *testing.T) string {
+func rawRedactionFixtureHashValue(t *testing.T) string {
 	t.Helper()
 	draft, err := issue77DecodeDocument(issue77FixtureDocument(t))
 	if err != nil {
@@ -88,8 +88,8 @@ func TestIssue77InitialV1PublicValueSurfaceIsExact(t *testing.T) {
 
 func TestIssue77VR940FixtureRetainsRawOperationalFacts(t *testing.T) {
 	snapshot := issue77Snapshot(t)
-	if snapshot.Meta.DataHash != issue77FixtureHashValue(t) {
-		t.Fatalf("raw data_hash = %q, want fixture JCS hash %q", snapshot.Meta.DataHash, issue77FixtureHashValue(t))
+	if snapshot.Meta.DataHash != rawRedactionFixtureHashValue(t) {
+		t.Fatalf("raw data_hash = %q, want fixture JCS hash %q", snapshot.Meta.DataHash, rawRedactionFixtureHashValue(t))
 	}
 	if len(snapshot.Services) != 1 || len(snapshot.Devices) != 1 ||
 		len(snapshot.Entities) != 11 || len(snapshot.Features) != 20 || len(snapshot.UseCases) != 10 {
@@ -205,8 +205,8 @@ func TestIssue77RawJCSHashAndOrderAreDeterministic(t *testing.T) {
 	if !bytes.Equal(firstJSON, secondJSON) {
 		t.Fatalf("equivalent raw orderings are not byte-identical:\n%s\n%s", firstJSON, secondJSON)
 	}
-	if second.Meta.DataHash != issue77FixtureHashValue(t) {
-		t.Fatalf("reordered JCS hash = %q, want %q", second.Meta.DataHash, issue77FixtureHashValue(t))
+	if second.Meta.DataHash != rawRedactionFixtureHashValue(t) {
+		t.Fatalf("reordered JCS hash = %q, want %q", second.Meta.DataHash, rawRedactionFixtureHashValue(t))
 	}
 
 	captureOnly := first.Clone()
@@ -216,7 +216,7 @@ func TestIssue77RawJCSHashAndOrderAreDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hash != issue77FixtureHashValue(t) {
+	if hash != rawRedactionFixtureHashValue(t) {
 		t.Fatalf("captured_at changed raw data hash: %q", hash)
 	}
 }
