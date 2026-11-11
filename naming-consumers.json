@@ -53132,5 +53132,11 @@
       "docs-eebus/architecture/_candidate/msp-04a-persistent-store.md",
       "docs-eebus/scripts/validate_repository_policy.py"
     ]
+  },
+  "snapshot_structural_adoption": {
+    "status": "required",
+    "emitted_key": "use_cases",
+    "consumer_obligation": "Gateway runtime, administration, synchronized evidence and MCP schemas and fixtures must adopt the supported structural key in the same wave; preserve eBUS MCP compatibility and GraphQL parity. Generic passthrough and schema consumers require coordinated validation.",
+    "coverage": "Lexical matches are candidates, not proof of shipped adoption; unresolved and indirect paths remain follow-up limitations."
   }
 }

@@ -28,7 +28,7 @@ type NativeSnapshotV2 struct {
 	Devices      []NativeDeviceV2             `json:"devices"`
 	Entities     []NativeEntityV2             `json:"entities"`
 	Features     []NativeFeatureV2            `json:"features"`
-	UseCases     []NativeUseCaseV2            `json:"usecases"`
+	UseCases     []NativeUseCaseV2            `json:"use_cases"`
 	Observations []NativeObservationV2        `json:"observations"`
 }
 

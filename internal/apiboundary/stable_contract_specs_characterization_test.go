@@ -37,9 +37,15 @@ func TestStableContractSpecsInventoryOrderAndCopies(t *testing.T) {
 	if second[0].root != "SnapshotV1" {
 		t.Fatal("stable contract specifications share mutable state across calls")
 	}
-	got := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%#v", second))))
-	const wantFingerprint = "fd51d21e9408646fe649eb1f0cc685f539d78328b84179e0faaeb5bf28c9ae2a"
+	got := sha256.Sum256([]byte(fmt.Sprintf("%#v", second)))
+	// Pin the complete inventory, including the supported use_cases JSON tags.
+	wantFingerprint := [sha256.Size]byte{
+		72, 125, 104, 185, 35, 76, 91, 226,
+		101, 160, 223, 57, 245, 59, 245, 206,
+		53, 103, 45, 252, 53, 58, 193, 170,
+		27, 145, 40, 162, 146, 62, 94, 88,
+	}
 	if got != wantFingerprint {
-		t.Fatalf("stable contract fingerprint = %s, want %s", got, wantFingerprint)
+		t.Fatalf("stable contract fingerprint = %x, want %x", got, wantFingerprint)
 	}
 }

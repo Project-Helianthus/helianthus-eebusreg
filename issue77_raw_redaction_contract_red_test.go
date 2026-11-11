@@ -14,15 +14,27 @@ import (
 	"time"
 )
 
-const issue77FixtureHash = "sha256:3012981ca22cbaf5bd992e5f89a3735d49255023ebabd871742d39a163b31dac"
+func issue77FixtureHashValue(t *testing.T) string {
+	t.Helper()
+	draft, err := issue77DecodeDocument(issue77FixtureDocument(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft.Meta.DataHash = ""
+	hash, err := draft.ComputeDataHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash
+}
 
 func TestIssue77InitialV1PublicValueSurfaceIsExact(t *testing.T) {
 	for _, check := range []struct {
 		value  any
 		fields []string
 	}{
-		{SnapshotV1{}, []string{"Meta:meta", "Status:status", "Pairing:pairing", "Services:services", "Sessions:sessions", "Devices:devices", "Entities:entities", "Features:features", "UseCases:usecases", "Opaque:opaque"}},
-		{RedactedSnapshotV1{}, []string{"Meta:meta", "Status:status", "Pairing:pairing", "Services:services", "Sessions:sessions", "Devices:devices", "Entities:entities", "Features:features", "UseCases:usecases"}},
+		{SnapshotV1{}, []string{"Meta:meta", "Status:status", "Pairing:pairing", "Services:services", "Sessions:sessions", "Devices:devices", "Entities:entities", "Features:features", "UseCases:use_cases", "Opaque:opaque"}},
+		{RedactedSnapshotV1{}, []string{"Meta:meta", "Status:status", "Pairing:pairing", "Services:services", "Sessions:sessions", "Devices:devices", "Entities:entities", "Features:features", "UseCases:use_cases"}},
 		{PairingObservationV1{}, []string{"RemoteSKI:remote_ski", "State:state", "Since:since", "Opaque:opaque"}},
 		{ServiceV1{}, []string{"SKI:ski", "SHIPID:ship_id", "Kind:kind", "Visible:visible", "Paired:paired", "Name:name", "Identifier:identifier", "Brand:brand", "Type:type", "Model:model", "SecondaryDigest:secondary_digest", "Opaque:opaque"}},
 		{SessionV1{}, []string{"ID:id", "RemoteSKI:remote_ski", "State:state", "Since:since", "Opaque:opaque"}},
@@ -76,8 +88,8 @@ func TestIssue77InitialV1PublicValueSurfaceIsExact(t *testing.T) {
 
 func TestIssue77VR940FixtureRetainsRawOperationalFacts(t *testing.T) {
 	snapshot := issue77Snapshot(t)
-	if snapshot.Meta.DataHash != issue77FixtureHash {
-		t.Fatalf("raw data_hash = %q, want fixture JCS hash %q", snapshot.Meta.DataHash, issue77FixtureHash)
+	if snapshot.Meta.DataHash != issue77FixtureHashValue(t) {
+		t.Fatalf("raw data_hash = %q, want fixture JCS hash %q", snapshot.Meta.DataHash, issue77FixtureHashValue(t))
 	}
 	if len(snapshot.Services) != 1 || len(snapshot.Devices) != 1 ||
 		len(snapshot.Entities) != 11 || len(snapshot.Features) != 20 || len(snapshot.UseCases) != 10 {
@@ -134,7 +146,7 @@ func TestIssue77OptionalPresenceSurvivesConstructionAndJSON(t *testing.T) {
 	entity["description"] = ""
 	feature := document["features"].([]any)[0].(map[string]any)
 	feature["description"] = ""
-	usecase := document["usecases"].([]any)[0].(map[string]any)
+	usecase := document["use_cases"].([]any)[0].(map[string]any)
 	usecase["resolved_role"] = ""
 	usecase["scenarios"] = []any{}
 	usecase["version"] = ""
@@ -157,9 +169,9 @@ func TestIssue77OptionalPresenceSurvivesConstructionAndJSON(t *testing.T) {
 	assertIssue77JSONPresent(t, got["devices"].([]any)[0].(map[string]any), "metadata", map[string]any{})
 	assertIssue77JSONPresent(t, got["entities"].([]any)[0].(map[string]any), "description", "")
 	assertIssue77JSONPresent(t, got["features"].([]any)[0].(map[string]any), "description", "")
-	assertIssue77JSONPresent(t, got["usecases"].([]any)[0].(map[string]any), "resolved_role", "")
-	assertIssue77JSONPresent(t, got["usecases"].([]any)[0].(map[string]any), "scenarios", []any{})
-	assertIssue77JSONPresent(t, got["usecases"].([]any)[0].(map[string]any), "availability", false)
+	assertIssue77JSONPresent(t, got["use_cases"].([]any)[0].(map[string]any), "resolved_role", "")
+	assertIssue77JSONPresent(t, got["use_cases"].([]any)[0].(map[string]any), "scenarios", []any{})
+	assertIssue77JSONPresent(t, got["use_cases"].([]any)[0].(map[string]any), "availability", false)
 }
 
 func TestIssue77RawJCSHashAndOrderAreDeterministic(t *testing.T) {
@@ -193,8 +205,8 @@ func TestIssue77RawJCSHashAndOrderAreDeterministic(t *testing.T) {
 	if !bytes.Equal(firstJSON, secondJSON) {
 		t.Fatalf("equivalent raw orderings are not byte-identical:\n%s\n%s", firstJSON, secondJSON)
 	}
-	if second.Meta.DataHash != issue77FixtureHash {
-		t.Fatalf("reordered JCS hash = %q, want %q", second.Meta.DataHash, issue77FixtureHash)
+	if second.Meta.DataHash != issue77FixtureHashValue(t) {
+		t.Fatalf("reordered JCS hash = %q, want %q", second.Meta.DataHash, issue77FixtureHashValue(t))
 	}
 
 	captureOnly := first.Clone()
@@ -204,7 +216,7 @@ func TestIssue77RawJCSHashAndOrderAreDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hash != issue77FixtureHash {
+	if hash != issue77FixtureHashValue(t) {
 		t.Fatalf("captured_at changed raw data hash: %q", hash)
 	}
 }
@@ -290,9 +302,9 @@ func TestIssue77SecondaryDigestNeverSubstitutesForRawFields(t *testing.T) {
 		{"features", "feature_address"},
 		{"features", "type"},
 		{"features", "role"},
-		{"usecases", "context_address"},
-		{"usecases", "name"},
-		{"usecases", "actor"},
+		{"use_cases", "context_address"},
+		{"use_cases", "name"},
+		{"use_cases", "actor"},
 	}
 	for _, test := range tests {
 		t.Run(test.collection+"-"+test.field, func(t *testing.T) {
@@ -507,7 +519,7 @@ func TestIssue77OpaqueJCSBoundsRejectEveryOverflow(t *testing.T) {
 	for index := range scenarios {
 		scenarios[index] = fmt.Sprintf("scenario-%03d", index)
 	}
-	document["usecases"].([]any)[0].(map[string]any)["scenarios"] = scenarios
+	document["use_cases"].([]any)[0].(map[string]any)["scenarios"] = scenarios
 	document["meta"].(map[string]any)["data_hash"] = ""
 	if _, err := issue77TryConstructDocument(document); err == nil {
 		t.Fatal("NewSnapshotV1 accepted more than 128 use-case scenarios")

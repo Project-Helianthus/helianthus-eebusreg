@@ -10,7 +10,7 @@
     "mask_tier": "raw",
     "captured_at": "2026-07-26T12:01:00Z",
     "data_timestamp": "2026-07-26T12:00:00Z",
-    "data_hash": "sha256:3012981ca22cbaf5bd992e5f89a3735d49255023ebabd871742d39a163b31dac"
+    "data_hash": "sha256:4b6617bc5fadb6c9aee00eb1537c2904bf3ce948931733ae8114059b11b39bb0"
   },
   "status": {
     "state": "ready"
@@ -389,7 +389,7 @@
       "opaque": []
     }
   ],
-  "usecases": [
+  "use_cases": [
     {
       "context_address": "d:_n:Vaillant_VR940:2:0",
       "name": "monitoringOfRoomTemperature",

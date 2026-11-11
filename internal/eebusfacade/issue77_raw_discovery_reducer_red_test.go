@@ -533,7 +533,7 @@ func issue77AssertRawGraph(t *testing.T, raw map[string]any) {
 	devices := issue77Objects(t, raw, "devices")
 	entities := issue77Objects(t, raw, "entities")
 	features := issue77Objects(t, raw, "features")
-	usecases := issue77Objects(t, raw, "usecases")
+	usecases := issue77Objects(t, raw, "use_cases")
 	if len(services) != 1 || len(devices) != 1 || len(entities) != 11 || len(features) != 20 || len(usecases) != 10 {
 		t.Fatalf(
 			"raw reducer counts services/devices/entities/features/usecases = %d/%d/%d/%d/%d, want 1/1/11/20/10",
