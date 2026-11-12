@@ -193,8 +193,8 @@ func TestMSP04CG16RunAndCaseLabelsAreRandomAcrossRunsAndReplayable(t *testing.T)
 
 func validMSP04CArtifactInput(seedByte byte) firstTrustArtifactInput {
 	input := firstTrustArtifactInput{
-		Repo: "Project-Helianthus/helianthus-eebusreg", Branch: "issue/28-msp04c-restore-quarantine",
-		Commit: strings.Repeat("1", 40), Issue: "MSP-04C", GoVersion: "go1.25.0", GoWork: "off", GoToolchain: "auto",
+		Repo: "Project-Helianthus/helianthus-eebusreg", Branch: "issue/28-first-trust-restore-quarantine",
+		Commit: strings.Repeat("1", 40), Issue: "first_trust_interop", GoVersion: "go1.25.0", GoWork: "off", GoToolchain: "auto",
 		Commands: []firstTrustArtifactCommand{firstTrustCommandAPIFreeze, firstTrustCommandDiffCheck, firstTrustCommandUnit},
 	}
 	input.RunSeed[0] = seedByte
@@ -212,4 +212,29 @@ func validMSP04CArtifactInput(seedByte byte) firstTrustArtifactInput {
 		})
 	}
 	return input
+}
+
+func TestFirstTrustArtifactIdentity(t *testing.T) {
+	input := validMSP04CArtifactInput(5)
+	artifact, err := newFirstTrustArtifact(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Issue != "first_trust_interop" {
+		t.Fatalf("issue = %q", artifact.Issue)
+	}
+	for _, issue := range []string{"MSP-04C", "", "interop_report", "unknown"} {
+		t.Run(issue, func(t *testing.T) {
+			invalid := input
+			invalid.Issue = issue
+			if _, err := newFirstTrustArtifact(invalid); err == nil {
+				t.Fatal("constructor accepted invalid issue")
+			}
+			invalidArtifact := artifact
+			invalidArtifact.Issue = issue
+			if err := invalidArtifact.validate(); err == nil {
+				t.Fatal("validator accepted invalid issue")
+			}
+		})
+	}
 }

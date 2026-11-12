@@ -239,3 +239,24 @@ func TestIntegrityReferencesUseFullSHA256(t *testing.T) {
 		t.Fatalf("digest reference is not full SHA-256: %q", ref)
 	}
 }
+
+func TestInteropReportIdentity(t *testing.T) {
+	rep := newReport("fake-peer", []string{caseFakePeer}, []caseResult{{
+		ID: caseFakePeer, Status: resultPass, Evidence: []string{"fake-peer-pass"},
+	}}, nil)
+	if err := rep.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if rep.Issue != "interop_report" {
+		t.Fatalf("issue = %q", rep.Issue)
+	}
+	for _, issue := range []string{"MSP-03D-R", "", "first_trust_interop", "unknown"} {
+		t.Run(issue, func(t *testing.T) {
+			invalid := rep
+			invalid.Issue = issue
+			if err := invalid.validate(); err == nil {
+				t.Fatal("validator accepted invalid issue")
+			}
+		})
+	}
+}
