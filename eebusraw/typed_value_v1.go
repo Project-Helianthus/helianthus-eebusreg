@@ -29,6 +29,9 @@ const (
 	typedValueMaximumSafeInteger  = int64(9007199254740991)
 )
 
+// ErrSecretDetected is returned, unwrapped, when a typed value carries a secret-classified object
+// key or a private-key or bearer-credential string; contract validators report it as the
+// secret_detected error code. The rejected content is never echoed in the error.
 var ErrSecretDetected = errors.New("secret-classified raw value rejected")
 
 var rawFeatureSecretNames = map[string]struct{}{
@@ -42,12 +45,24 @@ var rawFeatureSecretNames = map[string]struct{}{
 	"cryptographic_secret":   {},
 }
 
+// HashV1 is a SHA-256 commitment written as "sha256:" followed by 64 lowercase hexadecimal
+// digits. The type does not enforce that form; the contract validators reject any other text.
 type HashV1 string
 
+// TypedValueV1 holds one canonical JSON value: null, a boolean, an integer within the portable
+// safe range, a string, an array or a string-keyed object. Its zero value is null. The value is
+// unexported and every accessor returns a copy, so concurrent readers never observe a change.
+// Canonical encoding and hashing follow RFC 8785 (JCS) as specified in
+// https://github.com/Project-Helianthus/helianthus-docs-eebus/tree/main/api.
 type TypedValueV1 struct {
 	value any
 }
 
+// NewTypedValueV1 converts a Go value into canonical form. Signed and unsigned integers outside
+// ±(2^53-1) and json.Number values with a fraction or exponent become decimal strings;
+// floating-point values are rejected. Containers may nest four levels with at most 256 members,
+// strings are limited to 16384 bytes, object keys to 1..256 characters and the canonical
+// encoding to 1 MiB. Secret-classified content returns ErrSecretDetected.
 func NewTypedValueV1(value any) (TypedValueV1, error) {
 	canonical, err := canonicalTypedValueV1(value, 1)
 	if err != nil {
@@ -64,6 +79,8 @@ func NewTypedValueV1(value any) (TypedValueV1, error) {
 	return result, nil
 }
 
+// DecodeTypedValueV1 parses JSON text with the NewTypedValueV1 limits, keeping numbers exact and
+// rejecting duplicate keys, unpaired surrogate escapes, invalid UTF-8 and trailing data.
 func DecodeTypedValueV1(data []byte) (TypedValueV1, error) {
 	decoded, err := decodeTypedJSONV1(data)
 	if err != nil {
@@ -72,6 +89,10 @@ func DecodeTypedValueV1(data []byte) (TypedValueV1, error) {
 	return NewTypedValueV1(decoded)
 }
 
+// CanonicalSHA256V1 commits an arbitrary contract document: it encodes value with encoding/json,
+// so struct tags and time formatting apply, canonicalizes the result with up to 16 nesting levels
+// and returns the SHA-256 of the canonical bytes. Encoded numbers with a fraction or exponent
+// are committed as decimal strings; secret-classified content returns ErrSecretDetected.
 func CanonicalSHA256V1(value any) (HashV1, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
@@ -93,19 +114,25 @@ func CanonicalSHA256V1(value any) (HashV1, error) {
 	return HashV1("sha256:" + hex.EncodeToString(sum[:])), nil
 }
 
+// Value returns a deep copy built only from nil, bool, int64, string, []any and map[string]any;
+// mutating the result does not affect value.
 func (value TypedValueV1) Value() any {
 	return cloneTypedValueV1(value.value)
 }
 
+// Clone returns a TypedValueV1 that shares no container memory with value.
 func (value TypedValueV1) Clone() TypedValueV1 {
 	return TypedValueV1{value: cloneTypedValueV1(value.value)}
 }
 
+// Validate reapplies every NewTypedValueV1 limit and secret check to the held value.
 func (value TypedValueV1) Validate() error {
 	_, err := NewTypedValueV1(value.value)
 	return err
 }
 
+// ComputeHash returns the SHA-256 commitment of the canonical encoding; two values hash equally
+// exactly when their canonical forms are equal, which is how the contract compares values.
 func (value TypedValueV1) ComputeHash() (HashV1, error) {
 	encoded, err := value.canonicalJSON()
 	if err != nil {
@@ -115,10 +142,13 @@ func (value TypedValueV1) ComputeHash() (HashV1, error) {
 	return HashV1("sha256:" + hex.EncodeToString(sum[:])), nil
 }
 
+// MarshalJSON writes the canonical encoding: object keys in UTF-16 code-unit order and no
+// insignificant whitespace.
 func (value TypedValueV1) MarshalJSON() ([]byte, error) {
 	return value.canonicalJSON()
 }
 
+// UnmarshalJSON decodes data with DecodeTypedValueV1 and leaves value unchanged on error.
 func (value *TypedValueV1) UnmarshalJSON(data []byte) error {
 	decoded, err := DecodeTypedValueV1(data)
 	if err != nil {
@@ -128,14 +158,18 @@ func (value *TypedValueV1) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// String returns a fixed redacted marker; the held value is reachable only through Value or
+// MarshalJSON, never through fmt or logging.
 func (value TypedValueV1) String() string {
 	return "typed_value_v1:[redacted]"
 }
 
+// GoString returns the same redacted marker as String.
 func (value TypedValueV1) GoString() string {
 	return value.String()
 }
 
+// Format writes the redacted marker for every verb and flag.
 func (value TypedValueV1) Format(state fmt.State, _ rune) {
 	_, _ = io.WriteString(state, value.String())
 }
