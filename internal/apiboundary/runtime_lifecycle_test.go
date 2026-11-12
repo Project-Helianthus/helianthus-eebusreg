@@ -73,7 +73,7 @@ func TestMSP05PInitialV1ContractIsExactlyAllowlisted(t *testing.T) {
 }
 
 func TestIssue129NativeRuntimeV2ContractIsExactlyAllowlisted(t *testing.T) {
-	want := loadExportInventory("lifecycle_native_runtime_v2.txt")
+	want := loadExportInventory("lifecycle_native_runtime_second.txt")
 	if !maps.Equal(issue129NativeRuntimeV2Exports, want) {
 		t.Fatal("issue #129 native V2 closed inventory drifted")
 	}
@@ -100,7 +100,7 @@ func TestPostM9OperatorAdminV1ContractIsExactlyAllowlisted(t *testing.T) {
 }
 
 func postM9OperatorAdminV1ExportInventory() map[manifestExport]struct{} {
-	return loadExportInventory("lifecycle_operator_admin_v1.txt")
+	return loadExportInventory("lifecycle_operator_admin_first.txt")
 }
 
 func msp055LifecycleExports() []manifestExport {

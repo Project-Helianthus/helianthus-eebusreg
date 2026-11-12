@@ -16,10 +16,10 @@ var exportInventoryFiles embed.FS
 
 var exportInventoryNames = []string{
 	"evidence.txt",
-	"lifecycle_native_runtime_v2.txt",
-	"lifecycle_operator_admin_v1.txt",
+	"lifecycle_native_runtime_second.txt",
+	"lifecycle_operator_admin_first.txt",
 	"lifecycle_runtime.txt",
-	"native_runtime_v2.txt",
+	"native_runtime_second.txt",
 	"operator_admin_runtime.txt",
 	"participation.txt",
 	"participation_operator.txt",

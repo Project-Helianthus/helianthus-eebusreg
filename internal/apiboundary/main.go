@@ -264,7 +264,7 @@ func init() {
 	}
 }
 
-var issue129NativeRuntimeV2Exports = loadExportInventory("native_runtime_v2.txt")
+var issue129NativeRuntimeV2Exports = loadExportInventory("native_runtime_second.txt")
 
 var msp055RuntimeExports = map[manifestExport]struct{}{
 	{Kind: "const", Name: "PairingPolicyClosed"}:       {},

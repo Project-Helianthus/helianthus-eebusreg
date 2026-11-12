@@ -31,17 +31,17 @@ var updateExportInventories = flag.Bool(
 )
 
 var exportInventoryPackages = map[string]string{
-	"evidence.txt":                    "eebusevidence",
-	"lifecycle_native_runtime_v2.txt": ".",
-	"lifecycle_operator_admin_v1.txt": ".",
-	"lifecycle_runtime.txt":           ".",
-	"native_runtime_v2.txt":           ".",
-	"operator_admin_runtime.txt":      ".",
-	"participation.txt":               ".",
-	"participation_operator.txt":      ".",
-	"raw.txt":                         "eebusraw",
-	"raw_feature.txt":                 "eebusraw",
-	"raw_mutation.txt":                "eebusraw",
+	"evidence.txt":                        "eebusevidence",
+	"lifecycle_native_runtime_second.txt": ".",
+	"lifecycle_operator_admin_first.txt":  ".",
+	"lifecycle_runtime.txt":               ".",
+	"native_runtime_second.txt":           ".",
+	"operator_admin_runtime.txt":          ".",
+	"participation.txt":                   ".",
+	"participation_operator.txt":          ".",
+	"raw.txt":                             "eebusraw",
+	"raw_feature.txt":                     "eebusraw",
+	"raw_mutation.txt":                    "eebusraw",
 }
 
 func TestExportInventoryDrift(t *testing.T) {
@@ -106,7 +106,7 @@ func TestExportInventoryGoldensAreCanonical(t *testing.T) {
 func TestExportInventoryGoldensMatchGateTables(t *testing.T) {
 	tables := map[string]map[manifestExport]struct{}{
 		"evidence.txt":               allowedMSP035EvidenceExports,
-		"native_runtime_v2.txt":      issue129NativeRuntimeV2Exports,
+		"native_runtime_second.txt":  issue129NativeRuntimeV2Exports,
 		"operator_admin_runtime.txt": postM9OperatorAdminRuntimeExports,
 		"participation.txt":          issue137ParticipationExports,
 		"participation_operator.txt": issue137ParticipationOperatorExports,
