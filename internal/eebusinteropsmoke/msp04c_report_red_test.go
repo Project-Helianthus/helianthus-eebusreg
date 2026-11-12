@@ -11,8 +11,8 @@ import (
 
 func TestMSP04CG16ArtifactIsDeterministicClosedAndRedacted(t *testing.T) {
 	input := validMSP04CArtifactInput(1)
-	input.Commands = []msp04cArtifactCommand{msp04cCommandDiffCheck, msp04cCommandUnit, msp04cCommandAPIFreeze}
-	artifact, err := newMSP04CArtifact(input)
+	input.Commands = []firstTrustArtifactCommand{firstTrustCommandDiffCheck, firstTrustCommandUnit, firstTrustCommandAPIFreeze}
+	artifact, err := newFirstTrustArtifact(input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,10 +38,10 @@ func TestMSP04CG16ArtifactIsDeterministicClosedAndRedacted(t *testing.T) {
 	}
 
 	reordered := input
-	reordered.Commands = []msp04cArtifactCommand{msp04cCommandAPIFreeze, msp04cCommandUnit, msp04cCommandDiffCheck}
-	reordered.Transcript = append([]msp04cSubcaseObservation(nil), input.Transcript...)
+	reordered.Commands = []firstTrustArtifactCommand{firstTrustCommandAPIFreeze, firstTrustCommandUnit, firstTrustCommandDiffCheck}
+	reordered.Transcript = append([]firstTrustSubcaseObservation(nil), input.Transcript...)
 	slices.Reverse(reordered.Transcript)
-	artifactAgain, err := newMSP04CArtifact(reordered)
+	artifactAgain, err := newFirstTrustArtifact(reordered)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,28 +80,28 @@ func TestMSP04CG16ArtifactRequiresExactlyG10G11G16(t *testing.T) {
 	base := validMSP04CArtifactInput(2)
 	invalid := []struct {
 		name   string
-		mutate func(*msp04cArtifactInput)
+		mutate func(*firstTrustArtifactInput)
 	}{
-		{name: "missing subcase", mutate: func(input *msp04cArtifactInput) { input.Transcript = input.Transcript[:len(input.Transcript)-1] }},
-		{name: "duplicate subcase", mutate: func(input *msp04cArtifactInput) { input.Transcript[len(input.Transcript)-1] = input.Transcript[0] }},
-		{name: "unexpected subcase", mutate: func(input *msp04cArtifactInput) { input.Transcript[0].Subcase = 255 }},
-		{name: "unlisted command", mutate: func(input *msp04cArtifactInput) { input.Commands = []msp04cArtifactCommand{99} }},
+		{name: "missing subcase", mutate: func(input *firstTrustArtifactInput) { input.Transcript = input.Transcript[:len(input.Transcript)-1] }},
+		{name: "duplicate subcase", mutate: func(input *firstTrustArtifactInput) { input.Transcript[len(input.Transcript)-1] = input.Transcript[0] }},
+		{name: "unexpected subcase", mutate: func(input *firstTrustArtifactInput) { input.Transcript[0].Subcase = 255 }},
+		{name: "unlisted command", mutate: func(input *firstTrustArtifactInput) { input.Commands = []firstTrustArtifactCommand{99} }},
 	}
 	for _, test := range invalid {
 		t.Run(test.name, func(t *testing.T) {
 			input := base
-			input.Transcript = append([]msp04cSubcaseObservation(nil), base.Transcript...)
+			input.Transcript = append([]firstTrustSubcaseObservation(nil), base.Transcript...)
 			test.mutate(&input)
-			if _, err := newMSP04CArtifact(input); err == nil {
+			if _, err := newFirstTrustArtifact(input); err == nil {
 				t.Fatal("incomplete or non-closed execution transcript was accepted")
 			}
 		})
 	}
-	if len(msp04cRequiredSubcases) != 24 {
-		t.Fatalf("required execution inventory changed without an exhaustive contract update: %d", len(msp04cRequiredSubcases))
+	if len(firstTrustRequiredSubcases) != 24 {
+		t.Fatalf("required execution inventory changed without an exhaustive contract update: %d", len(firstTrustRequiredSubcases))
 	}
 	seenGates := map[string]int{}
-	for _, expected := range msp04cRequiredSubcases {
+	for _, expected := range firstTrustRequiredSubcases {
 		seenGates[expected.gate]++
 	}
 	if seenGates["EEBUS-G10"] != 9 || seenGates["EEBUS-G11"] != 12 || seenGates["EEBUS-G16"] != 3 {
@@ -110,7 +110,7 @@ func TestMSP04CG16ArtifactRequiresExactlyG10G11G16(t *testing.T) {
 }
 
 func TestMSP04CG16ArtifactTypesHaveNoOpenEndedPayloadFields(t *testing.T) {
-	for _, value := range []any{msp04cArtifact{}, msp04cArtifactCase{}, msp04cArtifactToolchain{}} {
+	for _, value := range []any{firstTrustArtifact{}, firstTrustArtifactCase{}, firstTrustArtifactToolchain{}} {
 		typeOf := reflect.TypeOf(value)
 		for index := 0; index < typeOf.NumField(); index++ {
 			field := typeOf.Field(index)
@@ -120,7 +120,7 @@ func TestMSP04CG16ArtifactTypesHaveNoOpenEndedPayloadFields(t *testing.T) {
 			}
 		}
 	}
-	observationType := reflect.TypeOf(msp04cSubcaseObservation{})
+	observationType := reflect.TypeOf(firstTrustSubcaseObservation{})
 	if _, callerStatus := observationType.FieldByName("Status"); callerStatus {
 		t.Fatal("execution transcript permits caller-supplied PASS/FAIL")
 	}
@@ -129,15 +129,15 @@ func TestMSP04CG16ArtifactTypesHaveNoOpenEndedPayloadFields(t *testing.T) {
 func TestMSP04CG16ArtifactFailureRowsRemainDeterministic(t *testing.T) {
 	input := validMSP04CArtifactInput(3)
 	for index := range input.Transcript {
-		if input.Transcript[index].Subcase == msp04cG10Clone {
+		if input.Transcript[index].Subcase == firstTrustG10Clone {
 			input.Transcript[index].Reason = "DURABILITY_UNKNOWN"
 		}
 	}
-	first, err := newMSP04CArtifact(input)
+	first, err := newFirstTrustArtifact(input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := newMSP04CArtifact(input)
+	second, err := newFirstTrustArtifact(input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,11 +161,11 @@ func TestMSP04CG16RunAndCaseLabelsAreRandomAcrossRunsAndReplayable(t *testing.T)
 	secondInput := validMSP04CArtifactInput(4)
 	firstInput.RunSeed = [32]byte{}
 	secondInput.RunSeed = [32]byte{}
-	first, err := newMSP04CArtifact(firstInput)
+	first, err := newFirstTrustArtifact(firstInput)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := newMSP04CArtifact(secondInput)
+	second, err := newFirstTrustArtifact(secondInput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestMSP04CG16RunAndCaseLabelsAreRandomAcrossRunsAndReplayable(t *testing.T)
 
 	replayInput := firstInput
 	replayInput.RunSeed = first.replaySeed
-	replay, err := newMSP04CArtifact(replayInput)
+	replay, err := newFirstTrustArtifact(replayInput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,22 +191,22 @@ func TestMSP04CG16RunAndCaseLabelsAreRandomAcrossRunsAndReplayable(t *testing.T)
 	}
 }
 
-func validMSP04CArtifactInput(seedByte byte) msp04cArtifactInput {
-	input := msp04cArtifactInput{
+func validMSP04CArtifactInput(seedByte byte) firstTrustArtifactInput {
+	input := firstTrustArtifactInput{
 		Repo: "Project-Helianthus/helianthus-eebusreg", Branch: "issue/28-msp04c-restore-quarantine",
 		Commit: strings.Repeat("1", 40), Issue: "MSP-04C", GoVersion: "go1.25.0", GoWork: "off", GoToolchain: "auto",
-		Commands: []msp04cArtifactCommand{msp04cCommandAPIFreeze, msp04cCommandDiffCheck, msp04cCommandUnit},
+		Commands: []firstTrustArtifactCommand{firstTrustCommandAPIFreeze, firstTrustCommandDiffCheck, firstTrustCommandUnit},
 	}
 	input.RunSeed[0] = seedByte
-	ids := make([]int, 0, len(msp04cRequiredSubcases))
-	for subcase := range msp04cRequiredSubcases {
+	ids := make([]int, 0, len(firstTrustRequiredSubcases))
+	for subcase := range firstTrustRequiredSubcases {
 		ids = append(ids, int(subcase))
 	}
 	slices.Sort(ids)
 	for _, raw := range ids {
-		subcase := msp04cSubcase(raw)
-		expected := msp04cRequiredSubcases[subcase]
-		input.Transcript = append(input.Transcript, msp04cSubcaseObservation{
+		subcase := firstTrustSubcase(raw)
+		expected := firstTrustRequiredSubcases[subcase]
+		input.Transcript = append(input.Transcript, firstTrustSubcaseObservation{
 			Subcase: subcase, State: expected.state, Reason: expected.reason, Outcome: expected.outcome,
 			Count: expected.count, DelaySeconds: expected.delaySeconds,
 		})

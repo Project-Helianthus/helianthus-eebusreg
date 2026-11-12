@@ -116,13 +116,13 @@
       "value": 89
     },
     {
-      "path": "internal/eebusfacade/msp04cr2_predial.go",
+      "path": "internal/eebusfacade/first_trust_predial.go",
       "symbol": "(*firstTrustCoordinator).prepareOutgoingAttemptLocked",
       "metric": "function_lines",
       "value": 155
     },
     {
-      "path": "internal/eebusfacade/msp04cr2_predial.go",
+      "path": "internal/eebusfacade/first_trust_predial.go",
       "symbol": "<file>",
       "metric": "file_lines",
       "value": 1178
