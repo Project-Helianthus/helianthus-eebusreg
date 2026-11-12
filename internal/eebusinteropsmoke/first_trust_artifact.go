@@ -89,18 +89,18 @@ type firstTrustArtifactCase struct {
 }
 
 type firstTrustArtifact struct {
-	AuthScope      string                  `json:"auth_scope"`
+	AuthScope      string                      `json:"auth_scope"`
 	Cases          []firstTrustArtifactCase    `json:"cases"`
 	Commands       []firstTrustArtifactCommand `json:"commands"`
-	Issue          string                  `json:"issue"`
-	Repo           string                  `json:"repo"`
-	RepoBranch     string                  `json:"repo_branch"`
-	RepoCommit     string                  `json:"repo_commit"`
-	Result         string                  `json:"result"`
-	RunLabel       string                  `json:"run_label"`
-	TemporaryPaths string                  `json:"temporary_paths"`
+	Issue          string                      `json:"issue"`
+	Repo           string                      `json:"repo"`
+	RepoBranch     string                      `json:"repo_branch"`
+	RepoCommit     string                      `json:"repo_commit"`
+	Result         string                      `json:"result"`
+	RunLabel       string                      `json:"run_label"`
+	TemporaryPaths string                      `json:"temporary_paths"`
 	Toolchain      firstTrustArtifactToolchain `json:"toolchain"`
-	Topology       string                  `json:"topology"`
+	Topology       string                      `json:"topology"`
 	replaySeed     [32]byte
 }
 
