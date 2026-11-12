@@ -5817,8 +5817,8 @@
       "category": "filename"
     },
     {
-      "path": "internal/eebusfacade/msp04c_backoff.go",
-      "symbol": "msp04c_backoff.go",
+      "path": "internal/eebusfacade/first_trust_backoff.go",
+      "symbol": "first_trust_backoff.go",
       "category": "filename"
     },
     {
@@ -5877,8 +5877,8 @@
       "category": "filename"
     },
     {
-      "path": "internal/eebusfacade/msp04c_coordinator.go",
-      "symbol": "msp04c_coordinator.go",
+      "path": "internal/eebusfacade/first_trust_coordinator.go",
+      "symbol": "first_trust_coordinator.go",
       "category": "filename"
     },
     {
@@ -6077,8 +6077,8 @@
       "category": "identifier"
     },
     {
-      "path": "internal/eebusfacade/msp04c_revocation_repair.go",
-      "symbol": "msp04c_revocation_repair.go",
+      "path": "internal/eebusfacade/first_trust_revocation_repair.go",
+      "symbol": "first_trust_revocation_repair.go",
       "category": "filename"
     },
     {
@@ -6187,18 +6187,18 @@
       "category": "filename"
     },
     {
-      "path": "internal/eebusfacade/msp04c_types.go",
+      "path": "internal/eebusfacade/first_trust_types.go",
       "symbol": "bindingSHA256",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusfacade/msp04c_types.go",
+      "path": "internal/eebusfacade/first_trust_types.go",
       "symbol": "expectedManifestSHA256",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusfacade/msp04c_types.go",
-      "symbol": "msp04c_types.go",
+      "path": "internal/eebusfacade/first_trust_types.go",
+      "symbol": "first_trust_types.go",
       "category": "filename"
     },
     {
@@ -6217,8 +6217,8 @@
       "category": "identifier"
     },
     {
-      "path": "internal/eebusfacade/msp04cr2_predial.go",
-      "symbol": "msp04cr2_predial.go",
+      "path": "internal/eebusfacade/first_trust_predial.go",
+      "symbol": "first_trust_predial.go",
       "category": "filename"
     },
     {
@@ -7597,253 +7597,253 @@
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "compactMSP04CCommands",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "compactFirstTrustCommands",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cArtifact",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustArtifact",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cArtifactCase",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustArtifactCase",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cArtifactCommand",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustArtifactCommand",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cArtifactInput",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustArtifactInput",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cArtifactToolchain",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustArtifactToolchain",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cCaseIDAllowed",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustCaseIDAllowed",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cCommandAPIFreeze",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustCommandAPIFreeze",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cCommandAllowed",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustCommandAllowed",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cCommandDiffCheck",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustCommandDiffCheck",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cCommandUnit",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustCommandUnit",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cCommitPattern",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustCommitPattern",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cExpectedSubcase",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustExpectedSubcase",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG10Clone",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG10Clone",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG10ControlRollback",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG10ControlRollback",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG10CopiedCurrentRepair",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG10CopiedCurrentRepair",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG10DurabilityUnknown",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG10DurabilityUnknown",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG10HostBindingMismatch",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG10HostBindingMismatch",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG10HostKeyUnavailable",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG10HostKeyUnavailable",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG10InactiveParentRepair",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG10InactiveParentRepair",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG10ManifestRollback",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG10ManifestRollback",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG10SameNumberBranchConflict",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG10SameNumberBranchConflict",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG11Bounds",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG11Bounds",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG11CheckpointFour",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG11CheckpointFour",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG11CheckpointSix",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG11CheckpointSix",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG11DeadlineReady",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG11DeadlineReady",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG11NoActiveEviction",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG11NoActiveEviction",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG11PreDeadline",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG11PreDeadline",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG11RestartFour",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG11RestartFour",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG11Vector0",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG11Vector0",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG11Vector1",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG11Vector1",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG11Vector2",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG11Vector2",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG11Vector3",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG11Vector3",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG11Vector4",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG11Vector4",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG16APIFreeze",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG16APIFreeze",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG16FailureRedaction",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG16FailureRedaction",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cG16SuccessRedaction",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustG16SuccessRedaction",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cOutcomeAllowed",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustOutcomeAllowed",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cPassStatus",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustPassStatus",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cReasonAllowed",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustReasonAllowed",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cRequiredSubcases",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustRequiredSubcases",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cSeededLabel",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustSeededLabel",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cStateAllowed",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustStateAllowed",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cStatusAllowed",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustStatusAllowed",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cSubcase",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustSubcase",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04cSubcaseObservation",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "firstTrustSubcaseObservation",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "msp04c_artifact.go",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "first_trust_artifact.go",
       "category": "filename"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "newMSP04CArtifact",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "newFirstTrustArtifact",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "newMSP04CRunSeed",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "newFirstTrustRunSeed",
       "category": "identifier"
     },
     {
-      "path": "internal/eebusinteropsmoke/msp04c_artifact.go",
-      "symbol": "validateMSP04CTranscript",
+      "path": "internal/eebusinteropsmoke/first_trust_artifact.go",
+      "symbol": "validateFirstTrustTranscript",
       "category": "identifier"
     },
     {

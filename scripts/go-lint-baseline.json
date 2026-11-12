@@ -1569,7 +1569,7 @@
       "count": 2
     },
     {
-      "path": "internal/eebusfacade/msp04c_coordinator.go",
+      "path": "internal/eebusfacade/first_trust_coordinator.go",
       "symbol": "coordinator.setWaitingLocked",
       "rule": "errcheck",
       "count": 3
