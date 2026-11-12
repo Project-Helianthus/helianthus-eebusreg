@@ -1,0 +1,7 @@
+func ParticipationApplyResultV1.Validate
+func ParticipationConfigurationV1.Validate
+func ParticipationContributionV1.Validate
+func ValidateParticipationChangeV1
+func ValidateParticipationControlV1
+type ParticipationApplyRequestV1
+type ParticipationDriverV1
