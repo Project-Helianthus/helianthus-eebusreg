@@ -20,7 +20,7 @@ import (
 
 const (
 	reportContract = "helianthus.eebus.transport-gate.v0"
-	reportIssue    = "MSP-03D-R"
+	reportIssue    = "interop_report"
 	reportRepo     = "Project-Helianthus/helianthus-eebusreg"
 
 	caseFakePeer = "EEBUS-G01"

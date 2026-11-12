@@ -150,24 +150,24 @@ func newFirstTrustArtifact(input firstTrustArtifactInput) (firstTrustArtifact, e
 	input.GoVersion = strings.TrimSpace(input.GoVersion)
 	input.GoWork = strings.TrimSpace(input.GoWork)
 	input.GoToolchain = strings.TrimSpace(input.GoToolchain)
-	if input.Repo == "" || input.Branch == "" || input.Issue != "MSP-04C" || !firstTrustCommitPattern.MatchString(input.Commit) || input.GoVersion == "" || input.GoWork == "" || input.GoToolchain == "" {
-		return firstTrustArtifact{}, errors.New("invalid MSP-04C artifact metadata")
+	if input.Repo == "" || input.Branch == "" || input.Issue != "first_trust_interop" || !firstTrustCommitPattern.MatchString(input.Commit) || input.GoVersion == "" || input.GoWork == "" || input.GoToolchain == "" {
+		return firstTrustArtifact{}, errors.New("invalid first-trust interop artifact metadata")
 	}
 	seed := input.RunSeed
 	if seed == [32]byte{} {
 		var err error
 		seed, err = newFirstTrustRunSeed(rand.Reader)
 		if err != nil {
-			return firstTrustArtifact{}, errors.New("MSP-04C run seed unavailable")
+			return firstTrustArtifact{}, errors.New("first-trust interop run seed unavailable")
 		}
 	}
 	commands := append([]firstTrustArtifactCommand(nil), input.Commands...)
 	if len(commands) == 0 {
-		return firstTrustArtifact{}, errors.New("missing MSP-04C artifact commands")
+		return firstTrustArtifact{}, errors.New("missing first-trust interop artifact commands")
 	}
 	for _, command := range commands {
 		if !firstTrustCommandAllowed(command) {
-			return firstTrustArtifact{}, errors.New("invalid MSP-04C artifact command")
+			return firstTrustArtifact{}, errors.New("invalid first-trust interop artifact command")
 		}
 	}
 	sort.Slice(commands, func(left, right int) bool { return commands[left] < commands[right] })
@@ -200,17 +200,17 @@ func newFirstTrustArtifact(input firstTrustArtifactInput) (firstTrustArtifact, e
 
 func validateFirstTrustTranscript(transcript []firstTrustSubcaseObservation) (map[string]bool, error) {
 	if len(transcript) != len(firstTrustRequiredSubcases) {
-		return nil, errors.New("incomplete MSP-04C execution transcript")
+		return nil, errors.New("incomplete first-trust interop execution transcript")
 	}
 	seen := make(map[firstTrustSubcase]struct{}, len(transcript))
 	gatePass := map[string]bool{"EEBUS-G10": true, "EEBUS-G11": true, "EEBUS-G16": true}
 	for _, observed := range transcript {
 		expected, required := firstTrustRequiredSubcases[observed.Subcase]
 		if !required {
-			return nil, errors.New("unexpected MSP-04C execution subcase")
+			return nil, errors.New("unexpected first-trust interop execution subcase")
 		}
 		if _, duplicate := seen[observed.Subcase]; duplicate {
-			return nil, errors.New("duplicate MSP-04C execution subcase")
+			return nil, errors.New("duplicate first-trust interop execution subcase")
 		}
 		seen[observed.Subcase] = struct{}{}
 		if observed.State != expected.state || observed.Reason != expected.reason || observed.Outcome != expected.outcome || observed.Count != expected.count || observed.DelaySeconds != expected.delaySeconds {
@@ -246,27 +246,27 @@ func firstTrustSeededLabel(seed [32]byte, scope string) string {
 }
 
 func (artifact firstTrustArtifact) validate() error {
-	if artifact.AuthScope != "not_applicable_synthetic" || artifact.TemporaryPaths != "redacted" || artifact.Topology != "not_applicable_synthetic" || artifact.Issue != "MSP-04C" || artifact.RunLabel == "" || artifact.replaySeed == [32]byte{} || !firstTrustCommitPattern.MatchString(artifact.RepoCommit) {
-		return errors.New("invalid MSP-04C artifact envelope")
+	if artifact.AuthScope != "not_applicable_synthetic" || artifact.TemporaryPaths != "redacted" || artifact.Topology != "not_applicable_synthetic" || artifact.Issue != "first_trust_interop" || artifact.RunLabel == "" || artifact.replaySeed == [32]byte{} || !firstTrustCommitPattern.MatchString(artifact.RepoCommit) {
+		return errors.New("invalid first-trust interop artifact envelope")
 	}
 	if artifact.Result != "PASS" && artifact.Result != "FAIL" {
-		return errors.New("invalid MSP-04C artifact result")
+		return errors.New("invalid first-trust interop artifact result")
 	}
 	if artifact.Repo == "" || artifact.RepoBranch == "" || artifact.Toolchain.GoVersion == "" || artifact.Toolchain.GoWork == "" || artifact.Toolchain.GoToolchain == "" || len(artifact.Cases) != 3 || len(artifact.Commands) == 0 {
-		return errors.New("incomplete MSP-04C artifact")
+		return errors.New("incomplete first-trust interop artifact")
 	}
 	wantResult := "PASS"
 	seen := make(map[string]struct{}, 3)
 	labels := make(map[string]struct{}, 3)
 	for _, item := range artifact.Cases {
 		if item.CaseLabel == "" || !firstTrustCaseIDAllowed(item.ID) || !firstTrustStatusAllowed(item.Status) || !firstTrustStateAllowed(item.State) || !firstTrustReasonAllowed(item.Reason) || !firstTrustOutcomeAllowed(item.Outcome) {
-			return errors.New("invalid MSP-04C artifact case")
+			return errors.New("invalid first-trust interop artifact case")
 		}
 		if _, duplicate := seen[item.ID]; duplicate {
-			return errors.New("duplicate MSP-04C artifact case")
+			return errors.New("duplicate first-trust interop artifact case")
 		}
 		if _, duplicate := labels[item.CaseLabel]; duplicate {
-			return errors.New("duplicate MSP-04C artifact case label")
+			return errors.New("duplicate first-trust interop artifact case label")
 		}
 		seen[item.ID], labels[item.CaseLabel] = struct{}{}, struct{}{}
 		if item.Status == "FAIL" {
@@ -274,7 +274,7 @@ func (artifact firstTrustArtifact) validate() error {
 		}
 	}
 	if len(seen) != 3 || wantResult != artifact.Result {
-		return errors.New("inconsistent MSP-04C artifact result")
+		return errors.New("inconsistent first-trust interop artifact result")
 	}
 	return nil
 }
