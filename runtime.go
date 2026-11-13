@@ -18,36 +18,82 @@ import (
 )
 
 var (
+	// ErrRuntimeDisabled is returned by the snapshot reads of a runtime built from a Config with
+	// Enabled false. Start on such a runtime succeeds without acquiring anything.
 	ErrRuntimeDisabled = errors.New("eebus runtime is disabled")
+	// ErrRuntimeShutdown is returned by Start once Shutdown has begun, including to a Start whose
+	// backend acquisition Shutdown overtook; the acquired backend is then closed by Shutdown.
 	ErrRuntimeShutdown = errors.New("eebus runtime is shutdown")
 )
 
 var errRuntimeSnapshotUnavailable = errors.New("eebus runtime snapshot is unavailable")
 
+// Runtime is one eeBUS runtime instance with the raw snapshot contract v1; it is safe for
+// concurrent use. A backend failure, including a published snapshot that fails validation or a
+// backend that stops on its own, stops the runtime and is retained: every later Start, Snapshot
+// and PairingState returns it, and recovery means building a new Runtime. The value returned by
+// New also implements RawMutationRuntimeV1, which callers reach by type assertion.
 type Runtime interface {
 	RawFeatureRuntimeV1
+	// Start acquires the backend under ctx (nil means context.Background) and then runs it on its
+	// own context, so cancelling ctx after Start returns does not stop the runtime. Start is a
+	// no-op once started; a concurrent caller waits for the attempt in flight or for its own ctx.
 	Start(context.Context) error
+	// Shutdown cancels a start attempt, closes the backend, waits for it to stop and freezes the
+	// latest snapshot, including one published while closing, with the shutdown runtime state.
+	// Concurrent and later calls wait for the first one and return its joined worker, snapshot
+	// and close errors.
 	Shutdown() error
+	// Snapshot returns a deep copy of the latest validated snapshot, and the frozen terminal one
+	// after Shutdown. It fails until the backend has published a snapshot.
 	Snapshot() (SnapshotV1, error)
+	// PairingState returns the Pairing observations of Snapshot, with the same errors.
 	PairingState() ([]PairingObservationV1, error)
 }
 
+// Config selects and bounds one runtime instance. Constructors validate and normalize it before
+// any I/O. With Enabled false every other field must hold its zero value, nil slices included;
+// with Enabled true the per-field rules below apply. The constructor deep-copies Remotes and
+// MutationLabProfiles, so the caller may reuse its slices.
 type Config struct {
-	Enabled             bool
-	StateRoot           string
-	Interface           string
-	ListenAddress       netip.AddrPort
-	DiscoveryEnabled    bool
-	Remotes             []Remote
-	PairingPolicy       PairingPolicy
+	// Enabled false yields an inert runtime that never listens or opens StateRoot.
+	Enabled bool
+	// StateRoot is the absolute directory of the persistent local identity and trust store. It is
+	// trimmed and cleaned; the filesystem root is rejected.
+	StateRoot string
+	// Interface is the name of the one network interface the runtime uses. Empty and wildcard
+	// values are rejected.
+	Interface string
+	// ListenAddress is a unicast address with a non-zero port. Unspecified, multicast, 0.0.0.0/8,
+	// limited broadcast and IPv4-mapped IPv6 addresses are rejected.
+	ListenAddress netip.AddrPort
+	// DiscoveryEnabled enables discovery of peers on the local network; discovery alone grants no
+	// trust.
+	DiscoveryEnabled bool
+	// Remotes is the allowlist of peers. Each SKI is trimmed and lower-cased and must be unique.
+	// The list may be empty.
+	Remotes []Remote
+	// PairingPolicy must be PairingPolicyClosed.
+	PairingPolicy PairingPolicy
+	// MutationLabProfiles admits at most 16 profiles for governed raw writes. Each must pass
+	// eebusraw.ValidateMutationLabProfileV1, target a remote listed in Remotes, and be unique by
+	// profile ID and by content.
 	MutationLabProfiles []eebusraw.MutationLabProfileV1
 }
 
+// PairingPolicy names how a runtime admits pairing. An enabled Config accepts only
+// PairingPolicyClosed; the policy is specified in
+// https://github.com/Project-Helianthus/helianthus-docs-eebus/tree/main/api.
 type PairingPolicy string
 
+// PairingPolicyClosed is the closed pairing policy, the only value an enabled Config accepts.
 const PairingPolicyClosed PairingPolicy = "closed"
 
+// Remote allowlists one peer by its subject key identifier. Allowlisting is configuration, not
+// observed trust or qualification. See
+// https://github.com/Project-Helianthus/helianthus-docs-eebus/tree/main/protocols.
 type Remote struct {
+	// SKI is 40 hexadecimal characters in either case.
 	SKI string
 }
 
@@ -102,10 +148,17 @@ type facadeRuntimeBackend struct {
 	hasTerminal bool
 }
 
+// New validates and normalizes config and returns a stopped Runtime without performing I/O;
+// Start acquires the backend. Its errors name the violated rule and the list index, never a
+// configured value.
 func New(config Config) (Runtime, error) {
 	return newRuntime(config, newFacadeRuntimeBackend)
 }
 
+// NewOperatorRuntimeV1 is New plus the operator administration surface AdminV1 bound to the same
+// runtime. The AdminV1 reaches the backend only while the runtime runs and loses it when the
+// backend stops or Shutdown begins. A configuration error is reported only as an *AdminErrorV1
+// with code AdminErrorCodeV1AdminBoundaryUnavailable, without detail.
 func NewOperatorRuntimeV1(config Config) (Runtime, AdminV1, error) {
 	runtime, err := newRuntime(config, newFacadeRuntimeBackend)
 	if err != nil {

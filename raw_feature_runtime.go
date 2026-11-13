@@ -7,12 +7,21 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 )
 
+// RawFeatureRuntimeV1 is the raw feature read surface of a Runtime. Each call validates auth for
+// its tool and then the request, hands the backend a copy and returns copies, so caller and
+// backend share no values. While the runtime is disabled, not started, shut down or failed, a
+// call returns a retriable disconnected error from the runtime layer without contacting a peer.
+// The tools are specified in
+// https://github.com/Project-Helianthus/helianthus-docs-eebus/tree/main/api.
 type RawFeatureRuntimeV1 interface {
+	// FeaturesGet returns the feature inventory of one exact locator.
 	FeaturesGet(
 		context.Context,
 		eebusraw.ReadAuthorizationV1,
 		eebusraw.FeaturesGetRequestV1,
 	) (eebusraw.FeaturesGetDataV1, *eebusraw.ErrorV1)
+	// FeaturesDataGet performs full READs of 1 to 16 targets and issues the read tokens that a
+	// later write of the same target needs.
 	FeaturesDataGet(
 		context.Context,
 		eebusraw.ReadAuthorizationV1,

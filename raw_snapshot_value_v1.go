@@ -41,18 +41,30 @@ var snapshotSecretKeysV1 = map[string]struct{}{
 	"cryptographic_secret":   {},
 }
 
+// OpaqueObservationV1 is one native value read at Path from Source and retained as evidence
+// without interpretation. Snapshot validation requires a non-empty Path of at most 512 characters
+// and Source of at most 128, rejects exact duplicates, and limits each value to 16384 canonical
+// bytes; one snapshot holds at most 256 observations totalling 262144 canonical bytes.
 type OpaqueObservationV1 struct {
 	Path   string        `json:"path"`
 	Source string        `json:"source"`
 	Value  OpaqueValueV1 `json:"value"`
 }
 
+// OpaqueValueV1 is an integer-only JSON value with exactly one of Scalar, Array and Object set.
+// Its JSON form is the plain value, not an object with scalar, array or object keys. Arrays and
+// objects hold at most 32 members and nest at most three containers deep. Object keys are at most
+// 128 characters, and keys that name secret material such as private keys or tokens are rejected
+// regardless of case.
 type OpaqueValueV1 struct {
 	Scalar *OpaqueScalarV1           `json:"scalar,omitempty"`
 	Array  *[]OpaqueValueV1          `json:"array,omitempty"`
 	Object *map[string]OpaqueValueV1 `json:"object,omitempty"`
 }
 
+// OpaqueScalarV1 is a JSON scalar with exactly one field set: Null pointing to true marks null,
+// Integer lies within plus or minus 2^53-1 so that every JSON reader keeps it exact, and String
+// is valid UTF-8 of at most 4096 bytes that contains no private-key PEM block.
 type OpaqueScalarV1 struct {
 	Null    *bool   `json:"null,omitempty"`
 	Boolean *bool   `json:"boolean,omitempty"`
@@ -60,10 +72,15 @@ type OpaqueScalarV1 struct {
 	String  *string `json:"string,omitempty"`
 }
 
+// MetadataV1 holds a device's native descriptive pairs as JSON scalars. Its JSON form is a plain
+// object of at most 64 members, not an object with a values key; keys are non-empty, at most 128
+// characters and never a secret key name.
 type MetadataV1 struct {
 	Values map[string]MetadataValueV1 `json:"values"`
 }
 
+// MetadataValueV1 is one metadata scalar under the rules of OpaqueScalarV1, with strings further
+// limited to 1024 characters.
 type MetadataValueV1 struct {
 	Null    *bool   `json:"null,omitempty"`
 	Boolean *bool   `json:"boolean,omitempty"`
@@ -71,6 +88,8 @@ type MetadataValueV1 struct {
 	String  *string `json:"string,omitempty"`
 }
 
+// MarshalJSON validates the value and writes it in canonical JSON, with object keys sorted by
+// UTF-16 code units and no insignificant white space, so equal values encode to equal bytes.
 func (value OpaqueValueV1) MarshalJSON() ([]byte, error) {
 	if err := validateOpaqueValueV1(value, 1); err != nil {
 		return nil, err
@@ -93,6 +112,10 @@ func (value OpaqueValueV1) MarshalJSON() ([]byte, error) {
 	}
 }
 
+// UnmarshalJSON accepts exactly one JSON value of at most 65536 bytes and 40000 tokens under the
+// OpaqueValueV1 limits. It rejects fractions, exponents, negative zero, out-of-range integers,
+// strings over 4096 bytes, duplicate or secret keys and private-key PEM blocks, and leaves the
+// receiver unchanged on error.
 func (value *OpaqueValueV1) UnmarshalJSON(data []byte) error {
 	if err := validateOpaqueJSONWireV1(data); err != nil {
 		return err
@@ -112,6 +135,7 @@ func (value *OpaqueValueV1) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalJSON validates the scalar and writes it as a bare JSON scalar.
 func (scalar OpaqueScalarV1) MarshalJSON() ([]byte, error) {
 	if err := validateOpaqueScalarV1(scalar); err != nil {
 		return nil, err
@@ -128,6 +152,9 @@ func (scalar OpaqueScalarV1) MarshalJSON() ([]byte, error) {
 	}
 }
 
+// UnmarshalJSON decodes one JSON scalar; a number must be an int64 integer without fraction,
+// exponent or negative zero. It does not apply the range, length and secret checks, which
+// MarshalJSON and the enclosing value's validation apply. The receiver is unchanged on error.
 func (scalar *OpaqueScalarV1) UnmarshalJSON(data []byte) error {
 	decoded, err := decodeJSONValueV1(data)
 	if err != nil {
@@ -141,6 +168,8 @@ func (scalar *OpaqueScalarV1) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalJSON validates the metadata and writes it as a canonical JSON object; a nil Values map
+// encodes as {}.
 func (metadata MetadataV1) MarshalJSON() ([]byte, error) {
 	if err := validateMetadataV1(&metadata); err != nil {
 		return nil, err
@@ -152,6 +181,8 @@ func (metadata MetadataV1) MarshalJSON() ([]byte, error) {
 	return marshalJCSV1(values)
 }
 
+// UnmarshalJSON accepts one JSON object whose members are all scalars, validates it under the
+// MetadataV1 limits, and leaves the receiver unchanged on error.
 func (metadata *MetadataV1) UnmarshalJSON(data []byte) error {
 	decoded, err := decodeJSONValueV1(data)
 	if err != nil {
@@ -176,6 +207,7 @@ func (metadata *MetadataV1) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalJSON validates the scalar and writes it as a bare JSON scalar.
 func (value MetadataValueV1) MarshalJSON() ([]byte, error) {
 	if err := validateMetadataValueV1(value); err != nil {
 		return nil, err
@@ -192,6 +224,8 @@ func (value MetadataValueV1) MarshalJSON() ([]byte, error) {
 	}
 }
 
+// UnmarshalJSON decodes one JSON scalar like OpaqueScalarV1.UnmarshalJSON, with the same deferred
+// checks. The receiver is unchanged on error.
 func (value *MetadataValueV1) UnmarshalJSON(data []byte) error {
 	decoded, err := decodeJSONValueV1(data)
 	if err != nil {

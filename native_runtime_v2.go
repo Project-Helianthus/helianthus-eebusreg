@@ -12,10 +12,18 @@ import (
 
 var errNativeRuntimeV2SnapshotUnavailable = errors.New("native eebus runtime snapshot is unavailable")
 
+// NativeRuntimeV2 is one eeBUS runtime instance that publishes NativeSnapshotV2 instead of the raw
+// v1 snapshot; it is safe for concurrent use and has no raw feature or mutation surface. Start,
+// Shutdown, the disabled and shut-down errors, the retained backend failure and the frozen
+// terminal snapshot behave as on Runtime.
 type NativeRuntimeV2 interface {
 	Start(context.Context) error
 	Shutdown() error
+	// NativeSnapshot returns a deep copy of the latest validated native snapshot. It fails until
+	// the backend has published one.
 	NativeSnapshot() (NativeSnapshotV2, error)
+	// NativePairingState returns a copy of the Pairing observations of NativeSnapshot, with the
+	// same errors.
 	NativePairingState() ([]NativePairingObservationV2, error)
 }
 
@@ -67,6 +75,8 @@ type facadeNativeRuntimeV2Backend struct {
 	hasTerminal bool
 }
 
+// NewNativeRuntimeV2 validates config under the rules of New and returns a stopped
+// NativeRuntimeV2 without performing I/O; Start acquires the backend.
 func NewNativeRuntimeV2(config Config) (NativeRuntimeV2, error) {
 	return newNativeRuntimeV2(config, newFacadeNativeRuntimeV2Backend)
 }

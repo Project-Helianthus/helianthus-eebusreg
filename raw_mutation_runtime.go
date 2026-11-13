@@ -8,17 +8,29 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 )
 
+// RawMutationRuntimeV1 is the governed raw write surface. It is not part of Runtime: the value
+// returned by New implements it and callers reach it by type assertion. Each call validates the
+// authorization for its tool and the request shape before reaching the backend, and returns
+// copies. While the runtime is not connected, a call returns a retriable disconnected error
+// without sending a frame. The mutation contract is specified in
+// https://github.com/Project-Helianthus/helianthus-docs-eebus/tree/main/api.
 type RawMutationRuntimeV1 interface {
+	// FeaturesDataSet writes a complete value to one WRITE target. The request needs a read
+	// token, an idempotency key and a mode: apply forbids a probe TTL and probe requires one. A
+	// constraints override needs a profile ID, a justification and an expiry.
 	FeaturesDataSet(
 		context.Context,
 		eebusraw.WriteAuthorizationV1,
 		eebusraw.FeatureDataSetRequestV1,
 	) (RawMutationOutcomeV1, *eebusraw.ErrorV1)
+	// MutationsGet returns a stored mutation by its non-blank reference without sending a frame.
 	MutationsGet(
 		context.Context,
 		eebusraw.ReadAuthorizationV1,
 		eebusraw.MutationGetRequestV1,
 	) (RawMutationOutcomeV1, *eebusraw.ErrorV1)
+	// MutationsRollback restores a mutation's before-image; it needs a mutation reference and an
+	// idempotency key.
 	MutationsRollback(
 		context.Context,
 		eebusraw.WriteAuthorizationV1,
@@ -26,11 +38,15 @@ type RawMutationRuntimeV1 interface {
 	) (RawMutationOutcomeV1, *eebusraw.ErrorV1)
 }
 
+// RawMutationOutcomeV1 is the result of one raw mutation call: the durable mutation record and,
+// when the backend supplies it, the runtime epoch and connection generation the record is bound
+// to. A call can return an outcome together with an error, so callers inspect both.
 type RawMutationOutcomeV1 struct {
 	Mutation eebusraw.MutationV1
 	Runtime  *eebusraw.RuntimeBindingV1
 }
 
+// Clone returns a deep copy, including every optional record of the mutation and its rollback.
 func (outcome RawMutationOutcomeV1) Clone() RawMutationOutcomeV1 {
 	outcome.Mutation = cloneMutationV1(outcome.Mutation)
 	if outcome.Runtime != nil {
