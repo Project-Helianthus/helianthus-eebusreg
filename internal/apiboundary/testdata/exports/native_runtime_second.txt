@@ -3,6 +3,7 @@ func NativeSnapshotV2.Clone
 func NativeSnapshotV2.Validate
 func NewNativeRuntimeV2
 func NewNativeSnapshotV2
+type NativeAbsence
 type NativeDegradationV2
 type NativeDeviceV2
 type NativeEntityV2

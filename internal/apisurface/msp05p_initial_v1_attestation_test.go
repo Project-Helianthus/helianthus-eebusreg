@@ -297,7 +297,7 @@ func issue129NativeV2Symbol(symbol symbol) bool {
 		"NativeFeatureV2": {}, "NativeObservationV2": {}, "NativePairingObservationV2": {},
 		"NativeRuntimeObservationV2": {}, "NativeRuntimeV2": {}, "NativeServiceV2": {},
 		"NativeSessionV2": {}, "NativeSnapshotMetaV2": {}, "NativeSnapshotV2": {},
-		"NativeUseCaseV2": {}, "NativeValueV2": {},
+		"NativeUseCaseV2": {}, "NativeValueV2": {}, "NativeAbsence": {},
 	}
 	if _, ok := names[symbol.Name]; ok {
 		return true

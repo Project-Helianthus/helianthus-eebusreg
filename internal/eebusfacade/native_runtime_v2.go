@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,16 +16,26 @@ const nativeRuntimeV2Source = "eebusfacade.runtime"
 var nativeRuntimeV2JSONNumber = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`)
 
 type nativeRuntimeSnapshotV2Payload struct {
-	Meta         nativeRuntimeSnapshotMetaV2Payload  `json:"meta"`
-	Status       nativeRuntimeStatusV2Payload        `json:"status"`
-	Pairing      []nativeRuntimePairingV2Payload     `json:"pairing"`
-	Services     []nativeRuntimeServiceV2Payload     `json:"services"`
-	Sessions     []nativeRuntimeSessionV2Payload     `json:"sessions"`
-	Devices      []nativeRuntimeDeviceV2Payload      `json:"devices"`
-	Entities     []nativeRuntimeEntityV2Payload      `json:"entities"`
-	Features     []nativeRuntimeFeatureV2Payload     `json:"features"`
-	UseCases     []nativeRuntimeUseCaseV2Payload     `json:"use_cases"`
-	Observations []nativeRuntimeObservationV2Payload `json:"observations"`
+	Meta            nativeRuntimeSnapshotMetaV2Payload  `json:"meta"`
+	Status          nativeRuntimeStatusV2Payload        `json:"status"`
+	Pairing         []nativeRuntimePairingV2Payload     `json:"pairing"`
+	Services        []nativeRuntimeServiceV2Payload     `json:"services"`
+	Sessions        []nativeRuntimeSessionV2Payload     `json:"sessions"`
+	Devices         []nativeRuntimeDeviceV2Payload      `json:"devices"`
+	Entities        []nativeRuntimeEntityV2Payload      `json:"entities"`
+	Features        []nativeRuntimeFeatureV2Payload     `json:"features"`
+	UseCases        []nativeRuntimeUseCaseV2Payload     `json:"use_cases"`
+	Observations    []nativeRuntimeObservationV2Payload `json:"observations"`
+	Absences        []nativeRuntimeAbsencePayload       `json:"absences"`
+	AbsencesOmitted uint64                              `json:"absences_omitted"`
+}
+
+type nativeRuntimeAbsencePayload struct {
+	Kind           string  `json:"kind"`
+	Reason         string  `json:"reason"`
+	DeviceAddress  string  `json:"device_address"`
+	EntityAddress  *string `json:"entity_address,omitempty"`
+	FeatureAddress *string `json:"feature_address,omitempty"`
 }
 
 type nativeRuntimeSnapshotMetaV2Payload struct {
@@ -84,10 +95,11 @@ type nativeRuntimeDeviceV2Payload struct {
 }
 
 type nativeRuntimeEntityV2Payload struct {
-	DeviceAddress string  `json:"device_address"`
-	EntityAddress string  `json:"entity_address"`
-	Type          string  `json:"type"`
-	Description   *string `json:"description,omitempty"`
+	DeviceAddress       string  `json:"device_address"`
+	EntityAddress       string  `json:"entity_address"`
+	ParentEntityAddress *string `json:"parent_entity_address,omitempty"`
+	Type                string  `json:"type"`
+	Description         *string `json:"description,omitempty"`
 }
 
 type nativeRuntimeFeatureV2Payload struct {
@@ -101,6 +113,9 @@ type nativeRuntimeFeatureV2Payload struct {
 
 type nativeRuntimeUseCaseV2Payload struct {
 	ContextAddress      string   `json:"context_address"`
+	DeviceAddress       string   `json:"device_address"`
+	EntityAddress       *string  `json:"entity_address,omitempty"`
+	FeatureAddress      *string  `json:"feature_address,omitempty"`
 	Name                string   `json:"name"`
 	Actor               string   `json:"actor"`
 	ResolvedRole        *string  `json:"resolved_role,omitempty"`
@@ -145,6 +160,7 @@ func marshalNativeRuntimeSnapshotV2WithIdentity(runtimeIdentity, localIdentity s
 		Entities: []nativeRuntimeEntityV2Payload{}, Features: []nativeRuntimeFeatureV2Payload{},
 		UseCases: []nativeRuntimeUseCaseV2Payload{}, Observations: []nativeRuntimeObservationV2Payload{},
 	}
+	var candidates []nativeRuntimeDeviceParts
 	visible, connected, disconnected := false, false, false
 	trustDegradation := ""
 	for _, remote := range graph {
@@ -168,17 +184,14 @@ func marshalNativeRuntimeSnapshotV2WithIdentity(runtimeIdentity, localIdentity s
 			if device.SKI == "" {
 				device.SKI = remote.RemoteSKI
 			}
-			devicePayload, entities, features, useCases, err := marshalNativeRuntimeDeviceV2(device, now)
+			parts, err := marshalNativeRuntimeDeviceV2(device, now)
 			if err != nil {
 				return nil, err
 			}
-			if devicePayload.Address == "" {
+			if parts.device.Address == "" {
 				continue
 			}
-			payload.Devices = append(payload.Devices, devicePayload)
-			payload.Entities = append(payload.Entities, entities...)
-			payload.Features = append(payload.Features, features...)
-			payload.UseCases = append(payload.UseCases, useCases...)
+			candidates = append(candidates, parts)
 		}
 		visible = visible || remote.Visible
 		connected = connected || remote.SessionState == "connected"
@@ -196,41 +209,94 @@ func marshalNativeRuntimeSnapshotV2WithIdentity(runtimeIdentity, localIdentity s
 	} else if !visible {
 		payload.Status = nativeRuntimeStatusV2Payload{State: "degraded", Degradation: &nativeRuntimeDegradationV2Payload{Reason: "no-visible-services", Since: now}}
 	}
+	payload.Absences, payload.AbsencesOmitted = boundNativeRuntimeAbsences(containNativeRuntimeNodes(&payload, candidates))
 	return json.Marshal(payload)
 }
 
-func marshalNativeRuntimeDeviceV2(source runtimeDeviceObservation, observedAt time.Time) (nativeRuntimeDeviceV2Payload, []nativeRuntimeEntityV2Payload, []nativeRuntimeFeatureV2Payload, []nativeRuntimeUseCaseV2Payload, error) {
+type nativeRuntimeDeviceParts struct {
+	device   nativeRuntimeDeviceV2Payload
+	entities []nativeRuntimeEntityV2Payload
+	features []nativeRuntimeFeatureV2Payload
+	useCases []nativeRuntimeUseCaseV2Payload
+	absences []nativeRuntimeAbsencePayload
+}
+
+func marshalNativeRuntimeDeviceV2(source runtimeDeviceObservation, observedAt time.Time) (nativeRuntimeDeviceParts, error) {
 	if source.SKI == "" || source.Address == "" || source.Type == "" {
-		return nativeRuntimeDeviceV2Payload{}, nil, nil, nil, nil
+		return nativeRuntimeDeviceParts{}, nil
 	}
-	result := nativeRuntimeDeviceV2Payload{SKI: source.SKI, SHIPID: runtimeOptionalString(source.SHIPID), Address: source.Address, Type: source.Type, Description: cloneRuntimeString(source.Description), Metadata: cloneRuntimeMetadata(source.Metadata)}
+	result := nativeRuntimeDeviceParts{device: nativeRuntimeDeviceV2Payload{SKI: source.SKI, SHIPID: runtimeOptionalString(source.SHIPID), Address: source.Address, Type: source.Type, Description: cloneRuntimeString(source.Description), Metadata: cloneRuntimeMetadata(source.Metadata)}}
 	observations, err := nativeRuntimeObservationsV2(source.Opaque, observedAt)
 	if err != nil {
-		return nativeRuntimeDeviceV2Payload{}, nil, nil, nil, err
+		return nativeRuntimeDeviceParts{}, err
 	}
-	result.Observations = observations
-	var entities []nativeRuntimeEntityV2Payload
-	var features []nativeRuntimeFeatureV2Payload
+	result.device.Observations = observations
+	for _, absence := range source.Absences {
+		if record, ok := nativeRuntimeAbsence(absence.Kind, absence.Reason, absence.DeviceAddress, absence.EntityAddress, absence.FeatureAddress, source.Address); ok {
+			result.absences = append(result.absences, record)
+		}
+	}
 	for _, entity := range source.Entities {
-		if entity.DeviceAddress == "" || entity.EntityAddress == "" || entity.Type == "" {
-			continue
-		}
-		entities = append(entities, nativeRuntimeEntityV2Payload{DeviceAddress: entity.DeviceAddress, EntityAddress: entity.EntityAddress, Type: entity.Type, Description: cloneRuntimeString(entity.Description)})
-		for _, feature := range entity.Features {
-			if feature.DeviceAddress == "" || feature.EntityAddress == "" || feature.FeatureAddress == "" || feature.Type == "" || feature.Role == "" {
-				continue
-			}
-			features = append(features, nativeRuntimeFeatureV2Payload{DeviceAddress: feature.DeviceAddress, EntityAddress: feature.EntityAddress, FeatureAddress: feature.FeatureAddress, Type: feature.Type, Role: feature.Role, Description: cloneRuntimeString(feature.Description)})
-		}
+		marshalNativeRuntimeEntity(&result, entity, source.Address)
 	}
-	useCases := make([]nativeRuntimeUseCaseV2Payload, 0, len(source.UseCases))
+	result.useCases = make([]nativeRuntimeUseCaseV2Payload, 0, len(source.UseCases))
 	for _, useCase := range source.UseCases {
-		if useCase.ContextAddress == "" || useCase.Name == "" || useCase.Actor == "" {
+		deviceAddress := useCase.DeviceAddress
+		if deviceAddress == "" {
+			deviceAddress = source.Address
+		}
+		reason := ""
+		switch {
+		case useCase.ContextAddress == "":
+			reason = "missing_address"
+		case useCase.Name == "":
+			reason = "missing_name"
+		case useCase.Actor == "":
+			reason = "missing_actor"
+		}
+		if reason != "" {
+			record, _ := nativeRuntimeAbsence("use_case", reason, deviceAddress, useCase.EntityAddress, useCase.FeatureAddress, source.Address)
+			result.absences = append(result.absences, record)
 			continue
 		}
-		useCases = append(useCases, nativeRuntimeUseCaseV2Payload{ContextAddress: useCase.ContextAddress, Name: useCase.Name, Actor: useCase.Actor, ResolvedRole: cloneRuntimeString(useCase.ResolvedRole), Scenarios: append([]string(nil), useCase.Scenarios...), Version: cloneRuntimeString(useCase.Version), Availability: cloneRuntimeBool(useCase.Availability), DocumentSubrevision: cloneRuntimeString(useCase.DocumentSubrevision)})
+		result.useCases = append(result.useCases, nativeRuntimeUseCaseV2Payload{ContextAddress: useCase.ContextAddress, DeviceAddress: deviceAddress, EntityAddress: nativeRuntimeOptionalAddress(useCase.EntityAddress), FeatureAddress: nativeRuntimeOptionalAddress(useCase.FeatureAddress), Name: useCase.Name, Actor: useCase.Actor, ResolvedRole: cloneRuntimeString(useCase.ResolvedRole), Scenarios: append([]string(nil), useCase.Scenarios...), Version: cloneRuntimeString(useCase.Version), Availability: cloneRuntimeBool(useCase.Availability), DocumentSubrevision: cloneRuntimeString(useCase.DocumentSubrevision)})
 	}
-	return result, entities, features, useCases, nil
+	return result, nil
+}
+
+func marshalNativeRuntimeEntity(result *nativeRuntimeDeviceParts, entity runtimeEntityObservation, deviceAddress string) {
+	reason := ""
+	switch {
+	case entity.DeviceAddress == "" || entity.EntityAddress == "":
+		reason = "missing_address"
+	case entity.Type == "":
+		reason = "missing_type"
+	}
+	if reason != "" {
+		record, _ := nativeRuntimeAbsence("entity", reason, deviceAddress, entity.EntityAddress, "", deviceAddress)
+		result.absences = append(result.absences, record)
+		for _, feature := range entity.Features {
+			record, _ := nativeRuntimeAbsence("feature", "missing_container", deviceAddress, entity.EntityAddress, feature.FeatureAddress, deviceAddress)
+			result.absences = append(result.absences, record)
+		}
+		return
+	}
+	result.entities = append(result.entities, nativeRuntimeEntityV2Payload{DeviceAddress: entity.DeviceAddress, EntityAddress: entity.EntityAddress, ParentEntityAddress: nativeRuntimeOptionalAddress(entity.ParentEntityAddress), Type: entity.Type, Description: cloneRuntimeString(entity.Description)})
+	for _, feature := range entity.Features {
+		switch {
+		case feature.DeviceAddress == "" || feature.EntityAddress == "" || feature.FeatureAddress == "":
+			reason = "missing_address"
+		case feature.Type == "":
+			reason = "missing_type"
+		case feature.Role == "":
+			reason = "missing_role"
+		default:
+			result.features = append(result.features, nativeRuntimeFeatureV2Payload{DeviceAddress: feature.DeviceAddress, EntityAddress: feature.EntityAddress, FeatureAddress: feature.FeatureAddress, Type: feature.Type, Role: feature.Role, Description: cloneRuntimeString(feature.Description)})
+			continue
+		}
+		record, _ := nativeRuntimeAbsence("feature", reason, deviceAddress, entity.EntityAddress, feature.FeatureAddress, deviceAddress)
+		result.absences = append(result.absences, record)
+	}
 }
 
 func nativeRuntimeObservationsV2(source []runtimeOpaquePayload, observedAt time.Time) ([]nativeRuntimeObservationV2Payload, error) {
@@ -345,4 +411,241 @@ func nativeRuntimeValueV2FromAny(source any, depth int) (nativeRuntimeValueV2Pay
 	default:
 		return nativeRuntimeValueV2Payload{}, errors.New("native value type is unsupported")
 	}
+}
+
+const nativeRuntimeAbsenceLimit = 1024
+
+var (
+	nativeRuntimeAbsenceKinds   = map[string]struct{}{"device": {}, "entity": {}, "feature": {}, "use_case": {}}
+	nativeRuntimeAbsenceReasons = map[string]struct{}{
+		"missing_address": {}, "missing_type": {}, "missing_role": {}, "missing_name": {},
+		"missing_actor": {}, "missing_container": {}, "ambiguous_address": {},
+	}
+)
+
+type nativeRuntimeEntityKey struct{ device, entity string }
+
+type nativeRuntimeFeatureKey struct{ device, entity, feature string }
+
+type nativeRuntimeOptionalText struct {
+	set   bool
+	value string
+}
+
+type nativeRuntimeClaimKey struct {
+	device, name, actor                   string
+	entity, feature, version, subrevision nativeRuntimeOptionalText
+}
+
+func nativeRuntimeOptional(value *string) nativeRuntimeOptionalText {
+	if value == nil {
+		return nativeRuntimeOptionalText{}
+	}
+	return nativeRuntimeOptionalText{set: true, value: *value}
+}
+
+func nativeRuntimeOptionalAddress(value string) *string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return &value
+}
+
+func nativeRuntimeAddressText(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return trimmed != "" && len(trimmed) <= 4096
+}
+
+func nativeRuntimeAbsence(kind, reason, deviceAddress, entityAddress, featureAddress, containerAddress string) (nativeRuntimeAbsencePayload, bool) {
+	kind, reason = strings.TrimSpace(kind), strings.TrimSpace(reason)
+	_, knownKind := nativeRuntimeAbsenceKinds[kind]
+	_, knownReason := nativeRuntimeAbsenceReasons[reason]
+	if strings.TrimSpace(deviceAddress) == "" {
+		deviceAddress = containerAddress
+	}
+	return nativeRuntimeAbsencePayload{
+		Kind: kind, Reason: reason, DeviceAddress: deviceAddress,
+		EntityAddress: nativeRuntimeOptionalAddress(entityAddress), FeatureAddress: nativeRuntimeOptionalAddress(featureAddress),
+	}, knownKind && knownReason
+}
+
+func nativeRuntimeWithheld(kind, reason, deviceAddress string, entityAddress, featureAddress *string) nativeRuntimeAbsencePayload {
+	return nativeRuntimeAbsencePayload{Kind: kind, Reason: reason, DeviceAddress: deviceAddress, EntityAddress: cloneRuntimeString(entityAddress), FeatureAddress: cloneRuntimeString(featureAddress)}
+}
+
+func containNativeRuntimeNodes(payload *nativeRuntimeSnapshotV2Payload, candidates []nativeRuntimeDeviceParts) []nativeRuntimeAbsencePayload {
+	counts := make(map[string]int, len(candidates))
+	for _, candidate := range candidates {
+		counts[candidate.device.Address]++
+	}
+	devices := make(map[string]struct{}, len(candidates))
+	var entities []nativeRuntimeEntityV2Payload
+	var features []nativeRuntimeFeatureV2Payload
+	var useCases []nativeRuntimeUseCaseV2Payload
+	var absences []nativeRuntimeAbsencePayload
+	for _, candidate := range candidates {
+		if counts[candidate.device.Address] > 1 {
+			absences = append(absences, nativeRuntimeWithheld("device", "ambiguous_address", candidate.device.Address, nil, nil))
+			continue
+		}
+		devices[candidate.device.Address] = struct{}{}
+		payload.Devices = append(payload.Devices, candidate.device)
+		entities = append(entities, candidate.entities...)
+		features = append(features, candidate.features...)
+		useCases = append(useCases, candidate.useCases...)
+		absences = append(absences, candidate.absences...)
+	}
+	emitted, withheld := containNativeRuntimeEntities(devices, entities)
+	absences = append(absences, withheld...)
+	for _, entity := range entities {
+		if _, ok := emitted[nativeRuntimeEntityKey{entity.DeviceAddress, entity.EntityAddress}]; ok {
+			payload.Entities = append(payload.Entities, entity)
+		}
+	}
+	emittedFeatures := make(map[nativeRuntimeFeatureKey]struct{}, len(features))
+	for _, feature := range features {
+		key := nativeRuntimeFeatureKey{feature.DeviceAddress, feature.EntityAddress, feature.FeatureAddress}
+		reason := ""
+		if _, ok := emitted[nativeRuntimeEntityKey{feature.DeviceAddress, feature.EntityAddress}]; !ok {
+			reason = "missing_container"
+		} else if _, duplicate := emittedFeatures[key]; duplicate {
+			reason = "ambiguous_address"
+		}
+		if reason != "" {
+			absences = append(absences, nativeRuntimeWithheld("feature", reason, feature.DeviceAddress, &feature.EntityAddress, &feature.FeatureAddress))
+			continue
+		}
+		emittedFeatures[key] = struct{}{}
+		payload.Features = append(payload.Features, feature)
+	}
+	return append(absences, containNativeRuntimeClaims(payload, useCases, devices, emitted, emittedFeatures)...)
+}
+
+func containNativeRuntimeEntities(devices map[string]struct{}, entities []nativeRuntimeEntityV2Payload) (map[nativeRuntimeEntityKey]*string, []nativeRuntimeAbsencePayload) {
+	parents := make(map[nativeRuntimeEntityKey]*string, len(entities))
+	var absences []nativeRuntimeAbsencePayload
+	order := make([]nativeRuntimeEntityKey, 0, len(entities))
+	for _, entity := range entities {
+		key := nativeRuntimeEntityKey{entity.DeviceAddress, entity.EntityAddress}
+		if _, ok := devices[entity.DeviceAddress]; !ok {
+			absences = append(absences, nativeRuntimeWithheld("entity", "missing_container", entity.DeviceAddress, &entity.EntityAddress, nil))
+			continue
+		}
+		if _, duplicate := parents[key]; duplicate {
+			absences = append(absences, nativeRuntimeWithheld("entity", "ambiguous_address", entity.DeviceAddress, &entity.EntityAddress, nil))
+			continue
+		}
+		parents[key] = entity.ParentEntityAddress
+		order = append(order, key)
+	}
+	const resolving, resolved, withheld = 1, 2, 3
+	state := make(map[nativeRuntimeEntityKey]uint8, len(parents))
+	var resolve func(nativeRuntimeEntityKey) bool
+	resolve = func(key nativeRuntimeEntityKey) bool {
+		switch state[key] {
+		case resolved:
+			return true
+		case resolving, withheld:
+			return false
+		}
+		parent, known := parents[key]
+		if !known {
+			return false
+		}
+		state[key] = resolving
+		ok := parent == nil || *parent != key.entity && resolve(nativeRuntimeEntityKey{key.device, *parent})
+		state[key] = withheld
+		if ok {
+			state[key] = resolved
+		}
+		return ok
+	}
+	emitted := make(map[nativeRuntimeEntityKey]*string, len(parents))
+	for _, key := range order {
+		if resolve(key) {
+			emitted[key] = parents[key]
+			continue
+		}
+		entity := key.entity
+		absences = append(absences, nativeRuntimeWithheld("entity", "missing_container", key.device, &entity, nil))
+	}
+	return emitted, absences
+}
+
+func containNativeRuntimeClaims(payload *nativeRuntimeSnapshotV2Payload, useCases []nativeRuntimeUseCaseV2Payload, devices map[string]struct{}, entities map[nativeRuntimeEntityKey]*string, features map[nativeRuntimeFeatureKey]struct{}) []nativeRuntimeAbsencePayload {
+	var absences []nativeRuntimeAbsencePayload
+	claims := make(map[nativeRuntimeClaimKey]struct{}, len(useCases))
+	for _, useCase := range useCases {
+		key := nativeRuntimeClaimKey{
+			device: useCase.DeviceAddress, name: useCase.Name, actor: useCase.Actor,
+			entity: nativeRuntimeOptional(useCase.EntityAddress), feature: nativeRuntimeOptional(useCase.FeatureAddress),
+			version: nativeRuntimeOptional(useCase.Version), subrevision: nativeRuntimeOptional(useCase.DocumentSubrevision),
+		}
+		reason := ""
+		if !nativeRuntimeClaimResolves(useCase, devices, entities, features) {
+			reason = "missing_container"
+		} else if _, duplicate := claims[key]; duplicate {
+			reason = "ambiguous_address"
+		}
+		if reason != "" {
+			absences = append(absences, nativeRuntimeWithheld("use_case", reason, useCase.DeviceAddress, useCase.EntityAddress, useCase.FeatureAddress))
+			continue
+		}
+		claims[key] = struct{}{}
+		payload.UseCases = append(payload.UseCases, useCase)
+	}
+	return absences
+}
+
+func nativeRuntimeClaimResolves(useCase nativeRuntimeUseCaseV2Payload, devices map[string]struct{}, entities map[nativeRuntimeEntityKey]*string, features map[nativeRuntimeFeatureKey]struct{}) bool {
+	if _, ok := devices[useCase.DeviceAddress]; !ok {
+		return false
+	}
+	if useCase.EntityAddress == nil {
+		return useCase.FeatureAddress == nil
+	}
+	if _, ok := entities[nativeRuntimeEntityKey{useCase.DeviceAddress, *useCase.EntityAddress}]; !ok {
+		return false
+	}
+	if useCase.FeatureAddress == nil {
+		return true
+	}
+	_, ok := features[nativeRuntimeFeatureKey{useCase.DeviceAddress, *useCase.EntityAddress, *useCase.FeatureAddress}]
+	return ok
+}
+
+func boundNativeRuntimeAbsences(values []nativeRuntimeAbsencePayload) ([]nativeRuntimeAbsencePayload, uint64) {
+	text := func(value *string) string {
+		if value == nil {
+			return ""
+		}
+		return *value
+	}
+	representable := make([]nativeRuntimeAbsencePayload, 0, len(values))
+	for _, value := range values {
+		if !nativeRuntimeAddressText(value.DeviceAddress) {
+			continue
+		}
+		if value.EntityAddress != nil && !nativeRuntimeAddressText(*value.EntityAddress) {
+			value.EntityAddress = nil
+		}
+		if value.FeatureAddress != nil && !nativeRuntimeAddressText(*value.FeatureAddress) {
+			value.FeatureAddress = nil
+		}
+		representable = append(representable, value)
+	}
+	values = representable
+	sort.SliceStable(values, func(left, right int) bool {
+		a, b := values[left], values[right]
+		for _, pair := range [][2]string{{a.Kind, b.Kind}, {a.DeviceAddress, b.DeviceAddress}, {text(a.EntityAddress), text(b.EntityAddress)}, {text(a.FeatureAddress), text(b.FeatureAddress)}} {
+			if pair[0] != pair[1] {
+				return pair[0] < pair[1]
+			}
+		}
+		return a.Reason < b.Reason
+	})
+	if len(values) > nativeRuntimeAbsenceLimit {
+		return values[:nativeRuntimeAbsenceLimit:nativeRuntimeAbsenceLimit], uint64(len(values) - nativeRuntimeAbsenceLimit)
+	}
+	return values, 0
 }

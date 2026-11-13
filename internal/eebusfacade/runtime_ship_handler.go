@@ -519,86 +519,171 @@ func runtimeDevicesForRemoteDevice(remote spineapi.DeviceRemoteInterface, ski st
 	}
 	rolesByAddress := make(map[string]string)
 	for _, entity := range remote.Entities() {
-		if entity == nil {
-			continue
-		}
-		entityAddress := entity.Address()
-		entityType := entity.EntityType()
-		if entityAddress == nil || entityType == "" {
-			continue
-		}
-		entityID, err := runtimeIdentity("entity", ski, entityAddress.String())
+		observation, absences, err := runtimeEntityForRemote(entity, device.Address, ski, rolesByAddress)
 		if err != nil {
 			return nil, err
 		}
-		entityObservation := runtimeEntityObservation{
-			ID: entityID, DeviceAddress: device.Address, EntityAddress: entityAddress.String(),
-			Type: string(entityType), Description: cloneRuntimeDescription(entity.Description()),
+		device.Absences = append(device.Absences, absences...)
+		if observation != nil {
+			device.Entities = append(device.Entities, *observation)
 		}
-		for _, feature := range entity.Features() {
-			if feature == nil {
-				continue
-			}
-			featureAddress := feature.Address()
-			featureType := feature.Type()
-			if featureAddress == nil || featureType == "" {
-				continue
-			}
-			featureID, err := runtimeIdentity("feature", ski, featureAddress.String())
-			if err != nil {
-				return nil, err
-			}
-			role := strings.ToLower(string(feature.Role()))
-			if role == "" {
-				role = ""
-			}
-			rolesByAddress[featureAddress.String()] = role
-			entityObservation.Features = append(entityObservation.Features, runtimeFeatureObservation{
-				ID: featureID, DeviceAddress: device.Address, EntityAddress: entityObservation.EntityAddress,
-				FeatureAddress: featureAddress.String(), Type: string(featureType), Role: role,
-				Description: cloneRuntimeDescription(feature.Description()),
-			})
-		}
-		device.Entities = append(device.Entities, entityObservation)
 	}
 	for _, information := range remote.UseCases() {
-		if information.Address == nil || information.Actor == nil {
-			continue
+		useCases, absences, err := runtimeUseCasesForInformation(information, device.Address, ski, rolesByAddress)
+		if err != nil {
+			return nil, err
 		}
-		contextAddress := information.Address.String()
-		actor := string(*information.Actor)
-		for _, support := range information.UseCaseSupport {
-			if support.UseCaseName == nil {
-				continue
-			}
-			useCaseID, err := runtimeIdentity(
-				"usecase", ski, contextAddress, actor, string(*support.UseCaseName),
-				cloneRuntimeSpecificationVersion(support.UseCaseVersion),
-				cloneRuntimeString(support.UseCaseDocumentSubRevision),
-			)
-			if err != nil {
-				return nil, err
-			}
-			scenarios := make([]string, len(support.ScenarioSupport))
-			for scenarioIndex, scenario := range support.ScenarioSupport {
-				scenarios[scenarioIndex] = fmt.Sprint(scenario)
-			}
-			var resolvedRole *string
-			if role, ok := rolesByAddress[contextAddress]; ok {
-				resolvedRole = runtimeStringPointer(role)
-			}
-			observation := runtimeUseCaseObservation{
-				ID: useCaseID, ContextAddress: contextAddress, Name: string(*support.UseCaseName),
-				Actor: actor, ResolvedRole: resolvedRole, Scenarios: scenarios,
-				Version:             cloneRuntimeSpecificationVersion(support.UseCaseVersion),
-				Availability:        cloneRuntimeBool(support.UseCaseAvailable),
-				DocumentSubrevision: cloneRuntimeString(support.UseCaseDocumentSubRevision),
-			}
-			device.UseCaseIDs = append(device.UseCaseIDs, useCaseID)
+		device.Absences = append(device.Absences, absences...)
+		for _, observation := range useCases {
+			device.UseCaseIDs = append(device.UseCaseIDs, observation.ID)
 			device.UseCases = append(device.UseCases, observation)
 		}
 	}
 	return []runtimeDeviceObservation{device}, nil
+}
+
+func runtimeEntityForRemote(entity spineapi.EntityRemoteInterface, deviceAddress, ski string, rolesByAddress map[string]string) (*runtimeEntityObservation, []runtimeAbsenceObservation, error) {
+	if entity == nil {
+		return nil, []runtimeAbsenceObservation{{Kind: "entity", Reason: "missing_address", DeviceAddress: deviceAddress}}, nil
+	}
+	entityAddress := entity.Address()
+	entityType := entity.EntityType()
+	if entityAddress == nil || entityType == "" {
+		absence := runtimeAbsenceObservation{Kind: "entity", Reason: "missing_address", DeviceAddress: deviceAddress}
+		if entityAddress != nil {
+			absence.Reason, absence.EntityAddress = "missing_type", entityAddress.String()
+		}
+		absences := []runtimeAbsenceObservation{absence}
+		for _, feature := range entity.Features() {
+			absences = append(absences, runtimeFeatureAbsence(feature, deviceAddress, absence.EntityAddress, "missing_container"))
+		}
+		return nil, absences, nil
+	}
+	entityID, err := runtimeIdentity("entity", ski, entityAddress.String())
+	if err != nil {
+		return nil, nil, err
+	}
+	entityObservation := runtimeEntityObservation{
+		ID: entityID, DeviceAddress: deviceAddress, EntityAddress: entityAddress.String(),
+		ParentEntityAddress: runtimeParentEntityAddress(entityAddress),
+		Type:                string(entityType), Description: cloneRuntimeDescription(entity.Description()),
+	}
+	var absences []runtimeAbsenceObservation
+	for _, feature := range entity.Features() {
+		if feature == nil {
+			absences = append(absences, runtimeFeatureAbsence(nil, deviceAddress, entityObservation.EntityAddress, "missing_address"))
+			continue
+		}
+		featureAddress := feature.Address()
+		featureType := feature.Type()
+		if featureAddress == nil || featureType == "" {
+			reason := "missing_type"
+			if featureAddress == nil {
+				reason = "missing_address"
+			}
+			absences = append(absences, runtimeFeatureAbsence(feature, deviceAddress, entityObservation.EntityAddress, reason))
+			continue
+		}
+		featureID, err := runtimeIdentity("feature", ski, featureAddress.String())
+		if err != nil {
+			return nil, nil, err
+		}
+		role := strings.ToLower(string(feature.Role()))
+		rolesByAddress[featureAddress.String()] = role
+		entityObservation.Features = append(entityObservation.Features, runtimeFeatureObservation{
+			ID: featureID, DeviceAddress: deviceAddress, EntityAddress: entityObservation.EntityAddress,
+			FeatureAddress: featureAddress.String(), Type: string(featureType), Role: role,
+			Description: cloneRuntimeDescription(feature.Description()),
+		})
+	}
+	return &entityObservation, absences, nil
+}
+
+func runtimeFeatureAbsence(feature spineapi.FeatureRemoteInterface, deviceAddress, entityAddress, reason string) runtimeAbsenceObservation {
+	absence := runtimeAbsenceObservation{Kind: "feature", Reason: reason, DeviceAddress: deviceAddress, EntityAddress: entityAddress}
+	if feature != nil {
+		if address := feature.Address(); address != nil {
+			absence.FeatureAddress = address.String()
+		}
+	}
+	return absence
+}
+
+func runtimeParentEntityAddress(address *spinemodel.EntityAddressType) string {
+	if address == nil || len(address.Entity) < 2 {
+		return ""
+	}
+	parent := spinemodel.EntityAddressType{Device: address.Device, Entity: address.Entity[:len(address.Entity)-1]}
+	return parent.String()
+}
+
+func runtimeUseCaseScope(address *spinemodel.FeatureAddressType, deviceAddress string) runtimeAbsenceObservation {
+	scope := runtimeAbsenceObservation{Kind: "use_case", DeviceAddress: deviceAddress}
+	if address == nil {
+		return scope
+	}
+	device := spinemodel.AddressDeviceType(deviceAddress)
+	if address.Device != nil {
+		device = *address.Device
+		scope.DeviceAddress = string(device)
+	}
+	if len(address.Entity) > 0 {
+		entity := spinemodel.EntityAddressType{Device: &device, Entity: address.Entity}
+		scope.EntityAddress = entity.String()
+	}
+	if address.Feature != nil {
+		feature := spinemodel.FeatureAddressType{Device: &device, Entity: address.Entity, Feature: address.Feature}
+		scope.FeatureAddress = feature.String()
+	}
+	return scope
+}
+
+func runtimeUseCasesForInformation(information spinemodel.UseCaseInformationDataType, deviceAddress, ski string, rolesByAddress map[string]string) ([]runtimeUseCaseObservation, []runtimeAbsenceObservation, error) {
+	scope := runtimeUseCaseScope(information.Address, deviceAddress)
+	if information.Address == nil || information.Actor == nil {
+		scope.Reason = "missing_actor"
+		if information.Address == nil {
+			scope.Reason = "missing_address"
+		}
+		return nil, []runtimeAbsenceObservation{scope}, nil
+	}
+	contextAddress := information.Address.String()
+	actor := string(*information.Actor)
+	var result []runtimeUseCaseObservation
+	var absences []runtimeAbsenceObservation
+	for _, support := range information.UseCaseSupport {
+		if support.UseCaseName == nil {
+			absence := scope
+			absence.Reason = "missing_name"
+			absences = append(absences, absence)
+			continue
+		}
+		useCaseID, err := runtimeIdentity(
+			"usecase", ski, contextAddress, actor, string(*support.UseCaseName),
+			cloneRuntimeSpecificationVersion(support.UseCaseVersion),
+			cloneRuntimeString(support.UseCaseDocumentSubRevision),
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		scenarios := make([]string, len(support.ScenarioSupport))
+		for scenarioIndex, scenario := range support.ScenarioSupport {
+			scenarios[scenarioIndex] = fmt.Sprint(scenario)
+		}
+		var resolvedRole *string
+		if role, ok := rolesByAddress[contextAddress]; ok {
+			resolvedRole = runtimeStringPointer(role)
+		}
+		result = append(result, runtimeUseCaseObservation{
+			ID: useCaseID, ContextAddress: contextAddress, DeviceAddress: scope.DeviceAddress,
+			EntityAddress: scope.EntityAddress, FeatureAddress: scope.FeatureAddress,
+			Name: string(*support.UseCaseName), Actor: actor, ResolvedRole: resolvedRole, Scenarios: scenarios,
+			Version:             cloneRuntimeSpecificationVersion(support.UseCaseVersion),
+			Availability:        cloneRuntimeBool(support.UseCaseAvailable),
+			DocumentSubrevision: cloneRuntimeString(support.UseCaseDocumentSubRevision),
+		})
+	}
+	return result, absences, nil
 }
 
 func runtimeDeviceMetadata(

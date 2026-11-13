@@ -26,19 +26,26 @@ const (
 // addresses) are not redacted, so the snapshot belongs behind an authorization boundary that
 // admits them. Validate requires each identifier to be non-blank and at most 4096 bytes after
 // trimming, and each state, kind, type, role, actor, source or version label at most 128 bytes.
+// Devices, Entities, Features and UseCases form one containment graph: every relation endpoint
+// names a device address, optionally with an entity address and a feature address, and resolves
+// to exactly one node of the snapshot. Absences lists, in a deterministic order, at most 1024
+// native nodes the runtime observed but withheld; AbsencesOmitted counts further withheld nodes
+// and is nonzero only when Absences holds exactly 1024 records.
 // Field meanings are documented in
 // https://github.com/Project-Helianthus/helianthus-docs-eebus/tree/main/api.
 type NativeSnapshotV2 struct {
-	Meta         NativeSnapshotMetaV2         `json:"meta"`
-	Status       NativeRuntimeObservationV2   `json:"status"`
-	Pairing      []NativePairingObservationV2 `json:"pairing"`
-	Services     []NativeServiceV2            `json:"services"`
-	Sessions     []NativeSessionV2            `json:"sessions"`
-	Devices      []NativeDeviceV2             `json:"devices"`
-	Entities     []NativeEntityV2             `json:"entities"`
-	Features     []NativeFeatureV2            `json:"features"`
-	UseCases     []NativeUseCaseV2            `json:"use_cases"`
-	Observations []NativeObservationV2        `json:"observations"`
+	Meta            NativeSnapshotMetaV2         `json:"meta"`
+	Status          NativeRuntimeObservationV2   `json:"status"`
+	Pairing         []NativePairingObservationV2 `json:"pairing"`
+	Services        []NativeServiceV2            `json:"services"`
+	Sessions        []NativeSessionV2            `json:"sessions"`
+	Devices         []NativeDeviceV2             `json:"devices"`
+	Entities        []NativeEntityV2             `json:"entities"`
+	Features        []NativeFeatureV2            `json:"features"`
+	UseCases        []NativeUseCaseV2            `json:"use_cases"`
+	Observations    []NativeObservationV2        `json:"observations"`
+	Absences        []NativeAbsence              `json:"absences"`
+	AbsencesOmitted uint64                       `json:"absences_omitted"`
 }
 
 // NativeSnapshotMetaV2 identifies a native snapshot and its capture. Contract must equal
@@ -115,16 +122,20 @@ type NativeDeviceV2 struct {
 }
 
 // NativeEntityV2 is one entity of the device with DeviceAddress, with its reported Type.
-// Validate does not check that the device exists in the snapshot.
+// ParentEntityAddress is the address of the enclosing entity of the same device and nil for a
+// top-level entity. Validate requires the device to exist, the device and entity address pair to
+// be unique, the parent to be another entity of the same device, and parent chains to end.
 type NativeEntityV2 struct {
-	DeviceAddress string  `json:"device_address"`
-	EntityAddress string  `json:"entity_address"`
-	Type          string  `json:"type"`
-	Description   *string `json:"description,omitempty"`
+	DeviceAddress       string  `json:"device_address"`
+	EntityAddress       string  `json:"entity_address"`
+	ParentEntityAddress *string `json:"parent_entity_address,omitempty"`
+	Type                string  `json:"type"`
+	Description         *string `json:"description,omitempty"`
 }
 
 // NativeFeatureV2 is one feature of the entity at DeviceAddress and EntityAddress. Type and Role
-// are reported text; Role is not mapped to FeatureRoleV1.
+// are reported text; Role is not mapped to FeatureRoleV1. Validate requires the entity to exist
+// and the device, entity and feature address triple to be unique.
 type NativeFeatureV2 struct {
 	DeviceAddress  string  `json:"device_address"`
 	EntityAddress  string  `json:"entity_address"`
@@ -134,11 +145,18 @@ type NativeFeatureV2 struct {
 	Description    *string `json:"description,omitempty"`
 }
 
-// NativeUseCaseV2 is one use-case claim announced at ContextAddress, a native address within a
-// device. Name and Actor are required; the pointer fields are nil when not announced, so a nil
-// Availability means unknown rather than unavailable. Scenarios are not validated.
+// NativeUseCaseV2 is one use-case claim announced at ContextAddress, the native address kept as
+// reported. Its scope is the device at DeviceAddress, narrowed to the entity at EntityAddress when
+// set and to the feature at FeatureAddress when set; a feature scope requires an entity scope, and
+// every scope endpoint must exist in the snapshot. A claim is unique by its scope, Name, Actor,
+// Version and DocumentSubrevision. Name and Actor are required; the other pointer fields are nil
+// when not announced, so a nil Availability means unknown rather than unavailable. Scenarios are
+// not validated.
 type NativeUseCaseV2 struct {
 	ContextAddress      string   `json:"context_address"`
+	DeviceAddress       string   `json:"device_address"`
+	EntityAddress       *string  `json:"entity_address,omitempty"`
+	FeatureAddress      *string  `json:"feature_address,omitempty"`
 	Name                string   `json:"name"`
 	Actor               string   `json:"actor"`
 	ResolvedRole        *string  `json:"resolved_role,omitempty"`
@@ -146,6 +164,21 @@ type NativeUseCaseV2 struct {
 	Version             *string  `json:"version,omitempty"`
 	Availability        *bool    `json:"availability,omitempty"`
 	DocumentSubrevision *string  `json:"document_subrevision,omitempty"`
+}
+
+// NativeAbsence records one native node the runtime observed but did not emit. Kind is device,
+// entity, feature or use_case. Reason is missing_address, missing_type, missing_role,
+// missing_name or missing_actor when a required native value was not reported,
+// missing_container when the enclosing device, entity or claim scope was not emitted, and
+// ambiguous_address when the node's address is not unique. DeviceAddress is required; the
+// pointer fields carry the entity and feature addresses where they are known. Absence records
+// are not part of the containment graph.
+type NativeAbsence struct {
+	Kind           string  `json:"kind"`
+	Reason         string  `json:"reason"`
+	DeviceAddress  string  `json:"device_address"`
+	EntityAddress  *string `json:"entity_address,omitempty"`
+	FeatureAddress *string `json:"feature_address,omitempty"`
 }
 
 // NativeObservationV2 is one native value read at Path (at most 512 bytes) from Source at the
@@ -188,8 +221,11 @@ func NewNativeSnapshotV2(draft NativeSnapshotV2) (NativeSnapshotV2, error) {
 }
 
 // Validate reports the first violation of the contract value, the local SKI form, the required
-// text and timestamps, or the value bounds. It does not check uniqueness, references between
-// devices, entities, features and use cases, or the fields documented as not validated.
+// text and timestamps, the value bounds, the containment of devices, entities, features and
+// use-case claims, or the absence records. Containment requires unique device addresses, entity
+// and feature addresses unique within their container, every entity, parent entity, feature
+// container and claim scope to resolve to exactly one node, and parent chains to end. It does not
+// check the fields documented as not validated.
 func (snapshot NativeSnapshotV2) Validate() error {
 	if snapshot.Meta.Contract != NativeSnapshotContractV2 {
 		return fmt.Errorf("contract must be %q", NativeSnapshotContractV2)
@@ -258,11 +294,14 @@ func (snapshot NativeSnapshotV2) Validate() error {
 	if err := nativeSnapshotV2ValidateObservations(snapshot.Observations); err != nil {
 		return fmt.Errorf("native observations: %w", err)
 	}
-	return nil
+	if err := validateNativeContainment(snapshot); err != nil {
+		return err
+	}
+	return validateNativeAbsences(snapshot.Absences, snapshot.AbsencesOmitted)
 }
 
 // Clone returns a deep copy that shares no slice, map or pointer with snapshot. A nil top-level
-// Observations list comes back empty, so it encodes as [] rather than null.
+// Observations or Absences list comes back empty, so it encodes as [] rather than null.
 func (snapshot NativeSnapshotV2) Clone() NativeSnapshotV2 {
 	result := snapshot
 	result.Meta.ProtocolVersion = nativeSnapshotV2CloneString(snapshot.Meta.ProtocolVersion)
@@ -287,6 +326,7 @@ func (snapshot NativeSnapshotV2) Clone() NativeSnapshotV2 {
 	}
 	result.Entities = append([]NativeEntityV2(nil), snapshot.Entities...)
 	for index := range result.Entities {
+		result.Entities[index].ParentEntityAddress = nativeSnapshotV2CloneString(result.Entities[index].ParentEntityAddress)
 		result.Entities[index].Description = nativeSnapshotV2CloneString(result.Entities[index].Description)
 	}
 	result.Features = append([]NativeFeatureV2(nil), snapshot.Features...)
@@ -295,6 +335,8 @@ func (snapshot NativeSnapshotV2) Clone() NativeSnapshotV2 {
 	}
 	result.UseCases = append([]NativeUseCaseV2(nil), snapshot.UseCases...)
 	for index := range result.UseCases {
+		result.UseCases[index].EntityAddress = nativeSnapshotV2CloneString(result.UseCases[index].EntityAddress)
+		result.UseCases[index].FeatureAddress = nativeSnapshotV2CloneString(result.UseCases[index].FeatureAddress)
 		result.UseCases[index].ResolvedRole = nativeSnapshotV2CloneString(result.UseCases[index].ResolvedRole)
 		result.UseCases[index].Scenarios = append([]string(nil), result.UseCases[index].Scenarios...)
 		result.UseCases[index].Version = nativeSnapshotV2CloneString(result.UseCases[index].Version)
@@ -302,6 +344,12 @@ func (snapshot NativeSnapshotV2) Clone() NativeSnapshotV2 {
 		result.UseCases[index].DocumentSubrevision = nativeSnapshotV2CloneString(result.UseCases[index].DocumentSubrevision)
 	}
 	result.Observations = nativeSnapshotV2CloneObservations(snapshot.Observations)
+	result.Absences = make([]NativeAbsence, len(snapshot.Absences))
+	for index, absence := range snapshot.Absences {
+		result.Absences[index] = absence
+		result.Absences[index].EntityAddress = nativeSnapshotV2CloneString(absence.EntityAddress)
+		result.Absences[index].FeatureAddress = nativeSnapshotV2CloneString(absence.FeatureAddress)
+	}
 	return result
 }
 
@@ -464,4 +512,162 @@ func nativeSnapshotV2CloneValue(source NativeValueV2) NativeValueV2 {
 		result.Object = &values
 	}
 	return result
+}
+
+const nativeAbsenceLimit = 1024
+
+var (
+	nativeAbsenceKinds   = map[string]struct{}{"device": {}, "entity": {}, "feature": {}, "use_case": {}}
+	nativeAbsenceReasons = map[string]struct{}{
+		"missing_address": {}, "missing_type": {}, "missing_role": {}, "missing_name": {},
+		"missing_actor": {}, "missing_container": {}, "ambiguous_address": {},
+	}
+)
+
+type nativeEntityKey struct{ device, entity string }
+
+type nativeFeatureKey struct{ device, entity, feature string }
+
+type nativeOptionalText struct {
+	set   bool
+	value string
+}
+
+type nativeClaimKey struct {
+	device, name, actor                   string
+	entity, feature, version, subrevision nativeOptionalText
+}
+
+func nativeOptional(value *string) nativeOptionalText {
+	if value == nil {
+		return nativeOptionalText{}
+	}
+	return nativeOptionalText{set: true, value: *value}
+}
+
+func validateNativeContainment(snapshot NativeSnapshotV2) error {
+	devices := make(map[string]struct{}, len(snapshot.Devices))
+	for _, device := range snapshot.Devices {
+		if _, found := devices[device.Address]; found {
+			return errors.New("device address is ambiguous")
+		}
+		devices[device.Address] = struct{}{}
+	}
+	entities, err := validateNativeEntities(snapshot.Entities, devices)
+	if err != nil {
+		return err
+	}
+	features := make(map[nativeFeatureKey]struct{}, len(snapshot.Features))
+	for _, feature := range snapshot.Features {
+		if _, found := entities[nativeEntityKey{feature.DeviceAddress, feature.EntityAddress}]; !found {
+			return errors.New("feature references a missing entity")
+		}
+		key := nativeFeatureKey{feature.DeviceAddress, feature.EntityAddress, feature.FeatureAddress}
+		if _, found := features[key]; found {
+			return errors.New("duplicate feature")
+		}
+		features[key] = struct{}{}
+	}
+	return validateNativeClaims(snapshot.UseCases, devices, entities, features)
+}
+
+func validateNativeEntities(source []NativeEntityV2, devices map[string]struct{}) (map[nativeEntityKey]*string, error) {
+	parents := make(map[nativeEntityKey]*string, len(source))
+	for _, entity := range source {
+		if _, found := devices[entity.DeviceAddress]; !found {
+			return nil, errors.New("entity references a missing device")
+		}
+		key := nativeEntityKey{entity.DeviceAddress, entity.EntityAddress}
+		if _, found := parents[key]; found {
+			return nil, errors.New("duplicate entity")
+		}
+		parents[key] = entity.ParentEntityAddress
+	}
+	for key, parent := range parents {
+		if parent == nil {
+			continue
+		}
+		if _, found := parents[nativeEntityKey{key.device, *parent}]; !found || *parent == key.entity {
+			return nil, errors.New("entity references a missing parent entity")
+		}
+	}
+	const visiting, visited = 1, 2
+	state := make(map[nativeEntityKey]uint8, len(parents))
+	for key := range parents {
+		var path []nativeEntityKey
+		for current := key; state[current] != visited; {
+			if state[current] == visiting {
+				return nil, errors.New("entity containment has a cycle")
+			}
+			state[current] = visiting
+			path = append(path, current)
+			parent := parents[current]
+			if parent == nil {
+				break
+			}
+			current = nativeEntityKey{current.device, *parent}
+		}
+		for _, value := range path {
+			state[value] = visited
+		}
+	}
+	return parents, nil
+}
+
+func validateNativeClaims(source []NativeUseCaseV2, devices map[string]struct{}, entities map[nativeEntityKey]*string, features map[nativeFeatureKey]struct{}) error {
+	claims := make(map[nativeClaimKey]struct{}, len(source))
+	for _, claim := range source {
+		if !nativeClaimScopeResolves(claim, devices, entities, features) {
+			return errors.New("use-case claim references a missing scope")
+		}
+		key := nativeClaimKey{
+			device: claim.DeviceAddress, name: claim.Name, actor: claim.Actor,
+			entity: nativeOptional(claim.EntityAddress), feature: nativeOptional(claim.FeatureAddress),
+			version: nativeOptional(claim.Version), subrevision: nativeOptional(claim.DocumentSubrevision),
+		}
+		if _, found := claims[key]; found {
+			return errors.New("duplicate use-case claim")
+		}
+		claims[key] = struct{}{}
+	}
+	return nil
+}
+
+func nativeClaimScopeResolves(claim NativeUseCaseV2, devices map[string]struct{}, entities map[nativeEntityKey]*string, features map[nativeFeatureKey]struct{}) bool {
+	if _, found := devices[claim.DeviceAddress]; !found {
+		return false
+	}
+	if claim.EntityAddress == nil {
+		return claim.FeatureAddress == nil
+	}
+	if _, found := entities[nativeEntityKey{claim.DeviceAddress, *claim.EntityAddress}]; !found {
+		return false
+	}
+	if claim.FeatureAddress == nil {
+		return true
+	}
+	_, found := features[nativeFeatureKey{claim.DeviceAddress, *claim.EntityAddress, *claim.FeatureAddress}]
+	return found
+}
+
+func validateNativeAbsences(absences []NativeAbsence, omitted uint64) error {
+	if len(absences) > nativeAbsenceLimit {
+		return errors.New("absence records exceed the limit")
+	}
+	if omitted != 0 && len(absences) != nativeAbsenceLimit {
+		return errors.New("absence count is inconsistent")
+	}
+	for _, absence := range absences {
+		_, knownKind := nativeAbsenceKinds[absence.Kind]
+		_, knownReason := nativeAbsenceReasons[absence.Reason]
+		if !knownKind || !knownReason || !nativeSnapshotV2ValidText(absence.DeviceAddress, nativeSnapshotV2MaximumIdentifierBytes) ||
+			!nativeAbsenceValidAddress(absence.EntityAddress) || !nativeAbsenceValidAddress(absence.FeatureAddress) {
+			return errors.New("absence record is invalid")
+		}
+	}
+	return nil
+}
+
+func nativeAbsenceValidAddress(value *string) bool {
+	return value == nil || nativeSnapshotV2ValidText(*value, nativeSnapshotV2MaximumIdentifierBytes)
 }
