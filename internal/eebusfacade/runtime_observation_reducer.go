@@ -24,17 +24,21 @@ type runtimeFeatureObservation struct {
 }
 
 type runtimeEntityObservation struct {
-	ID            string
-	DeviceAddress string
-	EntityAddress string
-	Type          string
-	Description   *string
-	Features      []runtimeFeatureObservation
+	ID                  string
+	DeviceAddress       string
+	EntityAddress       string
+	ParentEntityAddress string
+	Type                string
+	Description         *string
+	Features            []runtimeFeatureObservation
 }
 
 type runtimeUseCaseObservation struct {
 	ID                  string
 	ContextAddress      string
+	DeviceAddress       string
+	EntityAddress       string
+	FeatureAddress      string
 	Name                string
 	Actor               string
 	ResolvedRole        *string
@@ -56,6 +60,15 @@ type runtimeDeviceObservation struct {
 	Entities    []runtimeEntityObservation
 	UseCaseIDs  []string
 	UseCases    []runtimeUseCaseObservation
+	Absences    []runtimeAbsenceObservation
+}
+
+type runtimeAbsenceObservation struct {
+	Kind           string
+	Reason         string
+	DeviceAddress  string
+	EntityAddress  string
+	FeatureAddress string
 }
 
 type runtimeGraphObservation struct {
@@ -230,6 +243,9 @@ func normalizeRuntimeDeviceObservation(source runtimeDeviceObservation) (runtime
 	for _, value := range result.UseCases {
 		value.ID = strings.TrimSpace(value.ID)
 		value.ContextAddress = strings.TrimSpace(value.ContextAddress)
+		value.DeviceAddress = strings.TrimSpace(value.DeviceAddress)
+		value.EntityAddress = strings.TrimSpace(value.EntityAddress)
+		value.FeatureAddress = strings.TrimSpace(value.FeatureAddress)
 		value.Name = strings.TrimSpace(value.Name)
 		value.Actor = strings.TrimSpace(value.Actor)
 		value.ResolvedRole = cloneRuntimeString(value.ResolvedRole)
@@ -278,6 +294,7 @@ func normalizeRuntimeDeviceObservation(source runtimeDeviceObservation) (runtime
 	sort.Slice(result.Entities, func(left, right int) bool {
 		return result.Entities[left].ID < result.Entities[right].ID
 	})
+	result.Absences = unionRuntimeAbsences(result.Absences, nil)
 	return result, nil
 }
 
@@ -286,6 +303,7 @@ func normalizeRuntimeEntityObservation(source runtimeEntityObservation) (runtime
 	result.ID = strings.TrimSpace(result.ID)
 	result.DeviceAddress = strings.TrimSpace(result.DeviceAddress)
 	result.EntityAddress = strings.TrimSpace(result.EntityAddress)
+	result.ParentEntityAddress = strings.TrimSpace(result.ParentEntityAddress)
 	result.Type = strings.TrimSpace(result.Type)
 	result.Description = cloneRuntimeString(result.Description)
 	if result.ID == "" {
@@ -370,6 +388,7 @@ func mergeRuntimeDeviceObservations(left, right runtimeDeviceObservation) (runti
 	sort.Slice(result.Entities, func(left, right int) bool {
 		return result.Entities[left].ID < result.Entities[right].ID
 	})
+	result.Absences = unionRuntimeAbsences(left.Absences, right.Absences)
 	return result, nil
 }
 
@@ -418,6 +437,9 @@ func mergeRuntimeEntityObservations(left, right runtimeEntityObservation) (runti
 	}
 	if right.EntityAddress != "" {
 		result.EntityAddress = right.EntityAddress
+	}
+	if right.ParentEntityAddress != "" {
+		result.ParentEntityAddress = right.ParentEntityAddress
 	}
 	if right.Type != "" {
 		result.Type = right.Type
@@ -486,6 +508,15 @@ func mergeRuntimeUseCaseObservations(
 	result := left
 	if right.ContextAddress != "" {
 		result.ContextAddress = right.ContextAddress
+	}
+	if right.DeviceAddress != "" {
+		result.DeviceAddress = right.DeviceAddress
+	}
+	if right.EntityAddress != "" {
+		result.EntityAddress = right.EntityAddress
+	}
+	if right.FeatureAddress != "" {
+		result.FeatureAddress = right.FeatureAddress
 	}
 	if right.Name != "" {
 		result.Name = right.Name
@@ -576,6 +607,7 @@ func cloneRuntimeGraphObservation(source runtimeGraphObservation) runtimeGraphOb
 		result.Devices[deviceIndex].Metadata = cloneRuntimeMetadata(device.Metadata)
 		result.Devices[deviceIndex].Opaque = cloneRuntimeOpaque(device.Opaque)
 		result.Devices[deviceIndex].UseCaseIDs = append([]string(nil), device.UseCaseIDs...)
+		result.Devices[deviceIndex].Absences = append([]runtimeAbsenceObservation(nil), device.Absences...)
 		result.Devices[deviceIndex].UseCases = make([]runtimeUseCaseObservation, len(device.UseCases))
 		for useCaseIndex, useCase := range device.UseCases {
 			result.Devices[deviceIndex].UseCases[useCaseIndex] = useCase
@@ -598,6 +630,38 @@ func cloneRuntimeGraphObservation(source runtimeGraphObservation) runtimeGraphOb
 		}
 	}
 	return result
+}
+
+func unionRuntimeAbsences(left, right []runtimeAbsenceObservation) []runtimeAbsenceObservation {
+	if len(left) == 0 && len(right) == 0 {
+		return nil
+	}
+	set := make(map[runtimeAbsenceObservation]struct{}, len(left)+len(right))
+	for _, source := range append(append([]runtimeAbsenceObservation(nil), left...), right...) {
+		set[runtimeAbsenceObservation{
+			Kind: strings.TrimSpace(source.Kind), Reason: strings.TrimSpace(source.Reason),
+			DeviceAddress: strings.TrimSpace(source.DeviceAddress), EntityAddress: strings.TrimSpace(source.EntityAddress),
+			FeatureAddress: strings.TrimSpace(source.FeatureAddress),
+		}] = struct{}{}
+	}
+	result := make([]runtimeAbsenceObservation, 0, len(set))
+	for value := range set {
+		result = append(result, value)
+	}
+	sortRuntimeAbsences(result)
+	return result
+}
+
+func sortRuntimeAbsences(values []runtimeAbsenceObservation) {
+	sort.Slice(values, func(left, right int) bool {
+		a, b := values[left], values[right]
+		for _, pair := range [][2]string{{a.Kind, b.Kind}, {a.DeviceAddress, b.DeviceAddress}, {a.EntityAddress, b.EntityAddress}, {a.FeatureAddress, b.FeatureAddress}} {
+			if pair[0] != pair[1] {
+				return pair[0] < pair[1]
+			}
+		}
+		return a.Reason < b.Reason
+	})
 }
 
 func cloneRuntimeMetadata(source map[string]string) map[string]string {

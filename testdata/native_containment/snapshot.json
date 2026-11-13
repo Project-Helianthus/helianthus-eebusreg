@@ -1,0 +1,160 @@
+{
+  "meta": {
+    "contract": "helianthus.eebus.runtime.native-snapshot.v2",
+    "runtime": "runtime:6666666666666666666666666666666666666666",
+    "local_ski": "6666666666666666666666666666666666666666",
+    "source": "eebusfacade.runtime",
+    "observed_at": "2026-01-02T03:04:05Z",
+    "captured_at": "2026-01-02T03:04:05Z",
+    "data_timestamp": "2026-01-02T03:04:05Z"
+  },
+  "status": {
+    "state": "ready"
+  },
+  "pairing": [
+    {
+      "remote_ski": "5555555555555555555555555555555555555555",
+      "state": "paired",
+      "since": "2026-01-02T03:04:05Z"
+    }
+  ],
+  "services": [
+    {
+      "ski": "5555555555555555555555555555555555555555",
+      "ship_id": "synthetic-ship-0001",
+      "kind": "remote",
+      "visible": true,
+      "paired": true
+    }
+  ],
+  "sessions": [
+    {
+      "id": "session:synthetic-ship-0001:1",
+      "remote_ski": "5555555555555555555555555555555555555555",
+      "state": "connected",
+      "since": "2026-01-02T03:04:05Z"
+    }
+  ],
+  "devices": [
+    {
+      "ski": "5555555555555555555555555555555555555555",
+      "ship_id": "synthetic-ship-0001",
+      "address": "d:_n:synthetic_controller",
+      "type": "EnergyManagementSystem"
+    }
+  ],
+  "entities": [
+    {
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1,1]:",
+      "parent_entity_address": "d:_n:synthetic_controller:[1]:",
+      "type": "HeatingZone"
+    },
+    {
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1]:",
+      "type": "HeatingCircuit"
+    }
+  ],
+  "features": [
+    {
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1,1]:",
+      "feature_address": "d:_n:synthetic_controller:[1,1]:0",
+      "type": "Setpoint",
+      "role": "server"
+    },
+    {
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1]:",
+      "feature_address": "d:_n:synthetic_controller:[1]:0",
+      "type": "HVAC",
+      "role": "server"
+    }
+  ],
+  "use_cases": [
+    {
+      "context_address": "d:_n:synthetic_controller:[1]:",
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1]:",
+      "name": "configurationOfRoomHeatingTemperature",
+      "actor": "HeatingCircuit",
+      "scenarios": ["1", "2"],
+      "version": "1.0.0",
+      "availability": true,
+      "document_subrevision": "release"
+    },
+    {
+      "context_address": "d:_n:synthetic_controller:[1]:0",
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1]:",
+      "feature_address": "d:_n:synthetic_controller:[1]:0",
+      "name": "monitoringOfRoomTemperature",
+      "actor": "HeatingCircuit",
+      "resolved_role": "server",
+      "scenarios": ["1", "2"],
+      "version": "1.0.0",
+      "availability": true,
+      "document_subrevision": "release"
+    },
+    {
+      "context_address": "d:_n:synthetic_controller:[]:",
+      "device_address": "d:_n:synthetic_controller",
+      "name": "monitoringOfPowerConsumption",
+      "actor": "HeatPump",
+      "scenarios": ["1", "2"],
+      "version": "1.0.0",
+      "availability": true,
+      "document_subrevision": "release"
+    }
+  ],
+  "observations": [],
+  "absences": [
+    {
+      "kind": "entity",
+      "reason": "missing_container",
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[2,1]:"
+    },
+    {
+      "kind": "entity",
+      "reason": "missing_type",
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[2]:"
+    },
+    {
+      "kind": "feature",
+      "reason": "missing_type",
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1]:",
+      "feature_address": "d:_n:synthetic_controller:[1]:1"
+    },
+    {
+      "kind": "feature",
+      "reason": "missing_role",
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1]:",
+      "feature_address": "d:_n:synthetic_controller:[1]:2"
+    },
+    {
+      "kind": "feature",
+      "reason": "missing_container",
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[2]:",
+      "feature_address": "d:_n:synthetic_controller:[2]:0"
+    },
+    {
+      "kind": "use_case",
+      "reason": "missing_actor",
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1,1]:"
+    },
+    {
+      "kind": "use_case",
+      "reason": "missing_container",
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[2]:"
+    }
+  ],
+  "absences_omitted": 0
+}
