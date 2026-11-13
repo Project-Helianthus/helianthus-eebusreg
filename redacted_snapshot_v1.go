@@ -15,6 +15,14 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
 
+// RedactedSnapshotV1 is the masked view of a SnapshotV1 for consumers without raw authority.
+// Identities become eebusraw.RedactedID values, pairing keeps only its states, feature roles
+// other than client and server become unspecified, and native addresses, metadata and opaque
+// observations are dropped. Devices nest their entities, features and use-case claims, and each
+// top-level entity, feature and use case must be referenced exactly once through them. Limits:
+// 256 services, 1024 devices, 4096 entities, 16384 features and 4096 use cases. Build it with
+// BuildRedactedSnapshotV1. String, GoString and Format print a fixed placeholder, so formatting
+// never reveals the content.
 type RedactedSnapshotV1 struct {
 	Meta     RedactedSnapshotMetaV1  `json:"meta"`
 	Status   RuntimeObservationV1    `json:"status"`
@@ -27,6 +35,10 @@ type RedactedSnapshotV1 struct {
 	UseCases []RedactedUseCaseV1     `json:"use_cases"`
 }
 
+// RedactedSnapshotMetaV1 identifies a redacted snapshot. Contract equals SnapshotContractV1 and
+// MaskTier must be eebusraw.MaskTierRedacted. DataHash is "sha256:" followed by the lowercase
+// hexadecimal SHA-256 of the canonical JSON of the content; CapturedAt is excluded, so captures
+// that differ only in capture time share the hash. Times are normalized to UTC.
 type RedactedSnapshotMetaV1 struct {
 	Contract      string              `json:"contract"`
 	Runtime       eebusraw.RedactedID `json:"runtime"`
@@ -37,6 +49,8 @@ type RedactedSnapshotMetaV1 struct {
 	DataHash      string              `json:"data_hash,omitempty"`
 }
 
+// RedactedServiceV1 is one service with its identity masked as a peer identifier. Kind is local
+// or remote; Visible and Paired are copied from the raw observation.
 type RedactedServiceV1 struct {
 	ID      eebusraw.RedactedID `json:"id"`
 	Kind    ServiceKindV1       `json:"kind"`
@@ -44,6 +58,8 @@ type RedactedServiceV1 struct {
 	Paired  bool                `json:"paired"`
 }
 
+// RedactedSessionV1 is one session with its ID masked as a session identifier and its remote
+// masked as a remote SKI; State and Since, in UTC, are copied.
 type RedactedSessionV1 struct {
 	ID     eebusraw.RedactedID    `json:"id"`
 	Remote eebusraw.RedactedID    `json:"remote"`
@@ -51,26 +67,38 @@ type RedactedSessionV1 struct {
 	Since  time.Time              `json:"since"`
 }
 
+// RedactedDeviceV1 is one remote device with its masked identity, the entities addressed under
+// it, and the use cases whose context address is the device address or begins with it and a
+// colon.
 type RedactedDeviceV1 struct {
 	ID            eebusraw.RedactedID `json:"id"`
 	Entities      []RedactedEntityV1  `json:"entities"`
 	UseCaseClaims []RedactedUseCaseV1 `json:"usecase_claims"`
 }
 
+// RedactedEntityV1 is one entity with its masked identity and the features addressed under it;
+// the same value appears at top level and inside its device.
 type RedactedEntityV1 struct {
 	ID       eebusraw.RedactedID `json:"id"`
 	Features []RedactedFeatureV1 `json:"features"`
 }
 
+// RedactedFeatureV1 is one feature with its masked identity and its role reduced to client,
+// server or unspecified.
 type RedactedFeatureV1 struct {
 	ID   eebusraw.RedactedID `json:"id"`
 	Role FeatureRoleV1       `json:"role"`
 }
 
+// RedactedUseCaseV1 is one use-case claim reduced to its masked identity.
 type RedactedUseCaseV1 struct {
 	ID eebusraw.RedactedID `json:"id"`
 }
 
+// BuildRedactedSnapshotV1 validates source as NewSnapshotV1 does, masks it, sorts every
+// collection by masked identity, computes Meta.DataHash and validates the result. It fails, and
+// never returns a partial result, when the source is invalid or a relationship cannot be
+// represented, such as an entity or use case that matches no device.
 func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 	raw, err := NewSnapshotV1(source)
 	if err != nil {
@@ -197,6 +225,8 @@ func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 	return result, nil
 }
 
+// MarshalJSON validates the snapshot, including its data hash, and writes it as canonical JSON
+// with sorted collections; an invalid snapshot is never encoded.
 func (snapshot RedactedSnapshotV1) MarshalJSON() ([]byte, error) {
 	if err := snapshot.Validate(); err != nil {
 		return nil, err
@@ -205,18 +235,24 @@ func (snapshot RedactedSnapshotV1) MarshalJSON() ([]byte, error) {
 	return marshalJCSV1(wire(canonicalRedactedSnapshotV1(snapshot)))
 }
 
+// String returns a fixed placeholder instead of the content.
 func (RedactedSnapshotV1) String() string {
 	return "redacted_snapshot_v1:[redacted]"
 }
 
+// GoString returns the String placeholder, so %#v reveals nothing either.
 func (snapshot RedactedSnapshotV1) GoString() string {
 	return snapshot.String()
 }
 
+// Format writes the String placeholder for every verb and flag.
 func (snapshot RedactedSnapshotV1) Format(state fmt.State, _ rune) {
 	_, _ = io.WriteString(state, snapshot.String())
 }
 
+// UnmarshalJSON accepts exactly one JSON object without unknown fields, validates it including
+// the data hash, and stores it in canonical order with UTC times. The receiver is unchanged on
+// error.
 func (snapshot *RedactedSnapshotV1) UnmarshalJSON(data []byte) error {
 	type wire RedactedSnapshotV1
 	var decoded wire
@@ -237,6 +273,9 @@ func (snapshot *RedactedSnapshotV1) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Validate checks the contract and mask tier, the kind of every masked identity, the closed state
+// values, uniqueness and collection limits, the device graph with matching feature roles, and that
+// Meta.DataHash matches the content. It reports the first violation.
 func (snapshot RedactedSnapshotV1) Validate() error {
 	if snapshot.Meta.Contract != SnapshotContractV1 {
 		return errors.New("redacted snapshot contract is invalid")

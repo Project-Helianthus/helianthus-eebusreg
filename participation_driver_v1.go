@@ -8,12 +8,27 @@ import (
 	"strings"
 )
 
+// ParticipationDriverV1 is the hook through which a gateway reads and changes eeBUS
+// participation. This module defines the contract only; no constructor here returns an
+// implementation. Callers bound every call with a context deadline of at most 30 seconds, and an
+// implementation returns fixed failure categories rather than native payloads and keeps the last
+// applied state and its native identity after a failed or partial apply.
 type ParticipationDriverV1 interface {
+	// Participation returns the current contribution; callers validate it before display.
 	Participation(context.Context) (ParticipationContributionV1, error)
+	// ApplyParticipation applies a complete configuration under the request's preconditions. A
+	// retry reuses the idempotency key with an identical payload and never starts a competing
+	// apply.
 	ApplyParticipation(context.Context, ParticipationApplyRequestV1) (ParticipationApplyResultV1, error)
+	// OperatorAdmin returns the AdminV1 surface for discovery, trust and connection actions;
+	// participation keeps no trust store of its own.
 	OperatorAdmin() AdminV1
 }
 
+// ParticipationApplyRequestV1 asks a driver to apply Configuration. The embedded precondition
+// carries the expected native state revision and the idempotency key. The request is an
+// in-process value without a public JSON shape: the embedded precondition's MarshalJSON refuses
+// to encode it.
 type ParticipationApplyRequestV1 struct {
 	MutationPreconditionV1
 	Configuration ParticipationConfigurationV1
@@ -24,6 +39,9 @@ var participationInterfaceV1 = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
 var participationVersionV1 = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 var participationPathV1 = regexp.MustCompile(`^(/[A-Za-z0-9_-]+)+$`)
 
+// Validate checks the shape rules documented on ParticipationConfigurationV1,
+// ParticipationListenerV1 and ParticipationBindingV1. It is pure: it checks neither that the
+// interface exists nor that the references resolve.
 func (configuration ParticipationConfigurationV1) Validate() error {
 	if configuration.Contract != ParticipationContractV1 || configuration.Revision == 0 {
 		return errors.New("participation contract or revision is invalid")
@@ -64,6 +82,10 @@ func (configuration ParticipationConfigurationV1) Validate() error {
 	return nil
 }
 
+// ValidateParticipationChangeV1 admits next as the successor of previous: both must be valid,
+// next.Revision must be previous.Revision plus one without overflow, the local participant must
+// not change (an identity reset is a separate operation), and a binding ID kept in both must keep
+// its target. Bindings may be added or removed and their permissions changed.
 func ValidateParticipationChangeV1(previous, next ParticipationConfigurationV1) error {
 	if err := previous.Validate(); err != nil {
 		return err
@@ -93,6 +115,10 @@ func ValidateParticipationChangeV1(previous, next ParticipationConfigurationV1) 
 	return nil
 }
 
+// Validate checks both configurations, the saved and applied revision rules, that every binding
+// in their union is observed exactly once at the right revision, that grants stay within the
+// configured permissions, and the state requirements documented on ParticipationStateV1. It
+// reports the first violation with a fixed message.
 func (contribution ParticipationContributionV1) Validate() error {
 	configuration := contribution.Configuration
 	if err := configuration.Validate(); err != nil {
@@ -238,6 +264,11 @@ func (contribution ParticipationContributionV1) Validate() error {
 	return nil
 }
 
+// ValidateParticipationControlV1 reports whether bindingID is eligible for control: the
+// contribution is valid, the saved configuration is enabled and grants control on that binding,
+// its observation is active with a control grant, and every reported loss is control-safe. It is
+// a pure eligibility check, not authorization or dispatch; a saved removal, revocation or disable
+// therefore rejects control even while the older binding is still observed as active.
 func ValidateParticipationControlV1(contribution ParticipationContributionV1, bindingID string) error {
 	if err := contribution.Validate(); err != nil {
 		return err
@@ -291,6 +322,8 @@ func participationPermissionsValidV1(permissions []ParticipationPermissionV1) bo
 	return true
 }
 
+// Validate checks the rules documented on ParticipationApplyResultV1. A result that fails it must
+// not be displayed; the caller inspects the contribution again instead.
 func (result ParticipationApplyResultV1) Validate() error {
 	if result.StateRevision == 0 || !participationStateValidV1(result.State) || !participationFailureValidV1(result.Failure) {
 		return errors.New("participation apply result is invalid")

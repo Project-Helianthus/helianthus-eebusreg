@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// NativeSnapshotContractV2 is the only Meta.Contract value NativeSnapshotV2.Validate accepts.
 const NativeSnapshotContractV2 = "helianthus.eebus.runtime.native-snapshot.v2"
 
 const (
@@ -19,6 +20,14 @@ const (
 	nativeSnapshotV2MaximumPayloadBytes    = 65536
 )
 
+// NativeSnapshotV2 is one bounded capture of a native runtime: its state, pairing, services,
+// sessions, and the remote device topology with native observations. Native text is kept as
+// reported instead of being mapped to closed enumerations, and identities (SKIs, SHIP IDs,
+// addresses) are not redacted, so the snapshot belongs behind an authorization boundary that
+// admits them. Validate requires each identifier to be non-blank and at most 4096 bytes after
+// trimming, and each state, kind, type, role, actor, source or version label at most 128 bytes.
+// Field meanings are documented in
+// https://github.com/Project-Helianthus/helianthus-docs-eebus/tree/main/api.
 type NativeSnapshotV2 struct {
 	Meta         NativeSnapshotMetaV2         `json:"meta"`
 	Status       NativeRuntimeObservationV2   `json:"status"`
@@ -32,6 +41,9 @@ type NativeSnapshotV2 struct {
 	Observations []NativeObservationV2        `json:"observations"`
 }
 
+// NativeSnapshotMetaV2 identifies a native snapshot and its capture. Contract must equal
+// NativeSnapshotContractV2 and LocalSKI must be 40 lowercase hexadecimal characters. ObservedAt,
+// CapturedAt and DataTimestamp are required; a nil ProtocolVersion means not reported.
 type NativeSnapshotMetaV2 struct {
 	Contract        string    `json:"contract"`
 	Runtime         string    `json:"runtime"`
@@ -43,22 +55,30 @@ type NativeSnapshotMetaV2 struct {
 	DataTimestamp   time.Time `json:"data_timestamp"`
 }
 
+// NativeRuntimeObservationV2 is the reported runtime State; Degradation is nil when none is
+// reported. Shutdown freezes the last snapshot with State "shutdown" and no degradation.
 type NativeRuntimeObservationV2 struct {
 	State       string               `json:"state"`
 	Degradation *NativeDegradationV2 `json:"degradation,omitempty"`
 }
 
+// NativeDegradationV2 is a reported degradation Reason that has held since a required time.
 type NativeDegradationV2 struct {
 	Reason string    `json:"reason"`
 	Since  time.Time `json:"since"`
 }
 
+// NativePairingObservationV2 is the observed pairing State of the remote with RemoteSKI since a
+// required time. It records an observation, not trust or qualification.
 type NativePairingObservationV2 struct {
 	RemoteSKI string    `json:"remote_ski"`
 	State     string    `json:"state"`
 	Since     time.Time `json:"since"`
 }
 
+// NativeServiceV2 is one service known to the runtime, keyed by SKI, with its reported Kind.
+// Visible and Paired are the runtime's observations. The pointer fields are announced
+// descriptive values, nil when not announced, and Validate does not check them.
 type NativeServiceV2 struct {
 	SKI        string  `json:"ski"`
 	SHIPID     *string `json:"ship_id,omitempty"`
@@ -72,6 +92,8 @@ type NativeServiceV2 struct {
 	Model      *string `json:"model,omitempty"`
 }
 
+// NativeSessionV2 is one session with the remote that has RemoteSKI, in its reported State since
+// a required time.
 type NativeSessionV2 struct {
 	ID        string    `json:"id"`
 	RemoteSKI string    `json:"remote_ski"`
@@ -79,6 +101,9 @@ type NativeSessionV2 struct {
 	Since     time.Time `json:"since"`
 }
 
+// NativeDeviceV2 is one remote device of the service with SKI, identified by its native Address.
+// Description and Metadata are reported as is and not validated; Observations follow the rules
+// of NativeSnapshotV2.Observations.
 type NativeDeviceV2 struct {
 	SKI          string                `json:"ski"`
 	SHIPID       *string               `json:"ship_id,omitempty"`
@@ -89,6 +114,8 @@ type NativeDeviceV2 struct {
 	Observations []NativeObservationV2 `json:"observations,omitempty"`
 }
 
+// NativeEntityV2 is one entity of the device with DeviceAddress, with its reported Type.
+// Validate does not check that the device exists in the snapshot.
 type NativeEntityV2 struct {
 	DeviceAddress string  `json:"device_address"`
 	EntityAddress string  `json:"entity_address"`
@@ -96,6 +123,8 @@ type NativeEntityV2 struct {
 	Description   *string `json:"description,omitempty"`
 }
 
+// NativeFeatureV2 is one feature of the entity at DeviceAddress and EntityAddress. Type and Role
+// are reported text; Role is not mapped to FeatureRoleV1.
 type NativeFeatureV2 struct {
 	DeviceAddress  string  `json:"device_address"`
 	EntityAddress  string  `json:"entity_address"`
@@ -105,6 +134,9 @@ type NativeFeatureV2 struct {
 	Description    *string `json:"description,omitempty"`
 }
 
+// NativeUseCaseV2 is one use-case claim announced at ContextAddress, a native address within a
+// device. Name and Actor are required; the pointer fields are nil when not announced, so a nil
+// Availability means unknown rather than unavailable. Scenarios are not validated.
 type NativeUseCaseV2 struct {
 	ContextAddress      string   `json:"context_address"`
 	Name                string   `json:"name"`
@@ -116,6 +148,9 @@ type NativeUseCaseV2 struct {
 	DocumentSubrevision *string  `json:"document_subrevision,omitempty"`
 }
 
+// NativeObservationV2 is one native value read at Path (at most 512 bytes) from Source at the
+// required time ObservedAt, retained as evidence without interpretation. A nil ProtocolVersion
+// means not reported.
 type NativeObservationV2 struct {
 	Path            string        `json:"path"`
 	Source          string        `json:"source"`
@@ -124,6 +159,11 @@ type NativeObservationV2 struct {
 	Value           NativeValueV2 `json:"value"`
 }
 
+// NativeValueV2 is a JSON-shaped native value with exactly one field set; a non-nil Null marks a
+// JSON null whatever it points to. Float must be finite. Number keeps a JSON number as text so
+// that values outside int64 and float64 keep their exact digits. String and Number hold at most
+// 65536 bytes, Array at most 256 elements, Object at most 32 keys of at most 128 bytes, and values
+// nest at most three deep, counting the outermost.
 type NativeValueV2 struct {
 	Null    *bool                     `json:"null,omitempty"`
 	Boolean *bool                     `json:"boolean,omitempty"`
@@ -137,6 +177,8 @@ type NativeValueV2 struct {
 
 var nativeSnapshotV2JSONNumber = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$`)
 
+// NewNativeSnapshotV2 returns a deep copy of draft once the copy passes Validate; draft itself is
+// neither modified nor retained.
 func NewNativeSnapshotV2(draft NativeSnapshotV2) (NativeSnapshotV2, error) {
 	snapshot := draft.Clone()
 	if err := snapshot.Validate(); err != nil {
@@ -145,6 +187,9 @@ func NewNativeSnapshotV2(draft NativeSnapshotV2) (NativeSnapshotV2, error) {
 	return snapshot, nil
 }
 
+// Validate reports the first violation of the contract value, the local SKI form, the required
+// text and timestamps, or the value bounds. It does not check uniqueness, references between
+// devices, entities, features and use cases, or the fields documented as not validated.
 func (snapshot NativeSnapshotV2) Validate() error {
 	if snapshot.Meta.Contract != NativeSnapshotContractV2 {
 		return fmt.Errorf("contract must be %q", NativeSnapshotContractV2)
@@ -216,6 +261,8 @@ func (snapshot NativeSnapshotV2) Validate() error {
 	return nil
 }
 
+// Clone returns a deep copy that shares no slice, map or pointer with snapshot. A nil top-level
+// Observations list comes back empty, so it encodes as [] rather than null.
 func (snapshot NativeSnapshotV2) Clone() NativeSnapshotV2 {
 	result := snapshot
 	result.Meta.ProtocolVersion = nativeSnapshotV2CloneString(snapshot.Meta.ProtocolVersion)
