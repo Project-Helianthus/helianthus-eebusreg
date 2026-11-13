@@ -146,24 +146,6 @@
       "value": 1479
     },
     {
-      "path": "internal/eebusfacade/runtime.go",
-      "symbol": "<file>",
-      "metric": "file_lines",
-      "value": 2517
-    },
-    {
-      "path": "internal/eebusfacade/runtime.go",
-      "symbol": "<file>",
-      "metric": "functions_per_file",
-      "value": 112
-    },
-    {
-      "path": "internal/eebusfacade/runtime.go",
-      "symbol": "acquireRuntimeWithSnapshotSerializer",
-      "metric": "function_lines",
-      "value": 239
-    },
-    {
       "path": "internal/eebusmutation/coordinator.go",
       "symbol": "(*rawMutationCoordinator).FeaturesDataSet",
       "metric": "function_lines",

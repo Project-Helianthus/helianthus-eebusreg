@@ -7447,16 +7447,6 @@
       "category": "identifier"
     },
     {
-      "path": "internal/eebusfacade/runtime.go",
-      "symbol": "cloneRuntimeOpaqueV1",
-      "category": "identifier"
-    },
-    {
-      "path": "internal/eebusfacade/runtime.go",
-      "symbol": "detachedRuntimeJSONValueV1",
-      "category": "identifier"
-    },
-    {
       "path": "internal/eebusfacade/runtime_contract_test.go",
       "symbol": "TestMSP055RuntimeDoesNotImportUnscopedEEBusService",
       "category": "test"
@@ -7469,6 +7459,16 @@
     {
       "path": "internal/eebusfacade/runtime_protected_witness_native.go",
       "symbol": "SHA256",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/runtime_snapshot_marshal.go",
+      "symbol": "cloneRuntimeOpaqueV1",
+      "category": "identifier"
+    },
+    {
+      "path": "internal/eebusfacade/runtime_snapshot_marshal.go",
+      "symbol": "detachedRuntimeJSONValueV1",
       "category": "identifier"
     },
     {
