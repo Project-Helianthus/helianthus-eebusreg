@@ -5,572 +5,44 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
-	"errors"
-	"fmt"
 	"io"
 	"sync"
 	"time"
-	"unicode/utf8"
 )
 
+// AdminV1 is the operator surface for local pairing and trust administration; it is
+// obtained only from NewOperatorRuntimeV1. Calls are serialized: one runs at a time, and a
+// call whose context ends while it waits fails with AdminErrorCodeV1UnknownState. Every
+// call fails with AdminErrorCodeV1AdminBoundaryUnavailable unless the runtime is enabled,
+// started and not shutting down. Each call re-reads backend facts and rejects the whole
+// fact set, without partial use, if any row is malformed. The pairing and trust model is
+// specified in helianthus-docs-eebus.
 type AdminV1 interface {
+	// Snapshot advances the state revision when facts changed and issues handles only for
+	// the requested view; handles from earlier revisions stop resolving.
 	Snapshot(context.Context, AdminSnapshotRequestV1) (AdminSnapshotV1, *AdminErrorV1)
+	// OpenPairingWindow admits new partners for the requested duration.
 	OpenPairingWindow(context.Context, OpenPairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1)
+	// ClosePairingWindow stops admitting new partners before the window deadline.
 	ClosePairingWindow(context.Context, ClosePairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1)
+	// Select resolves a discovered observation and returns the selection handle that
+	// Connect consumes.
 	Select(context.Context, SelectRequestV1) (AdminSelectionResultV1, *AdminErrorV1)
+	// Connect starts an outbound connection to a selection; follow it through ActionID
+	// and AdminSnapshotV1.ActiveAction.
 	Connect(context.Context, ConnectRequestV1) (ConnectResultV1, *AdminErrorV1)
+	// Confirm accepts an inbound candidate whose identity must equal ExpectedSKI.
 	Confirm(context.Context, ConfirmRequestV1) (AdminMutationResultV1, *AdminErrorV1)
+	// Cancel rejects an inbound candidate.
 	Cancel(context.Context, CancelRequestV1) (AdminMutationResultV1, *AdminErrorV1)
+	// RetryTrusted asks the backend to retry the connection to a trusted partner.
 	RetryTrusted(context.Context, RetryTrustedRequestV1) (AdminMutationResultV1, *AdminErrorV1)
+	// Untrust withdraws trust from a partner.
 	Untrust(context.Context, UntrustRequestV1) (AdminMutationResultV1, *AdminErrorV1)
 }
 
-type MutationPreconditionV1 struct {
-	IdempotencyKey        string
-	ExpectedStateRevision uint64
-}
-
-type AdminSnapshotRequestV1 struct {
-	View AdminViewV1
-}
-
-type OpenPairingWindowRequestV1 struct {
-	MutationPreconditionV1
-	Duration time.Duration
-}
-
-type ClosePairingWindowRequestV1 struct {
-	MutationPreconditionV1
-}
-
-type SelectRequestV1 struct {
-	MutationPreconditionV1
-	Observation ObservationHandleV1
-	ExpectedSKI string
-}
-
-type ConnectRequestV1 struct {
-	MutationPreconditionV1
-	Selection SelectionHandleV1
-	PIN       []byte
-}
-
-type ConfirmRequestV1 struct {
-	MutationPreconditionV1
-	Candidate   CandidateHandleV1
-	ExpectedSKI string
-}
-
-type CancelRequestV1 struct {
-	MutationPreconditionV1
-	Candidate CandidateHandleV1
-}
-
-type RetryTrustedRequestV1 struct {
-	MutationPreconditionV1
-	Partner PartnerHandleV1
-}
-
-type UntrustRequestV1 struct {
-	MutationPreconditionV1
-	Partner PartnerHandleV1
-}
-
-type AdminMutationResultV1 struct {
-	StateRevision uint64
-	Outcome       AdminOutcomeV1
-	Replayed      bool
-}
-
-type ConnectResultV1 struct {
-	AdminMutationResultV1
-	ActionID string
-}
-
-type AdminSelectionResultV1 struct {
-	AdminMutationResultV1
-	Selection SelectionHandleV1
-}
-
-type AdminOutcomeV1 string
-
-type AdminViewV1 string
-
-const (
-	AdminViewV1Trusted    AdminViewV1 = "trusted"
-	AdminViewV1Connected  AdminViewV1 = "connected"
-	AdminViewV1Discovered AdminViewV1 = "discovered"
-	AdminViewV1Candidate  AdminViewV1 = "candidate"
-)
-
-type AdminErrorCodeV1 string
-
-const (
-	AdminErrorCodeV1AdminBoundaryUnavailable AdminErrorCodeV1 = "admin_boundary_unavailable"
-	AdminErrorCodeV1Unauthenticated          AdminErrorCodeV1 = "unauthenticated"
-	AdminErrorCodeV1Forbidden                AdminErrorCodeV1 = "forbidden"
-	AdminErrorCodeV1CSRFRejected             AdminErrorCodeV1 = "csrf_rejected"
-	AdminErrorCodeV1InvalidRequest           AdminErrorCodeV1 = "invalid_request"
-	AdminErrorCodeV1StateConflict            AdminErrorCodeV1 = "state_conflict"
-	AdminErrorCodeV1SnapshotExpired          AdminErrorCodeV1 = "snapshot_expired"
-	AdminErrorCodeV1IdempotencyConflict      AdminErrorCodeV1 = "idempotency_conflict"
-	AdminErrorCodeV1PairingClosed            AdminErrorCodeV1 = "pairing_closed"
-	AdminErrorCodeV1ObservationStale         AdminErrorCodeV1 = "observation_stale"
-	AdminErrorCodeV1IdentityMismatch         AdminErrorCodeV1 = "identity_mismatch"
-	AdminErrorCodeV1AssociationIncomplete    AdminErrorCodeV1 = "association_incomplete"
-	AdminErrorCodeV1CandidateExpired         AdminErrorCodeV1 = "candidate_expired"
-	AdminErrorCodeV1CandidateBusy            AdminErrorCodeV1 = "candidate_busy"
-	AdminErrorCodeV1TrustDenied              AdminErrorCodeV1 = "trust_denied"
-	AdminErrorCodeV1ListenerUnavailable      AdminErrorCodeV1 = "listener_unavailable"
-	AdminErrorCodeV1DiscoveryUnavailable     AdminErrorCodeV1 = "discovery_unavailable"
-	AdminErrorCodeV1AttemptTimeout           AdminErrorCodeV1 = "attempt_timeout"
-	AdminErrorCodeV1Disconnected             AdminErrorCodeV1 = "disconnected"
-	AdminErrorCodeV1BackoffActive            AdminErrorCodeV1 = "backoff_active"
-	AdminErrorCodeV1TerminalQuarantine       AdminErrorCodeV1 = "terminal_quarantine"
-	AdminErrorCodeV1PersistenceFailure       AdminErrorCodeV1 = "persistence_failure"
-	AdminErrorCodeV1PINRequired              AdminErrorCodeV1 = "pin_required"
-	AdminErrorCodeV1PINOptional              AdminErrorCodeV1 = "pin_optional"
-	AdminErrorCodeV1PINBusy                  AdminErrorCodeV1 = "pin_busy"
-	AdminErrorCodeV1PINRejected              AdminErrorCodeV1 = "pin_rejected"
-	AdminErrorCodeV1PINUnavailable           AdminErrorCodeV1 = "pin_unavailable"
-	AdminErrorCodeV1PINProtocolError         AdminErrorCodeV1 = "pin_protocol_error"
-	AdminErrorCodeV1UnknownState             AdminErrorCodeV1 = "unknown_state"
-)
-
-type AdminErrorV1 struct {
-	Code AdminErrorCodeV1
-}
-
-func (failure AdminErrorV1) Error() string {
-	if failure.Code == "" {
-		return string(AdminErrorCodeV1UnknownState)
-	}
-	return string(failure.Code)
-}
-
-type PartnerHandleV1 struct{ token [32]byte }
-type ObservationHandleV1 struct{ token [32]byte }
-type SelectionHandleV1 struct{ token [32]byte }
-type CandidateHandleV1 struct{ token [32]byte }
-
-type AdminSnapshotV1 struct {
-	StateRevision   uint64
-	CapturedAt      time.Time
-	LocalSKI        string
-	LocalSHIPID     string
-	Status          string
-	Window          string
-	WindowDeadline  time.Time
-	Register        string
-	Listener        string
-	Discovery       string
-	DegradedCode    AdminErrorCodeV1
-	TrustedCount    uint16
-	ConnectedCount  uint16
-	DiscoveredCount uint16
-	CandidateCount  uint16
-	Trusted         []TrustedPartnerV1
-	Connected       []ConnectedPartnerV1
-	Discovered      []DiscoveredPartnerV1
-	Candidates      []CandidateV1
-	ActiveAction    *ActiveActionV1
-}
-
-type ActiveActionV1 struct {
-	ActionID  string
-	Kind      string
-	State     string
-	Outcome   *AdminOutcomeV1
-	Retryable bool
-	Expiry    time.Time
-}
-
-type TrustedPartnerV1 struct {
-	Partner         PartnerHandleV1
-	SKI             string
-	Endpoint        string
-	TrustState      string
-	ConnectionState string
-	SHIPID          string
-	LastSeen        time.Time
-	Name            string
-	Identifier      string
-	Brand           string
-	Type            string
-	Model           string
-	RetryState      string
-	RetryDeadline   time.Time
-	RetryAdmitted   bool
-}
-
-type ConnectedPartnerV1 struct {
-	SKI             string
-	Endpoint        string
-	TrustState      string
-	ConnectionState string
-	SHIPID          string
-	LastSeen        time.Time
-	Name            string
-	Identifier      string
-	Brand           string
-	Type            string
-	Model           string
-}
-
-type DiscoveredPartnerV1 struct {
-	Observation         ObservationHandleV1
-	SKI                 string
-	Endpoint            string
-	ObservationRevision uint64
-	LastSeen            time.Time
-	Name                string
-	Identifier          string
-	Brand               string
-	Type                string
-	Model               string
-}
-
-type CandidateV1 struct {
-	Candidate           CandidateHandleV1
-	SKI                 string
-	State               string
-	ExpiresAt           time.Time
-	AssociationComplete bool
-}
-
-const operatorAdminV1RedactedRendering = "admin_v1{redacted}"
-
-var errOperatorAdminV1Serialization = errors.New("AdminV1 owner value cannot be serialized")
-
-func operatorAdminV1Format(state fmt.State, _ rune) {
-	_, _ = io.WriteString(state, operatorAdminV1RedactedRendering)
-}
-func operatorAdminV1String() string               { return operatorAdminV1RedactedRendering }
-func operatorAdminV1MarshalJSON() ([]byte, error) { return nil, errOperatorAdminV1Serialization }
-
-func (*operatorAdminV1Reducer) String() string   { return operatorAdminV1String() }
-func (*operatorAdminV1Reducer) GoString() string { return operatorAdminV1String() }
-func (*operatorAdminV1Reducer) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-func (*operatorAdminV1Reducer) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-func (PartnerHandleV1) String() string                    { return operatorAdminV1String() }
-func (PartnerHandleV1) GoString() string                  { return operatorAdminV1String() }
-func (PartnerHandleV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-func (PartnerHandleV1) MarshalJSON() ([]byte, error)      { return operatorAdminV1MarshalJSON() }
-func (ObservationHandleV1) String() string                { return operatorAdminV1String() }
-func (ObservationHandleV1) GoString() string              { return operatorAdminV1String() }
-func (ObservationHandleV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-func (ObservationHandleV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-func (SelectionHandleV1) String() string                 { return operatorAdminV1String() }
-func (SelectionHandleV1) GoString() string               { return operatorAdminV1String() }
-func (SelectionHandleV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-func (SelectionHandleV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-func (CandidateHandleV1) String() string               { return operatorAdminV1String() }
-func (CandidateHandleV1) GoString() string             { return operatorAdminV1String() }
-func (CandidateHandleV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-func (CandidateHandleV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-func (MutationPreconditionV1) String() string                    { return operatorAdminV1String() }
-func (MutationPreconditionV1) GoString() string                  { return operatorAdminV1String() }
-func (MutationPreconditionV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-func (MutationPreconditionV1) MarshalJSON() ([]byte, error)      { return operatorAdminV1MarshalJSON() }
-func (AdminSnapshotRequestV1) String() string                    { return operatorAdminV1String() }
-func (AdminSnapshotRequestV1) GoString() string                  { return operatorAdminV1String() }
-func (AdminSnapshotRequestV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-func (AdminSnapshotRequestV1) MarshalJSON() ([]byte, error)      { return operatorAdminV1MarshalJSON() }
-func (OpenPairingWindowRequestV1) String() string                { return operatorAdminV1String() }
-func (OpenPairingWindowRequestV1) GoString() string              { return operatorAdminV1String() }
-func (OpenPairingWindowRequestV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-func (OpenPairingWindowRequestV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-func (ClosePairingWindowRequestV1) String() string              { return operatorAdminV1String() }
-func (ClosePairingWindowRequestV1) GoString() string            { return operatorAdminV1String() }
-func (ClosePairingWindowRequestV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-func (ClosePairingWindowRequestV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-func (SelectRequestV1) String() string                           { return operatorAdminV1String() }
-func (SelectRequestV1) GoString() string                         { return operatorAdminV1String() }
-func (SelectRequestV1) Format(state fmt.State, verb rune)        { operatorAdminV1Format(state, verb) }
-func (SelectRequestV1) MarshalJSON() ([]byte, error)             { return operatorAdminV1MarshalJSON() }
-func (ConnectRequestV1) String() string                          { return operatorAdminV1String() }
-func (ConnectRequestV1) GoString() string                        { return operatorAdminV1String() }
-func (ConnectRequestV1) Format(state fmt.State, verb rune)       { operatorAdminV1Format(state, verb) }
-func (ConnectRequestV1) MarshalJSON() ([]byte, error)            { return operatorAdminV1MarshalJSON() }
-func (ConfirmRequestV1) String() string                          { return operatorAdminV1String() }
-func (ConfirmRequestV1) GoString() string                        { return operatorAdminV1String() }
-func (ConfirmRequestV1) Format(state fmt.State, verb rune)       { operatorAdminV1Format(state, verb) }
-func (ConfirmRequestV1) MarshalJSON() ([]byte, error)            { return operatorAdminV1MarshalJSON() }
-func (CancelRequestV1) String() string                           { return operatorAdminV1String() }
-func (CancelRequestV1) GoString() string                         { return operatorAdminV1String() }
-func (CancelRequestV1) Format(state fmt.State, verb rune)        { operatorAdminV1Format(state, verb) }
-func (CancelRequestV1) MarshalJSON() ([]byte, error)             { return operatorAdminV1MarshalJSON() }
-func (RetryTrustedRequestV1) String() string                     { return operatorAdminV1String() }
-func (RetryTrustedRequestV1) GoString() string                   { return operatorAdminV1String() }
-func (RetryTrustedRequestV1) Format(state fmt.State, verb rune)  { operatorAdminV1Format(state, verb) }
-func (RetryTrustedRequestV1) MarshalJSON() ([]byte, error)       { return operatorAdminV1MarshalJSON() }
-func (UntrustRequestV1) String() string                          { return operatorAdminV1String() }
-func (UntrustRequestV1) GoString() string                        { return operatorAdminV1String() }
-func (UntrustRequestV1) Format(state fmt.State, verb rune)       { operatorAdminV1Format(state, verb) }
-func (UntrustRequestV1) MarshalJSON() ([]byte, error)            { return operatorAdminV1MarshalJSON() }
-
-func (AdminMutationResultV1) String() string                    { return operatorAdminV1String() }
-func (AdminMutationResultV1) GoString() string                  { return operatorAdminV1String() }
-func (AdminMutationResultV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-func (AdminMutationResultV1) MarshalJSON() ([]byte, error)      { return operatorAdminV1MarshalJSON() }
-func (ConnectResultV1) String() string                          { return operatorAdminV1String() }
-func (ConnectResultV1) GoString() string                        { return operatorAdminV1String() }
-func (ConnectResultV1) Format(state fmt.State, verb rune)       { operatorAdminV1Format(state, verb) }
-func (ConnectResultV1) MarshalJSON() ([]byte, error)            { return operatorAdminV1MarshalJSON() }
-func (AdminSelectionResultV1) String() string                   { return operatorAdminV1String() }
-func (AdminSelectionResultV1) GoString() string                 { return operatorAdminV1String() }
-func (AdminSelectionResultV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-func (AdminSelectionResultV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-func (AdminSnapshotV1) String() string                      { return operatorAdminV1String() }
-func (AdminSnapshotV1) GoString() string                    { return operatorAdminV1String() }
-func (AdminSnapshotV1) Format(state fmt.State, verb rune)   { operatorAdminV1Format(state, verb) }
-func (AdminSnapshotV1) MarshalJSON() ([]byte, error)        { return operatorAdminV1MarshalJSON() }
-func (ActiveActionV1) String() string                       { return operatorAdminV1String() }
-func (ActiveActionV1) GoString() string                     { return operatorAdminV1String() }
-func (ActiveActionV1) Format(state fmt.State, verb rune)    { operatorAdminV1Format(state, verb) }
-func (ActiveActionV1) MarshalJSON() ([]byte, error)         { return operatorAdminV1MarshalJSON() }
-
-func (TrustedPartnerV1) String() string                    { return operatorAdminV1String() }
-func (TrustedPartnerV1) GoString() string                  { return operatorAdminV1String() }
-func (TrustedPartnerV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-func (TrustedPartnerV1) MarshalJSON() ([]byte, error)      { return operatorAdminV1MarshalJSON() }
-func (ConnectedPartnerV1) String() string                  { return operatorAdminV1String() }
-func (ConnectedPartnerV1) GoString() string                { return operatorAdminV1String() }
-func (ConnectedPartnerV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-func (ConnectedPartnerV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-func (DiscoveredPartnerV1) String() string              { return operatorAdminV1String() }
-func (DiscoveredPartnerV1) GoString() string            { return operatorAdminV1String() }
-func (DiscoveredPartnerV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-func (DiscoveredPartnerV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-func (CandidateV1) String() string                       { return operatorAdminV1String() }
-func (CandidateV1) GoString() string                     { return operatorAdminV1String() }
-func (CandidateV1) Format(state fmt.State, verb rune)    { operatorAdminV1Format(state, verb) }
-func (CandidateV1) MarshalJSON() ([]byte, error)         { return operatorAdminV1MarshalJSON() }
-
-type operatorAdminV1TransientPIN struct{ bytes []byte }
-
-func newOperatorAdminV1TransientPIN(value []byte) (operatorAdminV1TransientPIN, bool) {
-	if !validOperatorAdminV1PIN(value) {
-		return operatorAdminV1TransientPIN{}, false
-	}
-	return operatorAdminV1TransientPIN{bytes: append([]byte(nil), value...)}, true
-}
-
-func (pin *operatorAdminV1TransientPIN) WithTransientPIN(_ string, consume func([]byte) error) (bool, error) {
-	if pin == nil || pin.cleared() || consume == nil {
-		return false, errors.New("transient PIN provider invalid")
-	}
-	defer pin.clear()
-	return true, consume(pin.bytes)
-}
-
-func (pin *operatorAdminV1TransientPIN) DiscardTransientPIN(string) { pin.clear() }
-
-func (pin *operatorAdminV1TransientPIN) clear() {
-	if pin == nil {
-		return
-	}
-	for index := range pin.bytes {
-		pin.bytes[index] = 0
-	}
-	pin.bytes = nil
-}
-
-func (pin *operatorAdminV1TransientPIN) cleared() bool { return pin == nil || len(pin.bytes) == 0 }
-func (operatorAdminV1TransientPIN) String() string     { return operatorAdminV1String() }
-func (operatorAdminV1TransientPIN) GoString() string   { return operatorAdminV1String() }
-func (operatorAdminV1TransientPIN) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-func (operatorAdminV1TransientPIN) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
 func newAdminBoundaryUnavailableV1() *AdminErrorV1 {
 	return &AdminErrorV1{Code: AdminErrorCodeV1AdminBoundaryUnavailable}
-}
-
-const (
-	operatorAdminV1MaximumHandleTTL      = 2 * time.Minute
-	operatorAdminV1MaximumHandlesPerKind = 128
-	operatorAdminV1MaximumHandlesTotal   = 512
-	operatorAdminV1MaximumReplayEntries  = 128
-	operatorAdminV1MaximumReferenceBytes = 256
-	operatorAdminV1MaximumEndpointBytes  = 512
-	operatorAdminV1MaximumWindow         = 5 * time.Minute
-	operatorAdminV1TokenAttempts         = 32
-)
-
-type operatorAdminV1Lifecycle interface {
-	operatorAdminV1Lifecycle() (enabled, started, shutdown bool)
-}
-
-type operatorAdminV1PINProvider interface {
-	WithTransientPIN(string, func([]byte) error) (bool, error)
-}
-
-type operatorAdminV1Backend interface {
-	snapshotOperatorAdminV1(context.Context) (operatorAdminV1SnapshotFacts, *AdminErrorV1)
-	observeOperatorAdminV1ActiveAction(context.Context, string)
-	openOperatorAdminV1(context.Context, time.Duration) (operatorAdminV1Transition, *AdminErrorV1)
-	closeOperatorAdminV1(context.Context) (operatorAdminV1Transition, *AdminErrorV1)
-	selectOperatorAdminV1(context.Context, string, string) (string, operatorAdminV1Transition, *AdminErrorV1)
-	connectOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
-	connectOperatorAdminV1WithPIN(context.Context, string, operatorAdminV1PINProvider) (operatorAdminV1Transition, *AdminErrorV1)
-	confirmOperatorAdminV1(context.Context, string, string) (operatorAdminV1Transition, *AdminErrorV1)
-	cancelOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
-	retryTrustedOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
-	untrustOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
-}
-
-type operatorAdminV1Transition struct {
-	outcome  AdminOutcomeV1
-	changed  bool
-	actionID string
-}
-
-type operatorAdminV1ActiveActionFact struct {
-	actionID  string
-	kind      string
-	state     string
-	outcome   AdminOutcomeV1
-	retryable bool
-	expiresAt time.Time
-}
-
-type operatorAdminV1SnapshotFacts struct {
-	capturedAt     time.Time
-	localSKI       string
-	localSHIPID    string
-	status         string
-	window         string
-	windowDeadline time.Time
-	register       string
-	listener       string
-	discovery      string
-	degraded       AdminErrorCodeV1
-	trusted        []operatorAdminV1TrustedFact
-	connected      []operatorAdminV1ConnectedFact
-	discovered     []operatorAdminV1DiscoveredFact
-	candidates     []operatorAdminV1CandidateFact
-	activeAction   *operatorAdminV1ActiveActionFact
-}
-
-type operatorAdminV1TrustedFact struct {
-	reference       string
-	ski             string
-	endpoint        string
-	trustState      string
-	connectionState string
-	shipID          string
-	lastSeen        time.Time
-	name            string
-	identifier      string
-	brand           string
-	typeName        string
-	model           string
-	retryState      string
-	retryDeadline   time.Time
-	retryAdmitted   bool
-}
-
-type operatorAdminV1ConnectedFact struct {
-	ski             string
-	endpoint        string
-	trustState      string
-	connectionState string
-	shipID          string
-	lastSeen        time.Time
-	name            string
-	identifier      string
-	brand           string
-	typeName        string
-	model           string
-}
-
-type operatorAdminV1DiscoveredFact struct {
-	reference           string
-	ski                 string
-	endpoint            string
-	observationRevision uint64
-	lastSeen            time.Time
-	name                string
-	identifier          string
-	brand               string
-	typeName            string
-	model               string
-	expiresAt           time.Time
-}
-
-type operatorAdminV1CandidateFact struct {
-	reference           string
-	ski                 string
-	state               string
-	expiresAt           time.Time
-	associationComplete bool
-}
-
-type operatorAdminV1HandleKind uint8
-
-const (
-	operatorAdminV1PartnerHandle operatorAdminV1HandleKind = iota + 1
-	operatorAdminV1ObservationHandle
-	operatorAdminV1SelectionHandle
-	operatorAdminV1CandidateHandle
-)
-
-type operatorAdminV1HandleRecord struct {
-	kind      operatorAdminV1HandleKind
-	target    string
-	revision  uint64
-	expiresAt time.Time
-}
-
-type operatorAdminV1Replay struct {
-	binding   [32]byte
-	result    AdminMutationResultV1
-	selection SelectionHandleV1
-	actionID  string
-	failure   AdminErrorCodeV1
-	sequence  uint64
-}
-
-type operatorAdminV1Reducer struct {
-	serial chan struct{}
-	mu     sync.Mutex
-
-	now             func() time.Time
-	random          io.Reader
-	bindingKey      [32]byte
-	bindingKeyReady bool
-	lifecycle       operatorAdminV1Lifecycle
-	backend         operatorAdminV1Backend
-
-	initialized    bool
-	revision       uint64
-	facts          operatorAdminV1SnapshotFacts
-	handles        map[[32]byte]operatorAdminV1HandleRecord
-	byTarget       map[operatorAdminV1HandleKind]map[string][32]byte
-	replays        map[string]operatorAdminV1Replay
-	replaySequence uint64
 }
 
 func newOperatorAdminV1Reducer(
@@ -604,6 +76,8 @@ func newOperatorAdminV1Reducer(
 	}
 }
 
+// Snapshot implements AdminV1. When the result holds a terminal active action, the action is
+// acknowledged to the backend after the reducer lock is released.
 func (admin *operatorAdminV1Reducer) Snapshot(ctx context.Context, request AdminSnapshotRequestV1) (AdminSnapshotV1, *AdminErrorV1) {
 	ctx = operatorAdminV1Context(ctx)
 	if failure := admin.acquire(ctx); failure != nil {
@@ -641,6 +115,8 @@ func (admin *operatorAdminV1Reducer) Snapshot(ctx context.Context, request Admin
 	return snapshot, snapshotFailure
 }
 
+// OpenPairingWindow implements AdminV1; the requested duration is part of the idempotency
+// binding, so a replay with another duration conflicts.
 func (admin *operatorAdminV1Reducer) OpenPairingWindow(ctx context.Context, request OpenPairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
 	var requestFailure *AdminErrorV1
 	if request.Duration <= 0 || request.Duration > operatorAdminV1MaximumWindow {
@@ -658,6 +134,7 @@ func (admin *operatorAdminV1Reducer) OpenPairingWindow(ctx context.Context, requ
 	return result, failure
 }
 
+// ClosePairingWindow implements AdminV1; its idempotency binding holds no target.
 func (admin *operatorAdminV1Reducer) ClosePairingWindow(ctx context.Context, request ClosePairingWindowRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
 	binding := operatorAdminV1Binding("close")
 	result, _, _, failure := admin.execute(
@@ -671,6 +148,8 @@ func (admin *operatorAdminV1Reducer) ClosePairingWindow(ctx context.Context, req
 	return result, failure
 }
 
+// Select implements AdminV1. The selection handle is issued only after the effect succeeds and
+// only if handle capacity was available before it ran.
 func (admin *operatorAdminV1Reducer) Select(ctx context.Context, request SelectRequestV1) (AdminSelectionResultV1, *AdminErrorV1) {
 	var requestFailure *AdminErrorV1
 	if !validOperatorAdminV1SKI(request.ExpectedSKI) {
@@ -693,6 +172,8 @@ func (admin *operatorAdminV1Reducer) Select(ctx context.Context, request SelectR
 	return AdminSelectionResultV1{AdminMutationResultV1: result, Selection: selection}, nil
 }
 
+// Connect implements AdminV1. The PIN copy is handed to the backend only on success and is
+// zeroed on every other path; an invalid action ID from the backend fails closed.
 func (admin *operatorAdminV1Reducer) Connect(ctx context.Context, request ConnectRequestV1) (ConnectResultV1, *AdminErrorV1) {
 	var pin *operatorAdminV1TransientPIN
 	var requestFailure *AdminErrorV1
@@ -741,6 +222,7 @@ func (admin *operatorAdminV1Reducer) Connect(ctx context.Context, request Connec
 	return ConnectResultV1{AdminMutationResultV1: result, ActionID: actionID}, nil
 }
 
+// Confirm implements AdminV1; the expected SKI is part of the idempotency binding.
 func (admin *operatorAdminV1Reducer) Confirm(ctx context.Context, request ConfirmRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
 	var requestFailure *AdminErrorV1
 	if !validOperatorAdminV1SKI(request.ExpectedSKI) {
@@ -761,6 +243,7 @@ func (admin *operatorAdminV1Reducer) Confirm(ctx context.Context, request Confir
 	return result, failure
 }
 
+// Cancel implements AdminV1; the candidate handle is the whole idempotency binding.
 func (admin *operatorAdminV1Reducer) Cancel(ctx context.Context, request CancelRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
 	binding := operatorAdminV1Binding("cancel", request.Candidate.token[:])
 	result, _, _, failure := admin.execute(
@@ -777,6 +260,7 @@ func (admin *operatorAdminV1Reducer) Cancel(ctx context.Context, request CancelR
 	return result, failure
 }
 
+// RetryTrusted implements AdminV1; the partner handle is the whole idempotency binding.
 func (admin *operatorAdminV1Reducer) RetryTrusted(ctx context.Context, request RetryTrustedRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
 	binding := operatorAdminV1Binding("retry_trusted", request.Partner.token[:])
 	result, _, _, failure := admin.execute(
@@ -793,6 +277,7 @@ func (admin *operatorAdminV1Reducer) RetryTrusted(ctx context.Context, request R
 	return result, failure
 }
 
+// Untrust implements AdminV1; the partner handle is the whole idempotency binding.
 func (admin *operatorAdminV1Reducer) Untrust(ctx context.Context, request UntrustRequestV1) (AdminMutationResultV1, *AdminErrorV1) {
 	binding := operatorAdminV1Binding("untrust", request.Partner.token[:])
 	result, _, _, failure := admin.execute(
@@ -1277,240 +762,6 @@ func (admin *operatorAdminV1Reducer) available() *AdminErrorV1 {
 	return nil
 }
 
-func validateOperatorAdminV1Precondition(precondition MutationPreconditionV1) *AdminErrorV1 {
-	if len(precondition.IdempotencyKey) < 1 || len(precondition.IdempotencyKey) > 128 ||
-		!utf8.ValidString(precondition.IdempotencyKey) || precondition.ExpectedStateRevision == 0 {
-		return operatorAdminV1Error(AdminErrorCodeV1InvalidRequest)
-	}
-	return nil
-}
-
-func validateOperatorAdminV1Facts(facts operatorAdminV1SnapshotFacts) *AdminErrorV1 {
-	if facts.capturedAt.IsZero() || !validOperatorAdminV1SKI(facts.localSKI) ||
-		facts.localSHIPID == "" || !validOperatorAdminV1OptionalText(facts.localSHIPID) ||
-		!validOperatorAdminV1Status(facts.status) ||
-		!validOperatorAdminV1Status(facts.window) || !validOperatorAdminV1Status(facts.register) ||
-		!validOperatorAdminV1Status(facts.listener) || !validOperatorAdminV1Status(facts.discovery) ||
-		facts.window == "open" && facts.windowDeadline.IsZero() || !validOperatorAdminV1DegradedCode(facts.degraded) {
-		return newAdminBoundaryUnavailableV1()
-	}
-	if action := facts.activeAction; action != nil &&
-		(!validOperatorAdminV1ActionID(action.actionID) || action.kind != "connect" ||
-			(action.state != "pending" && action.state != "terminal") || action.expiresAt.IsZero() ||
-			!facts.capturedAt.Before(action.expiresAt) || action.state == "pending" && action.outcome != "" ||
-			action.state == "terminal" && !validOperatorAdminV1ActionOutcome(action.outcome)) {
-		return newAdminBoundaryUnavailableV1()
-	}
-	if len(facts.trusted) > operatorAdminV1MaximumHandlesPerKind ||
-		len(facts.connected) > operatorAdminV1MaximumHandlesPerKind ||
-		len(facts.discovered) > operatorAdminV1MaximumHandlesPerKind ||
-		len(facts.candidates) > operatorAdminV1MaximumHandlesPerKind {
-		return newAdminBoundaryUnavailableV1()
-	}
-	seenTrusted := make(map[string]struct{}, len(facts.trusted))
-	for _, fact := range facts.trusted {
-		if !validOperatorAdminV1Reference(fact.reference) || !validOperatorAdminV1SKI(fact.ski) ||
-			!validOperatorAdminV1Endpoint(fact.endpoint) || !validOperatorAdminV1Status(fact.trustState) ||
-			!validOperatorAdminV1Status(fact.connectionState) || !validOperatorAdminV1OptionalText(fact.shipID) ||
-			!validOperatorAdminV1OptionalText(fact.name) || !validOperatorAdminV1OptionalText(fact.identifier) ||
-			!validOperatorAdminV1OptionalText(fact.brand) || !validOperatorAdminV1OptionalText(fact.typeName) ||
-			!validOperatorAdminV1OptionalText(fact.model) || !validOperatorAdminV1RetryFact(facts.capturedAt, fact) {
-			return newAdminBoundaryUnavailableV1()
-		}
-		if _, duplicate := seenTrusted[fact.reference]; duplicate {
-			return newAdminBoundaryUnavailableV1()
-		}
-		seenTrusted[fact.reference] = struct{}{}
-	}
-	for _, fact := range facts.connected {
-		if !validOperatorAdminV1SKI(fact.ski) || !validOperatorAdminV1Endpoint(fact.endpoint) ||
-			!validOperatorAdminV1Status(fact.connectionState) || !validOperatorAdminV1Status(fact.trustState) ||
-			!validOperatorAdminV1OptionalText(fact.shipID) || !validOperatorAdminV1OptionalText(fact.name) ||
-			!validOperatorAdminV1OptionalText(fact.identifier) || !validOperatorAdminV1OptionalText(fact.brand) ||
-			!validOperatorAdminV1OptionalText(fact.typeName) || !validOperatorAdminV1OptionalText(fact.model) {
-			return newAdminBoundaryUnavailableV1()
-		}
-	}
-	seenDiscovered := make(map[string]struct{}, len(facts.discovered))
-	for _, fact := range facts.discovered {
-		if !validOperatorAdminV1Reference(fact.reference) || fact.ski != "" && !validOperatorAdminV1SKI(fact.ski) ||
-			!validOperatorAdminV1Endpoint(fact.endpoint) || fact.observationRevision == 0 ||
-			!validOperatorAdminV1OptionalText(fact.name) || !validOperatorAdminV1OptionalText(fact.identifier) ||
-			!validOperatorAdminV1OptionalText(fact.brand) || !validOperatorAdminV1OptionalText(fact.typeName) ||
-			!validOperatorAdminV1OptionalText(fact.model) || !fact.expiresAt.IsZero() && !facts.capturedAt.Before(fact.expiresAt) {
-			return newAdminBoundaryUnavailableV1()
-		}
-		if _, duplicate := seenDiscovered[fact.reference]; duplicate {
-			return newAdminBoundaryUnavailableV1()
-		}
-		seenDiscovered[fact.reference] = struct{}{}
-	}
-	seenCandidates := make(map[string]struct{}, len(facts.candidates))
-	for _, fact := range facts.candidates {
-		if !validOperatorAdminV1Reference(fact.reference) || !validOperatorAdminV1SKI(fact.ski) ||
-			!validOperatorAdminV1Status(fact.state) || fact.expiresAt.IsZero() || !facts.capturedAt.Before(fact.expiresAt) {
-			return newAdminBoundaryUnavailableV1()
-		}
-		if _, duplicate := seenCandidates[fact.reference]; duplicate {
-			return newAdminBoundaryUnavailableV1()
-		}
-		seenCandidates[fact.reference] = struct{}{}
-	}
-	return nil
-}
-
-func validOperatorAdminV1RetryFact(capturedAt time.Time, fact operatorAdminV1TrustedFact) bool {
-	switch fact.retryState {
-	case "":
-		return fact.retryDeadline.IsZero() && !fact.retryAdmitted
-	case "RETRY_READY":
-		return fact.retryDeadline.IsZero()
-	case "BACKOFF_ACTIVE":
-		return !fact.retryDeadline.IsZero() && !fact.retryDeadline.Before(capturedAt) && !fact.retryAdmitted
-	case "ADMIN_HOLD":
-		return fact.retryDeadline.IsZero() && !fact.retryAdmitted
-	default:
-		return false
-	}
-}
-
-func validOperatorAdminV1Status(value string) bool {
-	return len(value) >= 1 && len(value) <= 128 && utf8.ValidString(value)
-}
-
-func validOperatorAdminV1OptionalText(value string) bool {
-	return len(value) <= 256 && utf8.ValidString(value)
-}
-
-func validOperatorAdminV1DegradedCode(value AdminErrorCodeV1) bool {
-	if value == "" {
-		return true
-	}
-	return normalizeOperatorAdminV1Error(operatorAdminV1Error(value)).Code == value
-}
-
-func validOperatorAdminV1Reference(value string) bool {
-	return len(value) >= 1 && len(value) <= operatorAdminV1MaximumReferenceBytes && utf8.ValidString(value)
-}
-
-func validOperatorAdminV1Endpoint(value string) bool {
-	return len(value) <= operatorAdminV1MaximumEndpointBytes && utf8.ValidString(value)
-}
-
-func validOperatorAdminV1SKI(value string) bool {
-	if len(value) != 40 {
-		return false
-	}
-	for index := 0; index < len(value); index++ {
-		if value[index] < '0' || value[index] > '9' {
-			if value[index] < 'a' || value[index] > 'f' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func validOperatorAdminV1PIN(value []byte) bool {
-	if len(value) < 8 || len(value) > 16 {
-		return false
-	}
-	for _, character := range value {
-		if !(character >= '0' && character <= '9') && !(character >= 'a' && character <= 'f') && !(character >= 'A' && character <= 'F') {
-			return false
-		}
-	}
-	return true
-}
-
-func validOperatorAdminV1ActionID(value string) bool {
-	if len(value) != 64 {
-		return false
-	}
-	for index := 0; index < len(value); index++ {
-		if value[index] < '0' || value[index] > '9' {
-			if value[index] < 'a' || value[index] > 'f' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func validOperatorAdminV1ActionOutcome(value AdminOutcomeV1) bool {
-	switch value {
-	case "connection_completed", "attempt_timeout", "disconnected", "trust_denied", "unknown_state",
-		"pin_required", "pin_optional", "pin_busy", "pin_rejected", "pin_unavailable", "pin_protocol_error":
-		return true
-	default:
-		return false
-	}
-}
-
-func validOperatorAdminV1View(view AdminViewV1) bool {
-	switch view {
-	case AdminViewV1Trusted, AdminViewV1Connected, AdminViewV1Discovered, AdminViewV1Candidate:
-		return true
-	default:
-		return false
-	}
-}
-
-func cloneOperatorAdminV1Facts(source operatorAdminV1SnapshotFacts) operatorAdminV1SnapshotFacts {
-	result := source
-	result.trusted = append([]operatorAdminV1TrustedFact(nil), source.trusted...)
-	result.connected = append([]operatorAdminV1ConnectedFact(nil), source.connected...)
-	result.discovered = append([]operatorAdminV1DiscoveredFact(nil), source.discovered...)
-	result.candidates = append([]operatorAdminV1CandidateFact(nil), source.candidates...)
-	if source.activeAction != nil {
-		action := *source.activeAction
-		result.activeAction = &action
-	}
-	return result
-}
-
-func equalOperatorAdminV1Facts(left, right operatorAdminV1SnapshotFacts) bool {
-	if left.status != right.status || left.window != right.window || !left.windowDeadline.Equal(right.windowDeadline) ||
-		left.localSKI != right.localSKI || left.localSHIPID != right.localSHIPID ||
-		left.register != right.register || left.listener != right.listener || left.discovery != right.discovery ||
-		left.degraded != right.degraded || !equalOperatorAdminV1ActiveActionFacts(left.activeAction, right.activeAction) {
-		return false
-	}
-	if len(left.trusted) != len(right.trusted) || len(left.connected) != len(right.connected) ||
-		len(left.discovered) != len(right.discovered) || len(left.candidates) != len(right.candidates) {
-		return false
-	}
-	for index := range left.trusted {
-		if left.trusted[index] != right.trusted[index] {
-			return false
-		}
-	}
-	for index := range left.connected {
-		if left.connected[index] != right.connected[index] {
-			return false
-		}
-	}
-	for index := range left.discovered {
-		if left.discovered[index] != right.discovered[index] {
-			return false
-		}
-	}
-	for index := range left.candidates {
-		if left.candidates[index] != right.candidates[index] {
-			return false
-		}
-	}
-	return true
-}
-
-func equalOperatorAdminV1ActiveActionFacts(left, right *operatorAdminV1ActiveActionFact) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return left.actionID == right.actionID && left.kind == right.kind && left.state == right.state &&
-		left.outcome == right.outcome && left.retryable == right.retryable && left.expiresAt.Equal(right.expiresAt)
-}
-
 func operatorAdminV1Binding(operation string, parts ...[]byte) [32]byte {
 	hash := sha256.New()
 	operatorAdminV1WriteBindingPart(hash, []byte(operation))
@@ -1606,6 +857,20 @@ func normalizeOperatorAdminV1Error(failure *AdminErrorV1) *AdminErrorV1 {
 	default:
 		return operatorAdminV1Error(AdminErrorCodeV1UnknownState)
 	}
+}
+
+type operatorAdminV1Backend interface {
+	snapshotOperatorAdminV1(context.Context) (operatorAdminV1SnapshotFacts, *AdminErrorV1)
+	observeOperatorAdminV1ActiveAction(context.Context, string)
+	openOperatorAdminV1(context.Context, time.Duration) (operatorAdminV1Transition, *AdminErrorV1)
+	closeOperatorAdminV1(context.Context) (operatorAdminV1Transition, *AdminErrorV1)
+	selectOperatorAdminV1(context.Context, string, string) (string, operatorAdminV1Transition, *AdminErrorV1)
+	connectOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
+	connectOperatorAdminV1WithPIN(context.Context, string, operatorAdminV1PINProvider) (operatorAdminV1Transition, *AdminErrorV1)
+	confirmOperatorAdminV1(context.Context, string, string) (operatorAdminV1Transition, *AdminErrorV1)
+	cancelOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
+	retryTrustedOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
+	untrustOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
 }
 
 type operatorAdminV1BackendSlot struct {

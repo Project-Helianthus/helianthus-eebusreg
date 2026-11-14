@@ -32,187 +32,187 @@
   ],
   "baseline": [
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "ActiveActionV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1AdminBoundaryUnavailable",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1AssociationIncomplete",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1AttemptTimeout",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1BackoffActive",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1CSRFRejected",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1CandidateBusy",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1CandidateExpired",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1Disconnected",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1DiscoveryUnavailable",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1Forbidden",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1IdempotencyConflict",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1IdentityMismatch",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1InvalidRequest",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1ListenerUnavailable",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1ObservationStale",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1PINBusy",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1PINOptional",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1PINProtocolError",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1PINRejected",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1PINRequired",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1PINUnavailable",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1PairingClosed",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1PersistenceFailure",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1SnapshotExpired",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1StateConflict",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1TerminalQuarantine",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1TrustDenied",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1Unauthenticated",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorCodeV1UnknownState",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminErrorV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminMutationResultV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminOutcomeV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminSelectionResultV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminSnapshotRequestV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminSnapshotV1",
       "category": "identifier"
     },
@@ -222,117 +222,117 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminViewV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminViewV1Candidate",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminViewV1Connected",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminViewV1Discovered",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "AdminViewV1Trusted",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "CancelRequestV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "CandidateHandleV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "CandidateV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "ClosePairingWindowRequestV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "ConfirmRequestV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "ConnectRequestV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "ConnectResultV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "ConnectedPartnerV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "DiscoveredPartnerV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "MutationPreconditionV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "ObservationHandleV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "OpenPairingWindowRequestV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "PartnerHandleV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "RetryTrustedRequestV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "SelectRequestV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "SelectionHandleV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "TrustedPartnerV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "UntrustRequestV1",
       "category": "identifier"
     },
@@ -342,12 +342,22 @@
       "category": "filename"
     },
     {
+      "path": "admin_v1_types.go",
+      "symbol": "admin_v1_types.go",
+      "category": "filename"
+    },
+    {
+      "path": "admin_v1_validation.go",
+      "symbol": "admin_v1_validation.go",
+      "category": "filename"
+    },
+    {
       "path": "admin_v1.go",
       "symbol": "cancelOperatorAdminV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "cloneOperatorAdminV1Facts",
       "category": "identifier"
     },
@@ -372,17 +382,17 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "equalOperatorAdminV1ActiveActionFacts",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "equalOperatorAdminV1Facts",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "errOperatorAdminV1Serialization",
       "category": "identifier"
     },
@@ -397,7 +407,7 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "newOperatorAdminV1TransientPIN",
       "category": "identifier"
     },
@@ -417,7 +427,7 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1ActiveActionFact",
       "category": "identifier"
     },
@@ -437,17 +447,17 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1CandidateFact",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1CandidateHandle",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1ConnectedFact",
       "category": "identifier"
     },
@@ -457,7 +467,7 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1DiscoveredFact",
       "category": "identifier"
     },
@@ -472,7 +482,7 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1Format",
       "category": "identifier"
     },
@@ -482,87 +492,87 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1HandleKind",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1HandleRecord",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1Lifecycle",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1MarshalJSON",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1MaximumEndpointBytes",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1MaximumHandleTTL",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1MaximumHandlesPerKind",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1MaximumHandlesTotal",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1MaximumReferenceBytes",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1MaximumReplayEntries",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1MaximumWindow",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1ObservationHandle",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1PINProvider",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1PartnerHandle",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1RedactedRendering",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1Reducer",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1Replay",
       "category": "identifier"
     },
@@ -572,37 +582,37 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1SelectionHandle",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1SnapshotFacts",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1String",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1TokenAttempts",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1TransientPIN",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1Transition",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1TrustedFact",
       "category": "identifier"
     },
@@ -637,67 +647,67 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "validOperatorAdminV1ActionID",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "validOperatorAdminV1ActionOutcome",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "validOperatorAdminV1DegradedCode",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "validOperatorAdminV1Endpoint",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "validOperatorAdminV1OptionalText",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "validOperatorAdminV1PIN",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "validOperatorAdminV1Reference",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "validOperatorAdminV1RetryFact",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "validOperatorAdminV1SKI",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "validOperatorAdminV1Status",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "validOperatorAdminV1View",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "validateOperatorAdminV1Facts",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_validation.go",
       "symbol": "validateOperatorAdminV1Precondition",
       "category": "identifier"
     },
