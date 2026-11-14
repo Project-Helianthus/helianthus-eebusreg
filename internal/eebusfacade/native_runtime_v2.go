@@ -161,6 +161,7 @@ func marshalNativeRuntimeSnapshotV2WithIdentity(runtimeIdentity, localIdentity s
 		UseCases: []nativeRuntimeUseCaseV2Payload{}, Observations: []nativeRuntimeObservationV2Payload{},
 	}
 	var candidates []nativeRuntimeDeviceParts
+	var withheld []nativeRuntimeAbsencePayload
 	visible, connected, disconnected := false, false, false
 	trustDegradation := ""
 	for _, remote := range graph {
@@ -189,6 +190,7 @@ func marshalNativeRuntimeSnapshotV2WithIdentity(runtimeIdentity, localIdentity s
 				return nil, err
 			}
 			if parts.device.Address == "" {
+				withheld = append(withheld, parts.absences...)
 				continue
 			}
 			candidates = append(candidates, parts)
@@ -209,7 +211,7 @@ func marshalNativeRuntimeSnapshotV2WithIdentity(runtimeIdentity, localIdentity s
 	} else if !visible {
 		payload.Status = nativeRuntimeStatusV2Payload{State: "degraded", Degradation: &nativeRuntimeDegradationV2Payload{Reason: "no-visible-services", Since: now}}
 	}
-	payload.Absences, payload.AbsencesOmitted = boundNativeRuntimeAbsences(containNativeRuntimeNodes(&payload, candidates))
+	payload.Absences, payload.AbsencesOmitted = boundNativeRuntimeAbsences(append(withheld, containNativeRuntimeNodes(&payload, candidates)...))
 	return json.Marshal(payload)
 }
 
@@ -222,8 +224,11 @@ type nativeRuntimeDeviceParts struct {
 }
 
 func marshalNativeRuntimeDeviceV2(source runtimeDeviceObservation, observedAt time.Time) (nativeRuntimeDeviceParts, error) {
-	if source.SKI == "" || source.Address == "" || source.Type == "" {
+	if source.SKI == "" {
 		return nativeRuntimeDeviceParts{}, nil
+	}
+	if source.Address == "" || source.Type == "" {
+		return nativeRuntimeWithheldDevice(source), nil
 	}
 	result := nativeRuntimeDeviceParts{device: nativeRuntimeDeviceV2Payload{SKI: source.SKI, SHIPID: runtimeOptionalString(source.SHIPID), Address: source.Address, Type: source.Type, Description: cloneRuntimeString(source.Description), Metadata: cloneRuntimeMetadata(source.Metadata)}}
 	observations, err := nativeRuntimeObservationsV2(source.Opaque, observedAt)
@@ -262,6 +267,35 @@ func marshalNativeRuntimeDeviceV2(source runtimeDeviceObservation, observedAt ti
 		result.useCases = append(result.useCases, nativeRuntimeUseCaseV2Payload{ContextAddress: useCase.ContextAddress, DeviceAddress: deviceAddress, EntityAddress: nativeRuntimeOptionalAddress(useCase.EntityAddress), FeatureAddress: nativeRuntimeOptionalAddress(useCase.FeatureAddress), Name: useCase.Name, Actor: useCase.Actor, ResolvedRole: cloneRuntimeString(useCase.ResolvedRole), Scenarios: append([]string(nil), useCase.Scenarios...), Version: cloneRuntimeString(useCase.Version), Availability: cloneRuntimeBool(useCase.Availability), DocumentSubrevision: cloneRuntimeString(useCase.DocumentSubrevision)})
 	}
 	return result, nil
+}
+
+func nativeRuntimeWithheldDevice(source runtimeDeviceObservation) nativeRuntimeDeviceParts {
+	reason := "missing_type"
+	if source.Address == "" {
+		reason = "missing_address"
+	}
+	result := nativeRuntimeDeviceParts{absences: []nativeRuntimeAbsencePayload{nativeRuntimeWithheld("device", reason, source.Address, nil, nil)}}
+	contained := func(kind, deviceAddress, entityAddress, featureAddress string) {
+		if strings.TrimSpace(deviceAddress) == "" {
+			deviceAddress = source.Address
+		}
+		result.absences = append(result.absences, nativeRuntimeWithheld(kind, "missing_container", deviceAddress, nativeRuntimeOptionalAddress(entityAddress), nativeRuntimeOptionalAddress(featureAddress)))
+	}
+	for _, absence := range source.Absences {
+		if _, known := nativeRuntimeAbsenceKinds[absence.Kind]; known && absence.Kind != "device" {
+			contained(absence.Kind, absence.DeviceAddress, absence.EntityAddress, absence.FeatureAddress)
+		}
+	}
+	for _, entity := range source.Entities {
+		contained("entity", entity.DeviceAddress, entity.EntityAddress, "")
+		for _, feature := range entity.Features {
+			contained("feature", feature.DeviceAddress, feature.EntityAddress, feature.FeatureAddress)
+		}
+	}
+	for _, useCase := range source.UseCases {
+		contained("use_case", useCase.DeviceAddress, useCase.EntityAddress, useCase.FeatureAddress)
+	}
+	return result
 }
 
 func marshalNativeRuntimeEntity(result *nativeRuntimeDeviceParts, entity runtimeEntityObservation, deviceAddress string) {
@@ -614,6 +648,16 @@ func nativeRuntimeClaimResolves(useCase nativeRuntimeUseCaseV2Payload, devices m
 	return ok
 }
 
+func nativeRuntimeUnaddressedAbsence(value nativeRuntimeAbsencePayload) bool {
+	if value.DeviceAddress != "" {
+		return false
+	}
+	if value.Kind == "device" {
+		return value.Reason == "missing_address"
+	}
+	return value.Reason == "missing_container"
+}
+
 func boundNativeRuntimeAbsences(values []nativeRuntimeAbsencePayload) ([]nativeRuntimeAbsencePayload, uint64) {
 	text := func(value *string) string {
 		if value == nil {
@@ -623,7 +667,7 @@ func boundNativeRuntimeAbsences(values []nativeRuntimeAbsencePayload) ([]nativeR
 	}
 	representable := make([]nativeRuntimeAbsencePayload, 0, len(values))
 	for _, value := range values {
-		if !nativeRuntimeAddressText(value.DeviceAddress) {
+		if !nativeRuntimeAddressText(value.DeviceAddress) && !nativeRuntimeUnaddressedAbsence(value) {
 			continue
 		}
 		if value.EntityAddress != nil && !nativeRuntimeAddressText(*value.EntityAddress) {

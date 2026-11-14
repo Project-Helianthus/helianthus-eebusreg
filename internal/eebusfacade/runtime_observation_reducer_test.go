@@ -6,6 +6,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	eebusmocks "github.com/Project-Helianthus/helianthus-eebus-go/mocks"
+	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
+	spinemocks "github.com/Project-Helianthus/helianthus-spine-go/mocks"
 )
 
 var observationReducerFixtureTime = time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
@@ -266,5 +270,80 @@ func TestRuntimeObservationReducerMergesDeviceCollections(t *testing.T) {
 	exact, err := exactRuntimeDeviceCollection(right)
 	if err != nil || len(exact) != 2 || len(exact[0].Opaque) != 4 {
 		t.Fatalf("exact collection = %+v err=%v", exact, err)
+	}
+}
+
+func observationReducerDeviceAbsenceHandler(t *testing.T, remote spineapi.DeviceRemoteInterface) (*runtimeServiceHandler, *[][]byte) {
+	t.Helper()
+	handler, err := newRuntimeServiceHandler(RuntimeConfig{Remotes: []RuntimeRemote{{SKI: nativeDeviceAbsenceOtherSKI}}}, nativeContainmentLocalSKI, func() time.Time { return nativeContainmentTime })
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.setSnapshotSerializer(marshalNativeRuntimeSnapshotV2WithIdentity)
+	published := new([][]byte)
+	handler.setPublisher(func(payload []byte) { *published = append(*published, append([]byte(nil), payload...)) })
+	handler.activateSPINEEvents(&fakeRuntimeService{started: make(chan struct{})})
+	t.Cleanup(func() {
+		handler.deactivateSPINEEvents()
+		handler.waitForSPINEEvents()
+	})
+	service := eebusmocks.NewServiceInterface(t)
+	local := spinemocks.NewDeviceLocalInterface(t)
+	service.EXPECT().LocalDevice().Return(local)
+	local.EXPECT().RemoteDeviceForSki(nativeDeviceAbsenceOtherSKI).Return(remote)
+	handler.RemoteSKIConnected(service, nativeDeviceAbsenceOtherSKI)
+	return handler, published
+}
+
+func observationReducerPublishedAbsences(t *testing.T, published [][]byte) []any {
+	t.Helper()
+	if len(published) == 0 {
+		t.Fatal("no snapshot was published")
+	}
+	document := nativeContainmentDecode(t, published[len(published)-1])
+	if devices, _ := document["devices"].([]any); len(devices) != 0 {
+		t.Fatalf("devices = %#v, want the withheld device absent", devices)
+	}
+	absences, _ := document["absences"].([]any)
+	return absences
+}
+
+func observationReducerAddresslessAbsences(t *testing.T) []any {
+	t.Helper()
+	var result []any
+	for _, value := range nativeDeviceAbsenceWant(t)["absences"].([]any) {
+		if value.(map[string]any)["device_address"] == "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func TestRuntimeObservationReducerCarriesDeviceAbsenceThroughRefresh(t *testing.T) {
+	handler, published := observationReducerDeviceAbsenceHandler(t, nil)
+	if absences := observationReducerPublishedAbsences(t, *published); len(absences) != 0 {
+		t.Fatalf("absences before the refresh = %#v", absences)
+	}
+	handler.mu.Lock()
+	refresh := runtimeSPINERefresh{generation: handler.spineGeneration, sessionIndex: handler.observations[nativeDeviceAbsenceOtherSKI].SessionIndex}
+	handler.mu.Unlock()
+	refresh.devices = nativeDeviceAbsenceDevices(t, nativeDeviceAbsenceAddresslessRemote(t), nativeDeviceAbsenceOtherSKI)
+	handler.updateRemoteFromSPINEEvent(nativeDeviceAbsenceOtherSKI, refresh, refresh.devices)
+
+	graph := handler.reducer.Snapshot()
+	if len(graph) != 1 || len(graph[0].Devices) != 1 {
+		t.Fatalf("reducer graph = %+v, want the address-less device kept", graph)
+	}
+	if device := graph[0].Devices[0]; device.ID == "" || device.Address != "" || device.Type != "EnergyManagementSystem" || len(device.Entities) != 1 || len(device.UseCases) != 1 {
+		t.Fatalf("reducer device = %+v", device)
+	}
+	want := observationReducerAddresslessAbsences(t)
+	if got := observationReducerPublishedAbsences(t, *published); !reflect.DeepEqual(got, want) {
+		t.Fatalf("refreshed absences = %#v, want %#v", got, want)
+	}
+
+	_, connected := observationReducerDeviceAbsenceHandler(t, nativeDeviceAbsenceAddresslessRemote(t))
+	if got := observationReducerPublishedAbsences(t, *connected); !reflect.DeepEqual(got, want) {
+		t.Fatalf("absences after connect = %#v, want the refreshed absences %#v", got, want)
 	}
 }

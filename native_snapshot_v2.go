@@ -170,7 +170,9 @@ type NativeUseCaseV2 struct {
 // entity, feature or use_case. Reason is missing_address, missing_type, missing_role,
 // missing_name or missing_actor when a required native value was not reported,
 // missing_container when the enclosing device, entity or claim scope was not emitted, and
-// ambiguous_address when the node's address is not unique. DeviceAddress is required; the
+// ambiguous_address when the node's address is not unique. DeviceAddress is required, except
+// that it is empty for a device that reported no address: its device record has reason
+// missing_address and the records of the nodes it contained have reason missing_container. The
 // pointer fields carry the entity and feature addresses where they are known. Absence records
 // are not part of the containment graph.
 type NativeAbsence struct {
@@ -707,12 +709,22 @@ func validateNativeAbsences(absences []NativeAbsence, omitted uint64) error {
 	for _, absence := range absences {
 		_, knownKind := nativeAbsenceKinds[absence.Kind]
 		_, knownReason := nativeAbsenceReasons[absence.Reason]
-		if !knownKind || !knownReason || !nativeSnapshotV2ValidText(absence.DeviceAddress, nativeSnapshotV2MaximumIdentifierBytes) ||
+		if !knownKind || !knownReason || !nativeAbsenceValidDevice(absence) ||
 			!nativeAbsenceValidAddress(absence.EntityAddress) || !nativeAbsenceValidAddress(absence.FeatureAddress) {
 			return errors.New("absence record is invalid")
 		}
 	}
 	return nil
+}
+
+func nativeAbsenceValidDevice(absence NativeAbsence) bool {
+	if absence.DeviceAddress != "" {
+		return nativeSnapshotV2ValidText(absence.DeviceAddress, nativeSnapshotV2MaximumIdentifierBytes)
+	}
+	if absence.Kind == "device" {
+		return absence.Reason == "missing_address"
+	}
+	return absence.Reason == "missing_container"
 }
 
 func nativeAbsenceValidAddress(value *string) bool {

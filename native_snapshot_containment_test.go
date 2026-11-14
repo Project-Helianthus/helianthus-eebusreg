@@ -335,6 +335,97 @@ func TestNativeSnapshotAbsenceBounds(t *testing.T) {
 	}
 }
 
+const nativeContainmentTypeless = "d:_n:synthetic_typeless"
+
+func nativeDeviceAbsenceVector(t *testing.T) map[string]any {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join("testdata", "native_containment", "device_absence.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(payload, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document
+}
+
+// TestNativeSnapshotDeviceAbsenceVector also varies the kind, the reason and the
+// device address of one absence record. An empty device address is accepted only
+// for a device record with reason missing_address and for the missing_container
+// records of the nodes such a device contained.
+func TestNativeSnapshotDeviceAbsenceVector(t *testing.T) {
+	vector := nativeDeviceAbsenceVector(t)
+	snapshot, err := nativeContainmentBuild(t, vector)
+	if err != nil {
+		t.Fatalf("device absence vector rejected: %v", err)
+	}
+	got := nativeContainmentDocument(t, snapshot)
+	expected := nativeContainmentCopy(t, vector)
+	for _, key := range []string{"devices", "entities", "features", "use_cases"} {
+		if len(nativeContainmentItems(vector, key)) != 0 || len(nativeContainmentItems(got, key)) != 0 {
+			t.Fatalf("%s = %#v, want no node of a withheld device", key, got[key])
+		}
+		delete(got, key)
+		delete(expected, key)
+	}
+	if !reflect.DeepEqual(got, expected) {
+		t.Errorf("vector did not survive the native snapshot:\n got %#v\nwant %#v", got, expected)
+	}
+	records := make([]string, 0)
+	for _, value := range nativeContainmentItems(vector, "absences") {
+		record := value.(map[string]any)
+		records = append(records, fmt.Sprintf("%s/%s/%q/%v/%v", record["kind"], record["reason"], record["device_address"], record["entity_address"], record["feature_address"]))
+	}
+	want := []string{
+		`device/missing_address/""/<nil>/<nil>`,
+		`device/missing_type/"` + nativeContainmentTypeless + `"/<nil>/<nil>`,
+		`entity/missing_container/""/:[1]:/<nil>`,
+		`entity/missing_container/"` + nativeContainmentTypeless + `"/` + nativeContainmentTypeless + `:[1]:/<nil>`,
+		`feature/missing_container/""/:[1]:/:[1]:0`,
+		`feature/missing_container/""/:[1]:/:[1]:1`,
+		`feature/missing_container/"` + nativeContainmentTypeless + `"/` + nativeContainmentTypeless + `:[1]:/` + nativeContainmentTypeless + `:[1]:0`,
+		`use_case/missing_container/""/<nil>/<nil>`,
+		`use_case/missing_container/"` + nativeContainmentTypeless + `"/` + nativeContainmentTypeless + `:[1]:/<nil>`,
+	}
+	if !reflect.DeepEqual(records, want) || vector["absences_omitted"] != float64(0) {
+		t.Fatalf("absences =\n%v\nwant\n%v\nomitted %#v", records, want, vector["absences_omitted"])
+	}
+	for _, tc := range []struct {
+		kind, reason, address string
+		accepted              bool
+	}{
+		{"device", "missing_address", "", true},
+		{"entity", "missing_container", "", true},
+		{"feature", "missing_container", "", true},
+		{"use_case", "missing_container", "", true},
+		{"device", "missing_address", " ", false},
+		{"entity", "missing_container", "\t", false},
+		{"device", "missing_type", "", false},
+		{"device", "missing_container", "", false},
+		{"device", "ambiguous_address", "", false},
+		{"entity", "missing_type", "", false},
+		{"entity", "missing_address", "", false},
+		{"feature", "missing_role", "", false},
+		{"use_case", "missing_name", "", false},
+		{"use_case", "ambiguous_address", "", false},
+		{"device", "missing_address", nativeContainmentTypeless, true},
+		{"entity", "missing_type", nativeContainmentTypeless, true},
+	} {
+		t.Run(fmt.Sprintf("%s %s %q", tc.kind, tc.reason, tc.address), func(t *testing.T) {
+			document := nativeContainmentCopy(t, vector)
+			document["absences"] = []any{map[string]any{"kind": tc.kind, "reason": tc.reason, "device_address": tc.address}}
+			_, err := nativeContainmentBuild(t, document)
+			if tc.accepted && err != nil {
+				t.Fatalf("record rejected: %v", err)
+			}
+			if !tc.accepted && (err == nil || err.Error() != "absence record is invalid") {
+				t.Fatalf("error = %v, want %q", err, "absence record is invalid")
+			}
+		})
+	}
+}
+
 func TestNativeSnapshotAbsenceDefaultsToEmptyList(t *testing.T) {
 	document := nativeContainmentVector(t)
 	delete(document, "absences")
