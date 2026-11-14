@@ -9,6 +9,7 @@ import (
 )
 
 func TestAssociationBridgeCommitsOneCompleteExpectedGeneration(t *testing.T) {
+	requireStoreFilesystemCapabilities(t)
 	bridge, outcome := OpenAssociationBridge(filepath.Join(t.TempDir(), "state"), nil)
 	if bridge == nil || outcome != "opened_empty" {
 		t.Fatalf("open association bridge outcome = %q", outcome)
@@ -58,6 +59,7 @@ func TestAssociationBridgeCommitsOneCompleteExpectedGeneration(t *testing.T) {
 }
 
 func TestAssociationBridgePreparesEffectiveTombstoneAndReloadsAuthoritativeParent(t *testing.T) {
+	requireStoreFilesystemCapabilities(t)
 	bridge, outcome := OpenAssociationBridge(filepath.Join(t.TempDir(), "state"), nil)
 	if bridge == nil || outcome != "opened_empty" {
 		t.Fatalf("open bridge = %q", outcome)
@@ -107,6 +109,7 @@ func TestAssociationBridgePreparesEffectiveTombstoneAndReloadsAuthoritativeParen
 }
 
 func TestAssociationBridgeFailsClosedWhenAssociationCannotEnterControlDTO(t *testing.T) {
+	requireStoreFilesystemCapabilities(t)
 	bridge, outcome := OpenAssociationBridge(filepath.Join(t.TempDir(), "state"), nil)
 	if bridge == nil || outcome != "opened_empty" {
 		t.Fatalf("open bridge = %q", outcome)

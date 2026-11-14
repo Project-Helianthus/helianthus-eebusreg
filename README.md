@@ -469,13 +469,40 @@ no state. Preserve existing published bytes and last-known-good evidence; do
 not delete/reinitialize the store, relax permissions, substitute a backend or
 bypass a check. The diagnostic intentionally discards nested causes.
 
+### Protected-store host requirements
+
+A protected store is admitted only on a host whose store-root filesystem passes
+every check in the table above: a native Linux or Darwin backend, an admitted
+filesystem type (Linux ext-family, XFS, Btrfs or overlayfs; Darwin APFS),
+stable device/inode identities, descriptor-relative atomic rename, exclusive
+`flock` with contention reporting, `O_NOFOLLOW` symlink rejection, file and
+directory `fsync`, completed additional-access (ACL) inspection, exclusive
+no-follow creation and verified cleanup. These are production admission rules;
+there is no relaxed mode and no fallback backend.
+
+The package test suite needs the same capabilities for the filesystem behind the
+test temporary directory, because every store fixture lives there. Before the
+first store-backed test, the suite runs the preflight once against a private
+directory under that temporary directory and removes it again
+([preflight_capability_test.go](./internal/eebusstore/preflight_capability_test.go)).
+On a host that lacks a capability, each store-backed test is skipped with a
+reason of the form `protected store filesystem preflight reported
+filesystem_capability_unavailable: missing capability <category>` naming one
+category from the table; tests that inject failures without a store do not
+depend on the host and still run. Any other preflight outcome, or a preflight
+that cannot be set up, fails the suite instead of skipping. A skip is unverified
+coverage on that host, never a capability pass; fix the runner (or point the
+test temporary directory at a capable filesystem) rather than treating the skip
+as green.
+
 For the remaining runner investigation in [#140](https://github.com/Project-Helianthus/helianthus-eebusreg/issues/140),
 the missing evidence is an actual failing runner's bounded outcome/category and
 current offline test results, followed by separately authorized validation of
 any proposed remediation on that runner. Local or injected success does not
-supply that evidence. Kernel cause and runner repair remain UNKNOWN. This
-partial runbook child [#148](https://github.com/Project-Helianthus/helianthus-eebusreg/issues/148)
-changes no runtime/security behavior and leaves parent remediation open.
+supply that evidence. Kernel cause and runner repair remain UNKNOWN. The
+runbook child [#148](https://github.com/Project-Helianthus/helianthus-eebusreg/issues/148)
+and the named skip above change no runtime/security behavior; the skip reports
+the category on such a runner.
 
 Snapshot structural JSON uses `use_cases` in native, raw and redacted views.
 Consumers adopt this contract in one coordinated wave. See the public

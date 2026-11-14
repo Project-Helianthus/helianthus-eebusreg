@@ -9,6 +9,7 @@ import (
 )
 
 func TestCurrentSchemaOnlyRejectsLegacyWithoutRewrite(t *testing.T) {
+	requireStoreFilesystemCapabilities(t)
 	for _, schemaVersion := range []uint64{1, 2} {
 		t.Run(fmt.Sprintf("schema-%d", schemaVersion), func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "store")

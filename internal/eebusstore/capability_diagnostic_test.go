@@ -99,6 +99,7 @@ func TestCapabilityDiagnosticUnknownAndNonProbeOperations(t *testing.T) {
 }
 
 func TestCapabilityDiagnosticSuccessfulBridgeUnchanged(t *testing.T) {
+	requireStoreFilesystemCapabilities(t)
 	var logs bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
