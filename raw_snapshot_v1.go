@@ -14,57 +14,109 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 )
 
+// SnapshotContractV1 is the contract identifier carried in SnapshotMetaV1.Contract; validation
+// rejects any other value, and RedactedSnapshotV1 carries the same identifier.
 const SnapshotContractV1 = "helianthus.eebus.runtime.raw-snapshot.v1"
 
 const snapshotMaskTierRawV1 eebusraw.MaskTier = "raw"
 
+// ObservedRuntimeStateV1 is the lifecycle state of the eeBUS runtime as the snapshot observed
+// it. The set is closed: validation rejects a value outside the constants below.
 type ObservedRuntimeStateV1 string
 
+// Runtime states. Only ObservedRuntimeStateV1Degraded carries a DegradationV1.
 const (
-	ObservedRuntimeStateV1Unknown  ObservedRuntimeStateV1 = "unknown"
-	ObservedRuntimeStateV1Stopped  ObservedRuntimeStateV1 = "stopped"
+	// ObservedRuntimeStateV1Unknown records that the runtime state could not be established.
+	ObservedRuntimeStateV1Unknown ObservedRuntimeStateV1 = "unknown"
+	// ObservedRuntimeStateV1Stopped records a runtime that is not running and not starting.
+	ObservedRuntimeStateV1Stopped ObservedRuntimeStateV1 = "stopped"
+	// ObservedRuntimeStateV1Starting records a runtime that is starting and not yet serving.
 	ObservedRuntimeStateV1Starting ObservedRuntimeStateV1 = "starting"
-	ObservedRuntimeStateV1Ready    ObservedRuntimeStateV1 = "ready"
+	// ObservedRuntimeStateV1Ready records a runtime that is serving without a known degradation.
+	ObservedRuntimeStateV1Ready ObservedRuntimeStateV1 = "ready"
+	// ObservedRuntimeStateV1Degraded records a serving runtime with a known degradation; it
+	// requires RuntimeObservationV1.Degradation.
 	ObservedRuntimeStateV1Degraded ObservedRuntimeStateV1 = "degraded"
+	// ObservedRuntimeStateV1Shutdown records a runtime that has shut down and will not restart.
 	ObservedRuntimeStateV1Shutdown ObservedRuntimeStateV1 = "shutdown"
 )
 
+// DegradationReasonV1 names why a runtime is degraded. The set is closed: validation rejects a
+// value outside the constants below.
 type DegradationReasonV1 string
 
+// Degradation reasons.
 const (
-	DegradationReasonV1MissingDiscovery       DegradationReasonV1 = "missing-discovery"
-	DegradationReasonV1DeniedTrust            DegradationReasonV1 = "denied-trust"
-	DegradationReasonV1RemoteDisconnect       DegradationReasonV1 = "remote-disconnect"
+	// DegradationReasonV1MissingDiscovery records that service discovery is unavailable.
+	DegradationReasonV1MissingDiscovery DegradationReasonV1 = "missing-discovery"
+	// DegradationReasonV1DeniedTrust records that a remote peer denied or withdrew trust.
+	DegradationReasonV1DeniedTrust DegradationReasonV1 = "denied-trust"
+	// DegradationReasonV1RemoteDisconnect records that a connected remote peer went away.
+	DegradationReasonV1RemoteDisconnect DegradationReasonV1 = "remote-disconnect"
+	// DegradationReasonV1CertificateUnavailable records that the local certificate could not be
+	// loaded or used.
 	DegradationReasonV1CertificateUnavailable DegradationReasonV1 = "certificate-unavailable"
-	DegradationReasonV1NoVisibleServices      DegradationReasonV1 = "no-visible-services"
-	DegradationReasonV1NoData                 DegradationReasonV1 = "no-data"
+	// DegradationReasonV1NoVisibleServices records that discovery runs but sees no service.
+	DegradationReasonV1NoVisibleServices DegradationReasonV1 = "no-visible-services"
+	// DegradationReasonV1NoData records that peers are reachable but supplied no native data.
+	DegradationReasonV1NoData DegradationReasonV1 = "no-data"
 )
 
+// ServiceKindV1 tells the runtime's own advertised service apart from services of other peers;
+// validation accepts only the two constants below.
 type ServiceKindV1 string
 
+// Service kinds.
 const (
-	ServiceKindV1Local  ServiceKindV1 = "local"
+	// ServiceKindV1Local marks the service this runtime advertises itself.
+	ServiceKindV1Local ServiceKindV1 = "local"
+	// ServiceKindV1Remote marks a service advertised by another peer.
 	ServiceKindV1Remote ServiceKindV1 = "remote"
 )
 
+// ObservedSessionStateV1 is the connection state of one session with a remote peer. The set is
+// closed: validation rejects a value outside the constants below.
 type ObservedSessionStateV1 string
 
+// Session states.
 const (
-	ObservedSessionStateV1Unknown      ObservedSessionStateV1 = "unknown"
-	ObservedSessionStateV1Connecting   ObservedSessionStateV1 = "connecting"
-	ObservedSessionStateV1Connected    ObservedSessionStateV1 = "connected"
+	// ObservedSessionStateV1Unknown records that the session state could not be established.
+	ObservedSessionStateV1Unknown ObservedSessionStateV1 = "unknown"
+	// ObservedSessionStateV1Connecting records a session whose connection is being set up.
+	ObservedSessionStateV1Connecting ObservedSessionStateV1 = "connecting"
+	// ObservedSessionStateV1Connected records an established session.
+	ObservedSessionStateV1Connected ObservedSessionStateV1 = "connected"
+	// ObservedSessionStateV1Disconnected records a session that has ended; it stays listed as
+	// evidence until the runtime drops it.
 	ObservedSessionStateV1Disconnected ObservedSessionStateV1 = "disconnected"
-	ObservedSessionStateV1Degraded     ObservedSessionStateV1 = "degraded"
+	// ObservedSessionStateV1Degraded records an established session that is not fully usable.
+	ObservedSessionStateV1Degraded ObservedSessionStateV1 = "degraded"
 )
 
+// FeatureRoleV1 names the feature roles a consumer can rely on. FeatureV1.Role keeps the native
+// role as a plain string that raw validation does not restrict to these values; the redacted
+// view reduces every other role to FeatureRoleV1Unspecified.
 type FeatureRoleV1 string
 
+// Feature roles.
 const (
+	// FeatureRoleV1Unspecified is the empty role, used for any role other than client or server.
 	FeatureRoleV1Unspecified FeatureRoleV1 = ""
-	FeatureRoleV1Client      FeatureRoleV1 = "client"
-	FeatureRoleV1Server      FeatureRoleV1 = "server"
+	// FeatureRoleV1Client is the client role as the native topology reports it.
+	FeatureRoleV1Client FeatureRoleV1 = "client"
+	// FeatureRoleV1Server is the server role as the native topology reports it.
+	FeatureRoleV1Server FeatureRoleV1 = "server"
 )
 
+// SnapshotV1 is the raw, unmasked view of what the runtime observed: runtime status, pairing,
+// services, sessions and the native device, entity, feature and use-case topology, plus opaque
+// native values kept as evidence. It carries raw identities such as SKIs and native addresses,
+// so it is meant only for consumers with raw authority; RedactedSnapshotV1 is the masked view.
+// Each collection is unique by its identity and sorted by it in canonical form. Entities,
+// features and scoped use cases must be contained by listed devices and entities under the
+// containment rule of NativeSnapshotV2. Limits: 256 services, 1024 devices, 4096 entities, 16384
+// features and 4096 use cases. Build it with NewSnapshotV1. String, GoString and Format print a
+// fixed placeholder, so formatting never reveals the content.
 type SnapshotV1 struct {
 	Meta     SnapshotMetaV1         `json:"meta"`
 	Status   RuntimeObservationV1   `json:"status"`
@@ -78,6 +130,12 @@ type SnapshotV1 struct {
 	Opaque   []OpaqueObservationV1  `json:"opaque"`
 }
 
+// SnapshotMetaV1 identifies a raw snapshot. Contract equals SnapshotContractV1, Runtime is a
+// peer or local-SKI identifier, LocalSKI is the runtime's own SKI as 40 lowercase hexadecimal
+// characters, and MaskTier must be raw. CapturedAt and DataTimestamp are required and normalized
+// to UTC. DataHash is "sha256:" followed by the lowercase hexadecimal SHA-256 of the canonical
+// JSON of the content; it excludes CapturedAt, so captures that differ only in capture time share
+// the hash.
 type SnapshotMetaV1 struct {
 	Contract      string              `json:"contract"`
 	Runtime       eebusraw.RedactedID `json:"runtime"`
@@ -88,16 +146,23 @@ type SnapshotMetaV1 struct {
 	DataHash      string              `json:"data_hash,omitempty"`
 }
 
+// RuntimeObservationV1 is the runtime state at capture time. Degradation is set exactly when
+// State is ObservedRuntimeStateV1Degraded; validation rejects either side without the other.
 type RuntimeObservationV1 struct {
 	State       ObservedRuntimeStateV1 `json:"state"`
 	Degradation *DegradationV1         `json:"degradation,omitempty"`
 }
 
+// DegradationV1 explains a degraded runtime: Reason is one of the DegradationReasonV1 constants
+// and Since, required and normalized to UTC, is when the degradation was first observed.
 type DegradationV1 struct {
 	Reason DegradationReasonV1 `json:"reason"`
 	Since  time.Time           `json:"since"`
 }
 
+// PairingObservationV1 is the pairing state of one remote peer, keyed by RemoteSKI, which must be
+// unique within the snapshot. State is an eebusraw.PairingState, Since is required and normalized
+// to UTC, and Opaque keeps native values that the contract does not model.
 type PairingObservationV1 struct {
 	RemoteSKI string                 `json:"remote_ski"`
 	State     eebusraw.PairingState  `json:"state"`
@@ -105,6 +170,10 @@ type PairingObservationV1 struct {
 	Opaque    *[]OpaqueObservationV1 `json:"opaque,omitempty"`
 }
 
+// ServiceV1 is one advertised service as discovery reported it, with its native descriptive
+// fields copied without interpretation; nil means the field was not reported. Its identity is the
+// SKI with SHIPID, Identifier and Kind, and it must be unique. SecondaryDigest, when set, is a
+// lowercase "sha256:" digest.
 type ServiceV1 struct {
 	SKI             string                 `json:"ski"`
 	SHIPID          *string                `json:"ship_id,omitempty"`
@@ -120,6 +189,9 @@ type ServiceV1 struct {
 	Opaque          *[]OpaqueObservationV1 `json:"opaque,omitempty"`
 }
 
+// SessionV1 is one session with a remote peer. ID is the runtime's session identifier and must be
+// unique; RemoteSKI names the peer and Since, required and normalized to UTC, is when State was
+// entered.
 type SessionV1 struct {
 	ID        string                 `json:"id"`
 	RemoteSKI string                 `json:"remote_ski"`
@@ -128,6 +200,9 @@ type SessionV1 struct {
 	Opaque    *[]OpaqueObservationV1 `json:"opaque,omitempty"`
 }
 
+// DeviceV1 is one native device of the remote topology. Address is its native device address,
+// Type its native device type, and Metadata its native descriptive pairs. Its identity is Address
+// with SKI and SHIPID, and it must be unique.
 type DeviceV1 struct {
 	SKI             string                 `json:"ski"`
 	SHIPID          *string                `json:"ship_id,omitempty"`
@@ -139,6 +214,9 @@ type DeviceV1 struct {
 	Opaque          *[]OpaqueObservationV1 `json:"opaque,omitempty"`
 }
 
+// EntityV1 is one native entity, keyed by DeviceAddress and EntityAddress, which must be unique.
+// ParentEntityAddress names the enclosing entity of the same device and is nil for a top-level
+// entity; the device and any parent must be listed in the snapshot.
 type EntityV1 struct {
 	DeviceAddress       string                 `json:"device_address"`
 	EntityAddress       string                 `json:"entity_address"`
@@ -149,6 +227,9 @@ type EntityV1 struct {
 	Opaque              *[]OpaqueObservationV1 `json:"opaque,omitempty"`
 }
 
+// FeatureV1 is one native feature, keyed by its device, entity and feature addresses, which must
+// be unique; its entity must be listed in the snapshot. Role keeps the native role text unchanged;
+// FeatureRoleV1 names the roles a consumer can rely on.
 type FeatureV1 struct {
 	DeviceAddress   string                 `json:"device_address"`
 	EntityAddress   string                 `json:"entity_address"`
@@ -160,6 +241,10 @@ type FeatureV1 struct {
 	Opaque          *[]OpaqueObservationV1 `json:"opaque,omitempty"`
 }
 
+// UseCaseV1 is one use-case claim as a peer advertised it. Its identity is ContextAddress, Name,
+// Actor, Version and DocumentSubrevision, and it must be unique. DeviceAddress, EntityAddress and
+// FeatureAddress scope the claim; when any is set the scope must resolve to listed topology, and
+// the context address never places it. Scenarios is sorted and free of duplicates, at most 128.
 type UseCaseV1 struct {
 	ContextAddress      string                 `json:"context_address"`
 	DeviceAddress       *string                `json:"device_address,omitempty"`
@@ -176,6 +261,11 @@ type UseCaseV1 struct {
 	Opaque              *[]OpaqueObservationV1 `json:"opaque,omitempty"`
 }
 
+// NewSnapshotV1 returns draft in canonical form with Meta.DataHash computed. It normalizes times
+// to UTC and LocalSKI to lowercase, sorts every collection by identity and replaces nil
+// collections with empty ones; draft is not modified. A DataHash already set in draft must match
+// the computed one. It fails, and never returns a partial result, when the draft breaks any rule
+// of SnapshotV1 or contains secret material.
 func NewSnapshotV1(draft SnapshotV1) (SnapshotV1, error) {
 	snapshot := canonicalSnapshotV1(draft)
 	if err := snapshot.validate(false); err != nil {
@@ -192,6 +282,9 @@ func NewSnapshotV1(draft SnapshotV1) (SnapshotV1, error) {
 	return snapshot, nil
 }
 
+// Validate reports the first rule of SnapshotV1 that the snapshot breaks. Unlike NewSnapshotV1
+// it requires Meta.DataHash and checks it against the content. Field names in key position that
+// name secrets and embedded PEM material are rejected anywhere in the snapshot.
 func (snapshot SnapshotV1) Validate() error {
 	return snapshot.validate(true)
 }
@@ -266,6 +359,8 @@ func (snapshot SnapshotV1) validate(checkHash bool) error {
 	return nil
 }
 
+// Clone returns a deep copy that shares no slice, map or pointer with the receiver, so the
+// caller may modify either without affecting the other. It does not validate or canonicalize.
 func (snapshot SnapshotV1) Clone() SnapshotV1 {
 	result := snapshot
 	if snapshot.Status.Degradation != nil {
@@ -336,6 +431,9 @@ func (snapshot SnapshotV1) Clone() SnapshotV1 {
 	return result
 }
 
+// ComputeDataHash validates the snapshot without requiring Meta.DataHash and returns the content
+// hash in the form described by SnapshotMetaV1. The hash is computed over the canonical form, so
+// collection order and time zones do not change it.
 func (snapshot SnapshotV1) ComputeDataHash() (string, error) {
 	if err := snapshot.validate(false); err != nil {
 		return "", err
@@ -376,6 +474,8 @@ func (snapshot SnapshotV1) computeDataHash() (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
+// MarshalJSON validates the snapshot as Validate does and encodes its canonical form as
+// canonical JSON; an invalid snapshot is never encoded.
 func (snapshot SnapshotV1) MarshalJSON() ([]byte, error) {
 	if err := snapshot.Validate(); err != nil {
 		return nil, err
@@ -385,14 +485,18 @@ func (snapshot SnapshotV1) MarshalJSON() ([]byte, error) {
 	return marshalJCSV1(wire(canonical))
 }
 
+// String returns a fixed placeholder and never the raw content.
 func (SnapshotV1) String() string {
 	return "snapshot_v1:[redacted]"
 }
 
+// GoString returns the String placeholder, so %#v never reveals the raw content.
 func (snapshot SnapshotV1) GoString() string {
 	return snapshot.String()
 }
 
+// Format writes the String placeholder for every verb and flag, so no fmt verb reveals the raw
+// content.
 func (snapshot SnapshotV1) Format(state fmt.State, _ rune) {
 	_, _ = io.WriteString(state, snapshot.String())
 }
