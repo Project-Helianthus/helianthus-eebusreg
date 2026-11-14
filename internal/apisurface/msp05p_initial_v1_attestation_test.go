@@ -298,14 +298,19 @@ func issue129NativeV2Symbol(symbol symbol) bool {
 		"NativeRuntimeObservationV2": {}, "NativeRuntimeV2": {}, "NativeServiceV2": {},
 		"NativeSessionV2": {}, "NativeSnapshotMetaV2": {}, "NativeSnapshotV2": {},
 		"NativeUseCaseV2": {}, "NativeValueV2": {}, "NativeAbsence": {},
+		"NativeIdentityBasis": {},
 	}
 	if _, ok := names[symbol.Name]; ok {
 		return true
 	}
-	if symbol.Receiver == nil || symbol.Receiver.Base != "NativeSnapshotV2" {
+	if symbol.Receiver == nil {
 		return false
 	}
-	_, ok := map[string]struct{}{"Clone": {}, "Validate": {}}[symbol.Name]
+	methods := map[string]map[string]struct{}{
+		"NativeSnapshotV2": {"Clone": {}, "Validate": {}},
+		"NativeDeviceV2":   {"IdentityBasis": {}, "EntityIdentityBasis": {}, "FeatureIdentityBasis": {}},
+	}
+	_, ok := methods[symbol.Receiver.Base][symbol.Name]
 	return ok
 }
 
@@ -371,6 +376,9 @@ func msp0625RawSymbol(symbol symbol) bool {
 		"ValidateReadAuthorizationV1",
 		"ValidateWriteAuthorizationV1",
 		"MutationLabProfileContractV1",
+		"IDKindDevice",
+		"IDKindEntity",
+		"IDKindFeature",
 	} {
 		if symbol.Name == name {
 			return true

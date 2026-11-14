@@ -528,3 +528,24 @@ func mustRedactID(t *testing.T, kind IDKind, raw string) RedactedID {
 	}
 	return id
 }
+
+func TestNodeIDKindsAreClosedAndDistinct(t *testing.T) {
+	for kind, want := range map[IDKind]string{IDKindDevice: "device", IDKindEntity: "entity", IDKindFeature: "feature"} {
+		if err := kind.Validate(); err != nil || kind.String() != want {
+			t.Fatalf("node kind %q = %q/%v, want %q", want, kind.String(), err, want)
+		}
+		encoded, err := json.Marshal(kind)
+		if err != nil || string(encoded) != `"`+want+`"` {
+			t.Fatalf("node kind %q encodes as %s/%v", want, encoded, err)
+		}
+		id, err := RedactID(kind, `["`+want+`","ship_id","synthetic-ship"]`)
+		if err != nil || id.Kind != kind || id.Validate() != nil {
+			t.Fatalf("node kind %q does not redact: %+v %v", want, id, err)
+		}
+	}
+	for _, rejected := range []IDKind{"Device", "entities", "feature-id", "node"} {
+		if rejected.Validate() == nil {
+			t.Fatalf("unknown node kind %q was accepted", string(rejected))
+		}
+	}
+}

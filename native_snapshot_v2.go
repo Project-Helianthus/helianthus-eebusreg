@@ -181,6 +181,53 @@ type NativeAbsence struct {
 	FeatureAddress *string `json:"feature_address,omitempty"`
 }
 
+// NativeIdentityBasis is the identity basis of one device, entity or feature: the native values
+// its identity rests on. It survives a certificate replacement because no SKI or certificate
+// fingerprint is part of it; the SKI stays a trust record. Kind is device, entity or feature. A
+// device with a reported, non-blank SHIP identifier has Source ship_id and SHIPID set; any other
+// device has Source unresolved and DeviceAddress set to its native address. Exactly one of SHIPID
+// and DeviceAddress is set. An entity keeps the Source of its device and adds EntityAddress, its
+// SPINE entity address path; a feature adds FeatureAddress to the basis of its entity.
+type NativeIdentityBasis struct {
+	Kind           string  `json:"kind"`
+	Source         string  `json:"source"`
+	SHIPID         *string `json:"ship_id,omitempty"`
+	DeviceAddress  *string `json:"device_address,omitempty"`
+	EntityAddress  *string `json:"entity_address,omitempty"`
+	FeatureAddress *string `json:"feature_address,omitempty"`
+}
+
+// IdentityBasis returns the identity basis of the device.
+func (device NativeDeviceV2) IdentityBasis() NativeIdentityBasis {
+	return nativeIdentityBasis(spineDeviceBasis(device.SHIPID, device.Address))
+}
+
+// EntityIdentityBasis returns the identity basis of the entity at entityAddress of the device.
+func (device NativeDeviceV2) EntityIdentityBasis(entityAddress string) NativeIdentityBasis {
+	return nativeIdentityBasis(spineDeviceBasis(device.SHIPID, device.Address).entity(entityAddress))
+}
+
+// FeatureIdentityBasis returns the identity basis of the feature at featureAddress of the entity at
+// entityAddress of the device.
+func (device NativeDeviceV2) FeatureIdentityBasis(entityAddress, featureAddress string) NativeIdentityBasis {
+	return nativeIdentityBasis(spineDeviceBasis(device.SHIPID, device.Address).entity(entityAddress).feature(featureAddress))
+}
+
+func nativeIdentityBasis(basis spineIdentityBasis) NativeIdentityBasis {
+	value := basis.value
+	result := NativeIdentityBasis{
+		Kind: basis.kind, Source: basis.source,
+		EntityAddress:  nativeSnapshotV2CloneString(basis.entityAddress),
+		FeatureAddress: nativeSnapshotV2CloneString(basis.featureAddress),
+	}
+	if basis.source == spineBasisSourceSHIPID {
+		result.SHIPID = &value
+	} else {
+		result.DeviceAddress = &value
+	}
+	return result
+}
+
 // NativeObservationV2 is one native value read at Path (at most 512 bytes) from Source at the
 // required time ObservedAt, retained as evidence without interpretation. A nil ProtocolVersion
 // means not reported.

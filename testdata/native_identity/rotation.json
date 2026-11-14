@@ -1,0 +1,78 @@
+{
+  "before": {
+    "meta": {
+      "contract": "helianthus.eebus.runtime.raw-snapshot.v1",
+      "local_ski": "1111111111111111111111111111111111111111",
+      "mask_tier": "raw",
+      "captured_at": "2026-01-02T03:05:05Z",
+      "data_timestamp": "2026-01-02T03:04:05Z"
+    },
+    "status": {"state": "ready"},
+    "pairing": [
+      {"remote_ski": "2222222222222222222222222222222222222222", "state": "paired", "since": "2026-01-02T03:04:05Z"},
+      {"remote_ski": "4444444444444444444444444444444444444444", "state": "paired", "since": "2026-01-02T03:04:05Z"}
+    ],
+    "services": [
+      {"ski": "2222222222222222222222222222222222222222", "ship_id": "synthetic-ship-0001", "kind": "remote", "visible": true, "paired": true},
+      {"ski": "4444444444444444444444444444444444444444", "kind": "remote", "visible": true, "paired": true}
+    ],
+    "sessions": [
+      {"id": "session-synthetic-1", "remote_ski": "2222222222222222222222222222222222222222", "state": "connected", "since": "2026-01-02T03:04:05Z"},
+      {"id": "session-synthetic-2", "remote_ski": "4444444444444444444444444444444444444444", "state": "connected", "since": "2026-01-02T03:04:05Z"}
+    ],
+    "devices": [
+      {"ski": "2222222222222222222222222222222222222222", "ship_id": "synthetic-ship-0001", "address": "d:_n:synthetic_heat_pump", "type": "HeatPumpAppliance"},
+      {"ski": "4444444444444444444444444444444444444444", "address": "d:_n:synthetic_energy_manager", "type": "EnergyManagementSystem"}
+    ],
+    "entities": [
+      {"device_address": "d:_n:synthetic_heat_pump", "entity_address": "[1]", "type": "HeatPumpAppliance"},
+      {"device_address": "d:_n:synthetic_heat_pump", "entity_address": "[1,1]", "type": "DHWCircuit"},
+      {"device_address": "d:_n:synthetic_energy_manager", "entity_address": "[1]", "type": "CEM"}
+    ],
+    "features": [
+      {"device_address": "d:_n:synthetic_heat_pump", "entity_address": "[1]", "feature_address": "1", "type": "DeviceDiagnosis", "role": "server"},
+      {"device_address": "d:_n:synthetic_heat_pump", "entity_address": "[1,1]", "feature_address": "2", "type": "Measurement", "role": "server"},
+      {"device_address": "d:_n:synthetic_energy_manager", "entity_address": "[1]", "feature_address": "1", "type": "DeviceDiagnosis", "role": "client"}
+    ],
+    "use_cases": [],
+    "opaque": []
+  },
+  "after": {
+    "meta": {
+      "contract": "helianthus.eebus.runtime.raw-snapshot.v1",
+      "local_ski": "1111111111111111111111111111111111111111",
+      "mask_tier": "raw",
+      "captured_at": "2026-01-02T03:05:05Z",
+      "data_timestamp": "2026-01-02T03:04:05Z"
+    },
+    "status": {"state": "ready"},
+    "pairing": [
+      {"remote_ski": "3333333333333333333333333333333333333333", "state": "paired", "since": "2026-01-02T03:04:05Z"},
+      {"remote_ski": "5555555555555555555555555555555555555555", "state": "paired", "since": "2026-01-02T03:04:05Z"}
+    ],
+    "services": [
+      {"ski": "3333333333333333333333333333333333333333", "ship_id": "synthetic-ship-0001", "kind": "remote", "visible": true, "paired": true},
+      {"ski": "5555555555555555555555555555555555555555", "kind": "remote", "visible": true, "paired": true}
+    ],
+    "sessions": [
+      {"id": "session-synthetic-1", "remote_ski": "3333333333333333333333333333333333333333", "state": "connected", "since": "2026-01-02T03:04:05Z"},
+      {"id": "session-synthetic-2", "remote_ski": "5555555555555555555555555555555555555555", "state": "connected", "since": "2026-01-02T03:04:05Z"}
+    ],
+    "devices": [
+      {"ski": "3333333333333333333333333333333333333333", "ship_id": "synthetic-ship-0001", "address": "d:_n:synthetic_heat_pump", "type": "HeatPumpAppliance"},
+      {"ski": "5555555555555555555555555555555555555555", "address": "d:_n:synthetic_energy_manager", "type": "EnergyManagementSystem"}
+    ],
+    "entities": [
+      {"device_address": "d:_n:synthetic_heat_pump", "entity_address": "[1]", "type": "HeatPumpAppliance"},
+      {"device_address": "d:_n:synthetic_heat_pump", "entity_address": "[1,1]", "type": "DHWCircuit"},
+      {"device_address": "d:_n:synthetic_energy_manager", "entity_address": "[1]", "type": "CEM"}
+    ],
+    "features": [
+      {"device_address": "d:_n:synthetic_heat_pump", "entity_address": "[1]", "feature_address": "1", "type": "DeviceDiagnosis", "role": "server"},
+      {"device_address": "d:_n:synthetic_heat_pump", "entity_address": "[1,1]", "feature_address": "2", "type": "Measurement", "role": "server"},
+      {"device_address": "d:_n:synthetic_energy_manager", "entity_address": "[1]", "feature_address": "1", "type": "DeviceDiagnosis", "role": "client"}
+    ],
+    "use_cases": [],
+    "opaque": []
+  }
+}

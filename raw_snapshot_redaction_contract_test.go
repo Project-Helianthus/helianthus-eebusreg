@@ -240,11 +240,11 @@ func TestRedactedSnapshotUseCaseClaimsJoinByExactDeviceComponent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shortID, err := eebusraw.RedactID(eebusraw.IDKindPeer, deviceIdentityV1(raw.Devices[0]))
+	shortID, err := eebusraw.RedactID(eebusraw.IDKindDevice, spineDeviceBasis(raw.Devices[0].SHIPID, raw.Devices[0].Address).preimage())
 	if err != nil {
 		t.Fatal(err)
 	}
-	longID, err := eebusraw.RedactID(eebusraw.IDKindPeer, deviceIdentityV1(raw.Devices[1]))
+	longID, err := eebusraw.RedactID(eebusraw.IDKindDevice, spineDeviceBasis(raw.Devices[1].SHIPID, raw.Devices[1].Address).preimage())
 	if err != nil {
 		t.Fatal(err)
 	}

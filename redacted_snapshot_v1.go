@@ -69,7 +69,8 @@ type RedactedSessionV1 struct {
 
 // RedactedDeviceV1 is one remote device with its masked identity, the entities addressed under
 // it, and the use cases whose context address is the device address or begins with it and a
-// colon.
+// colon. ID has kind device and is derived from the device identity basis described by
+// NativeIdentityBasis, never from the SKI, so it survives a certificate replacement.
 type RedactedDeviceV1 struct {
 	ID            eebusraw.RedactedID `json:"id"`
 	Entities      []RedactedEntityV1  `json:"entities"`
@@ -77,14 +78,16 @@ type RedactedDeviceV1 struct {
 }
 
 // RedactedEntityV1 is one entity with its masked identity and the features addressed under it;
-// the same value appears at top level and inside its device.
+// the same value appears at top level and inside its device. ID has kind entity and is derived from
+// the basis of its device and its entity address.
 type RedactedEntityV1 struct {
 	ID       eebusraw.RedactedID `json:"id"`
 	Features []RedactedFeatureV1 `json:"features"`
 }
 
 // RedactedFeatureV1 is one feature with its masked identity and its role reduced to client,
-// server or unspecified.
+// server or unspecified. ID has kind feature and is derived from the basis of its entity and its
+// feature address.
 type RedactedFeatureV1 struct {
 	ID   eebusraw.RedactedID `json:"id"`
 	Role FeatureRoleV1       `json:"role"`
@@ -98,7 +101,8 @@ type RedactedUseCaseV1 struct {
 // BuildRedactedSnapshotV1 validates source as NewSnapshotV1 does, masks it, sorts every
 // collection by masked identity, computes Meta.DataHash and validates the result. It fails, and
 // never returns a partial result, when the source is invalid or a relationship cannot be
-// represented, such as an entity or use case that matches no device.
+// represented, such as an entity or use case that matches no device, an entity or feature whose
+// device address names more than one device, or two devices that share one identity basis.
 func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 	raw, err := NewSnapshotV1(source)
 	if err != nil {
@@ -151,13 +155,35 @@ func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 			ID: id, Remote: remote, State: session.State, Since: session.Since.UTC(),
 		})
 	}
+	if err := buildRedactedGraph(raw, &result); err != nil {
+		return RedactedSnapshotV1{}, err
+	}
+	result = canonicalRedactedSnapshotV1(result)
+	hash, err := result.computeDataHash()
+	if err != nil {
+		return RedactedSnapshotV1{}, err
+	}
+	result.Meta.DataHash = hash
+	if err := result.Validate(); err != nil {
+		return RedactedSnapshotV1{}, err
+	}
+	return result, nil
+}
+
+func buildRedactedGraph(raw SnapshotV1, result *RedactedSnapshotV1) error {
+	bases, ambiguous := redactedDeviceBases(raw.Devices)
 	entitiesByDevice := make(map[string][]RedactedEntityV1, len(raw.Devices))
 	featuresByEntity := make(map[string][]RedactedFeatureV1, len(raw.Entities))
 	useCasesByDevice := make(map[string][]RedactedUseCaseV1, len(raw.Devices))
 	for _, feature := range raw.Features {
-		id, err := eebusraw.RedactID(eebusraw.IDKindPeer, featureIdentityV1(feature))
+		parent, err := redactedParentBasis(bases, ambiguous, feature.DeviceAddress)
 		if err != nil {
-			return RedactedSnapshotV1{}, errors.New("redact feature identity")
+			return err
+		}
+		basis := parent.entity(feature.EntityAddress).feature(feature.FeatureAddress)
+		id, err := eebusraw.RedactID(eebusraw.IDKindFeature, basis.preimage())
+		if err != nil {
+			return errors.New("redact feature identity")
 		}
 		role := FeatureRoleV1Unspecified
 		switch FeatureRoleV1(strings.ToLower(feature.Role)) {
@@ -172,9 +198,13 @@ func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 			append(featuresByEntity[feature.DeviceAddress+"\x00"+feature.EntityAddress], value)
 	}
 	for _, entity := range raw.Entities {
-		id, err := eebusraw.RedactID(eebusraw.IDKindPeer, entityIdentityV1(entity))
+		parent, err := redactedParentBasis(bases, ambiguous, entity.DeviceAddress)
 		if err != nil {
-			return RedactedSnapshotV1{}, errors.New("redact entity identity")
+			return err
+		}
+		id, err := eebusraw.RedactID(eebusraw.IDKindEntity, parent.entity(entity.EntityAddress).preimage())
+		if err != nil {
+			return errors.New("redact entity identity")
 		}
 		value := RedactedEntityV1{
 			ID:       id,
@@ -187,7 +217,7 @@ func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 	for _, useCase := range raw.UseCases {
 		id, err := eebusraw.RedactID(eebusraw.IDKindPeer, useCaseIdentityV1(useCase))
 		if err != nil {
-			return RedactedSnapshotV1{}, errors.New("redact use-case identity")
+			return errors.New("redact use-case identity")
 		}
 		value := RedactedUseCaseV1{ID: id}
 		result.UseCases = append(result.UseCases, value)
@@ -200,9 +230,9 @@ func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 		}
 	}
 	for _, device := range raw.Devices {
-		id, err := eebusraw.RedactID(eebusraw.IDKindPeer, deviceIdentityV1(device))
+		id, err := eebusraw.RedactID(eebusraw.IDKindDevice, spineDeviceBasis(device.SHIPID, device.Address).preimage())
 		if err != nil {
-			return RedactedSnapshotV1{}, errors.New("redact device identity")
+			return errors.New("redact device identity")
 		}
 		value := RedactedDeviceV1{
 			ID:            id,
@@ -213,16 +243,77 @@ func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 		sortRedactedUseCasesV1(value.UseCaseClaims)
 		result.Devices = append(result.Devices, value)
 	}
-	result = canonicalRedactedSnapshotV1(result)
-	hash, err := result.computeDataHash()
-	if err != nil {
-		return RedactedSnapshotV1{}, err
+	return nil
+}
+
+const (
+	spineBasisSourceSHIPID     = "ship_id"
+	spineBasisSourceUnresolved = "unresolved"
+)
+
+type spineIdentityBasis struct {
+	kind, source, value           string
+	entityAddress, featureAddress *string
+}
+
+func spineDeviceBasis(shipID *string, address string) spineIdentityBasis {
+	if shipID != nil && strings.TrimSpace(*shipID) != "" {
+		return spineIdentityBasis{kind: "device", source: spineBasisSourceSHIPID, value: *shipID}
 	}
-	result.Meta.DataHash = hash
-	if err := result.Validate(); err != nil {
-		return RedactedSnapshotV1{}, err
+	return spineIdentityBasis{kind: "device", source: spineBasisSourceUnresolved, value: address}
+}
+
+func (basis spineIdentityBasis) entity(address string) spineIdentityBasis {
+	return spineIdentityBasis{kind: "entity", source: basis.source, value: basis.value, entityAddress: &address}
+}
+
+func (basis spineIdentityBasis) feature(address string) spineIdentityBasis {
+	entityAddress := ""
+	if basis.entityAddress != nil {
+		entityAddress = *basis.entityAddress
 	}
-	return result, nil
+	return spineIdentityBasis{
+		kind: "feature", source: basis.source, value: basis.value,
+		entityAddress: &entityAddress, featureAddress: &address,
+	}
+}
+
+// preimage encodes the basis as a JSON array of its present members, so that no two bases with
+// valid UTF-8 members share a preimage whatever separators their text contains.
+func (basis spineIdentityBasis) preimage() string {
+	members := []string{basis.kind, basis.source, basis.value}
+	if basis.entityAddress != nil {
+		members = append(members, *basis.entityAddress)
+	}
+	if basis.featureAddress != nil {
+		members = append(members, *basis.featureAddress)
+	}
+	encoded, _ := json.Marshal(members)
+	return string(encoded)
+}
+
+func redactedDeviceBases(devices []DeviceV1) (map[string]spineIdentityBasis, map[string]struct{}) {
+	bases := make(map[string]spineIdentityBasis, len(devices))
+	ambiguous := make(map[string]struct{})
+	for _, device := range devices {
+		if _, found := bases[device.Address]; found {
+			ambiguous[device.Address] = struct{}{}
+			continue
+		}
+		bases[device.Address] = spineDeviceBasis(device.SHIPID, device.Address)
+	}
+	return bases, ambiguous
+}
+
+func redactedParentBasis(bases map[string]spineIdentityBasis, ambiguous map[string]struct{}, address string) (spineIdentityBasis, error) {
+	if _, found := ambiguous[address]; found {
+		return spineIdentityBasis{}, errors.New("redacted node matches more than one device")
+	}
+	basis, found := bases[address]
+	if !found {
+		return spineIdentityBasis{}, errors.New("redacted node matches no device")
+	}
+	return basis, nil
 }
 
 // MarshalJSON validates the snapshot, including its data hash, and writes it as canonical JSON
@@ -445,7 +536,7 @@ func redactedDeviceIndexV1(values []RedactedDeviceV1) (map[string]RedactedDevice
 	}
 	result := make(map[string]RedactedDeviceV1, len(values))
 	for _, value := range values {
-		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindPeer); err != nil {
+		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindDevice); err != nil {
 			return nil, errors.New("redacted device identity is invalid")
 		}
 		key := redactedIdentityKeyV1(value.ID)
@@ -463,7 +554,7 @@ func redactedEntityIndexV1(values []RedactedEntityV1) (map[string]RedactedEntity
 	}
 	result := make(map[string]RedactedEntityV1, len(values))
 	for _, value := range values {
-		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindPeer); err != nil {
+		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindEntity); err != nil {
 			return nil, errors.New("redacted entity identity is invalid")
 		}
 		key := redactedIdentityKeyV1(value.ID)
@@ -481,7 +572,7 @@ func redactedFeatureIndexV1(values []RedactedFeatureV1) (map[string]RedactedFeat
 	}
 	result := make(map[string]RedactedFeatureV1, len(values))
 	for _, value := range values {
-		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindPeer); err != nil {
+		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindFeature); err != nil {
 			return nil, errors.New("redacted feature identity is invalid")
 		}
 		switch value.Role {
