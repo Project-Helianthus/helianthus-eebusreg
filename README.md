@@ -482,3 +482,24 @@ Consumers adopt this contract in one coordinated wave. See the public
 [naming contract](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/architecture/naming-contract.md)
 and [announcement](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/CHANGELOG.md).
 Native object keys and Go `UseCases` members retain their existing spelling.
+
+### Snapshot node identity basis
+
+Device, entity and feature identifiers rest on an identity basis that survives
+a certificate replacement. The SKI is never part of it and stays a trust record
+(pairing, session remote, service and local identity). Native runtime v2 exposes
+the basis through `NativeDeviceV2.IdentityBasis`, `EntityIdentityBasis` and
+`FeatureIdentityBasis` as a `NativeIdentityBasis`; the redacted snapshot
+derives each masked identifier from the basis and carries the node kind as its
+identifier kind.
+
+| Node kind | Identity basis | Redacted identifier kind |
+| --- | --- | --- |
+| Device | The SHIP identifier when one is reported (source `ship_id`); otherwise the source is `unresolved` and the basis is the native device address. | `device` |
+| Entity | The basis of its device and its SPINE entity address path. | `entity` |
+| Feature | The basis of its entity and its feature address. | `feature` |
+
+Building a redacted snapshot fails when two devices share one basis or when an
+entity or feature cannot be placed under exactly one device. Use-case claims and
+services keep the `peer` identifier kind; sessions keep `session` and
+`remote-ski`.

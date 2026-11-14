@@ -3,6 +3,9 @@ const EndpointRoleRemote
 const EndpointRoleV1Local
 const EndpointRoleV1Remote
 const IDKindCertificateFingerprint
+const IDKindDevice
+const IDKindEntity
+const IDKindFeature
 const IDKindLocalSKI
 const IDKindPeer
 const IDKindRemoteSKI

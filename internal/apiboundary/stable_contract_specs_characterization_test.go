@@ -40,10 +40,10 @@ func TestStableContractSpecsInventoryOrderAndCopies(t *testing.T) {
 	got := sha256.Sum256([]byte(fmt.Sprintf("%#v", second)))
 	// Pin the complete inventory, including the supported use_cases JSON tags.
 	wantFingerprint := [sha256.Size]byte{
-		72, 125, 104, 185, 35, 76, 91, 226,
-		101, 160, 223, 57, 245, 59, 245, 206,
-		53, 103, 45, 252, 53, 58, 193, 170,
-		27, 145, 40, 162, 146, 62, 94, 88,
+		90, 251, 98, 235, 241, 147, 49, 66,
+		212, 193, 154, 148, 54, 83, 108, 174,
+		0, 231, 24, 169, 198, 106, 216, 113,
+		19, 228, 101, 91, 190, 132, 59, 134,
 	}
 	if got != wantFingerprint {
 		t.Fatalf("stable contract fingerprint = %x, want %x", got, wantFingerprint)

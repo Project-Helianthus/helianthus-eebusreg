@@ -319,6 +319,9 @@ func stableIdentityDocumentV1ContractSpec(modulePath, rawPath, evidencePath stri
 				enumValue("IDKindCertificateFingerprint", "certificate-fingerprint"),
 				enumValue("IDKindPeer", "peer"),
 				enumValue("IDKindSession", "session"),
+				enumValue("IDKindDevice", "device"),
+				enumValue("IDKindEntity", "entity"),
+				enumValue("IDKindFeature", "feature"),
 			}},
 			{exact: true, typeName: "UnknownPath", values: []manifestStableEnumValue{
 				enumValue("UnknownPathDocument", "/document/unknown"),

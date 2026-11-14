@@ -1,4 +1,7 @@
 const NativeSnapshotContractV2
+func NativeDeviceV2.EntityIdentityBasis
+func NativeDeviceV2.FeatureIdentityBasis
+func NativeDeviceV2.IdentityBasis
 func NativeSnapshotV2.Clone
 func NativeSnapshotV2.Validate
 func NewNativeRuntimeV2
@@ -8,6 +11,7 @@ type NativeDegradationV2
 type NativeDeviceV2
 type NativeEntityV2
 type NativeFeatureV2
+type NativeIdentityBasis
 type NativeObservationV2
 type NativePairingObservationV2
 type NativeRuntimeObservationV2

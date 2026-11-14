@@ -921,6 +921,9 @@ const (
 	IDKindCertificateFingerprint IDKind = "certificate-fingerprint"
 	IDKindPeer IDKind = "peer"
 	IDKindSession IDKind = "session"
+	IDKindDevice IDKind = "device"
+	IDKindEntity IDKind = "entity"
+	IDKindFeature IDKind = "feature"
 )
 
 type RedactedID struct {

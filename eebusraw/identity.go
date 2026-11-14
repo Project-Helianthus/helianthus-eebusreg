@@ -252,12 +252,19 @@ const (
 	IDKindPeer IDKind = "peer"
 	// IDKindSession labels a session identifier.
 	IDKindSession IDKind = "session"
+	// IDKindDevice labels a SPINE device identifier derived from the device identity basis.
+	IDKindDevice IDKind = "device"
+	// IDKindEntity labels a SPINE entity identifier derived from the entity identity basis.
+	IDKindEntity IDKind = "entity"
+	// IDKindFeature labels a SPINE feature identifier derived from the feature identity basis.
+	IDKindFeature IDKind = "feature"
 )
 
 // Validate checks the value against its contract and returns an error on invalid input.
 func (k IDKind) Validate() error {
 	switch k {
-	case IDKindLocalSKI, IDKindRemoteSKI, IDKindCertificateFingerprint, IDKindPeer, IDKindSession:
+	case IDKindLocalSKI, IDKindRemoteSKI, IDKindCertificateFingerprint, IDKindPeer, IDKindSession,
+		IDKindDevice, IDKindEntity, IDKindFeature:
 		return nil
 	default:
 		return errors.New("unsupported id kind")
