@@ -20,12 +20,6 @@
       "value": 66
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
-      "symbol": "<file>",
-      "metric": "file_lines",
-      "value": 1159
-    },
-    {
       "path": "internal/apiboundary/docs_clean_test.go",
       "symbol": "<file>",
       "metric": "functions_per_file",

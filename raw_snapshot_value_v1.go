@@ -636,6 +636,86 @@ func containsPEMMaterialV1(value string) bool {
 		strings.Contains(normalized, "-----BEGIN PGP PRIVATE KEY BLOCK-----")
 }
 
+func validateSnapshotOpaqueV1(snapshot SnapshotV1) error {
+	sets := [][]OpaqueObservationV1{snapshot.Opaque}
+	for _, value := range snapshot.Pairing {
+		sets = appendOpaqueSetV1(sets, value.Opaque)
+	}
+	for _, value := range snapshot.Services {
+		sets = appendOpaqueSetV1(sets, value.Opaque)
+	}
+	for _, value := range snapshot.Sessions {
+		sets = appendOpaqueSetV1(sets, value.Opaque)
+	}
+	for _, value := range snapshot.Devices {
+		sets = appendOpaqueSetV1(sets, value.Opaque)
+	}
+	for _, value := range snapshot.Entities {
+		sets = appendOpaqueSetV1(sets, value.Opaque)
+	}
+	for _, value := range snapshot.Features {
+		sets = appendOpaqueSetV1(sets, value.Opaque)
+	}
+	for _, value := range snapshot.UseCases {
+		sets = appendOpaqueSetV1(sets, value.Opaque)
+	}
+	count, aggregate := 0, 0
+	for _, values := range sets {
+		setCount, setBytes, err := validateOpaqueObservationSetV1(values)
+		if err != nil {
+			return err
+		}
+		count += setCount
+		aggregate += setBytes
+	}
+	if count > opaqueMaxObservations {
+		return errors.New("opaque observation count exceeds the snapshot limit")
+	}
+	if aggregate > opaqueMaxAggregateBytes {
+		return errors.New("opaque values exceed the snapshot aggregate byte limit")
+	}
+	return nil
+}
+
+func validateSnapshotSecretsV1(snapshot SnapshotV1) error {
+	type alias SnapshotV1
+	encoded, err := marshalJCSV1(alias(snapshot))
+	if err != nil {
+		return err
+	}
+	decoder, err := decodeJSONValueV1(encoded)
+	if err != nil {
+		return err
+	}
+	if containsSecretJSONV1(decoder) {
+		return errors.New("snapshot contains forbidden secret material")
+	}
+	return nil
+}
+
+func containsSecretJSONV1(value any) bool {
+	switch typed := value.(type) {
+	case string:
+		return containsPEMMaterialV1(typed)
+	case []any:
+		for _, item := range typed {
+			if containsSecretJSONV1(item) {
+				return true
+			}
+		}
+	case map[string]any:
+		for key, item := range typed {
+			if _, forbidden := snapshotSecretKeysV1[strings.ToLower(key)]; forbidden {
+				return true
+			}
+			if containsSecretJSONV1(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func cloneOpaqueObservationsV1(source []OpaqueObservationV1) []OpaqueObservationV1 {
 	if source == nil {
 		return nil
@@ -722,6 +802,35 @@ func canonicalOpaqueObservationsV1(source []OpaqueObservationV1) []OpaqueObserva
 		return bytes.Compare(leftValue, rightValue) < 0
 	})
 	return result
+}
+
+func cloneOpaquePointerV1(source *[]OpaqueObservationV1) *[]OpaqueObservationV1 {
+	if source == nil {
+		return nil
+	}
+	value := cloneOpaqueObservationsV1(*source)
+	if value == nil {
+		value = []OpaqueObservationV1{}
+	}
+	return &value
+}
+
+func canonicalOpaquePointerV1(source *[]OpaqueObservationV1) *[]OpaqueObservationV1 {
+	if source == nil {
+		return nil
+	}
+	value := canonicalOpaqueObservationsV1(*source)
+	if value == nil {
+		value = []OpaqueObservationV1{}
+	}
+	return &value
+}
+
+func appendOpaqueSetV1(sets [][]OpaqueObservationV1, source *[]OpaqueObservationV1) [][]OpaqueObservationV1 {
+	if source != nil {
+		sets = append(sets, *source)
+	}
+	return sets
 }
 
 func marshalJCSV1(value any) ([]byte, error) {
