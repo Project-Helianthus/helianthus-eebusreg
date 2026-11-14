@@ -3,3 +3,7 @@
 coverage.out
 dist/
 vendor/
+
+# Python bytecode
+__pycache__/
+*.pyc
