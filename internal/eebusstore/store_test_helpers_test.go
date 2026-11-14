@@ -180,6 +180,7 @@ func summarizeTree(tree map[string]treeEntry) string {
 
 func testStoreConfig(t *testing.T, root string, hook syscallHook, providers map[providerKey]protectedKeyProvider) storeConfig {
 	t.Helper()
+	requireStoreFilesystemCapabilities(t)
 	backend, err := newNativeSyscallBackend(hook)
 	if err != nil {
 		t.Fatalf("native backend: %v", err)
