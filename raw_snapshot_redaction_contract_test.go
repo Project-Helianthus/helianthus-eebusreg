@@ -157,7 +157,9 @@ func TestRedactedSnapshotValidateAndUnmarshalRejectMalformedGraph(t *testing.T) 
 			value.Devices[0].Entities[0].Features[0].ID.Digest = "sha256:" + strings.Repeat("b", 64)
 		}},
 		{"dangling-usecase", func(value *RedactedSnapshotV1) {
-			value.Devices[0].UseCaseClaims[0].ID.Digest = "sha256:" + strings.Repeat("c", 64)
+			claim := value.UseCases[0]
+			claim.ID.Digest = "sha256:" + strings.Repeat("c", 64)
+			value.Devices[0].UseCaseClaims = append(value.Devices[0].UseCaseClaims, claim)
 		}},
 	}
 	var malformedDigest map[string]any
@@ -224,13 +226,17 @@ func TestOpaqueValueDecoderFailsClosedBeforeMaterializingOverBudgetInput(t *test
 	}
 }
 
-func TestRedactedSnapshotUseCaseClaimsJoinByExactDeviceComponent(t *testing.T) {
+func TestRedactedSnapshotUseCaseClaimsJoinByScopeNotContextAddress(t *testing.T) {
 	draft := rawSnapshotDraftV1(t, false)
 	draft.Devices[0].Address = "dev"
 	draft.Devices[1].Address = "dev-2"
 	draft.Entities = nil
 	draft.Features = nil
-	draft.UseCases[0].ContextAddress = "dev-2:1:0"
+	draft.UseCases[0].ContextAddress = "dev:1:0"
+	scope := "dev-2"
+	draft.UseCases[0].DeviceAddress = &scope
+	draft.UseCases[0].EntityAddress = nil
+	draft.UseCases[0].FeatureAddress = nil
 	draft.Meta.DataHash = ""
 	raw, err := NewSnapshotV1(draft)
 	if err != nil {
@@ -253,6 +259,6 @@ func TestRedactedSnapshotUseCaseClaimsJoinByExactDeviceComponent(t *testing.T) {
 		claims[redactedIdentityKeyV1(device.ID)] = len(device.UseCaseClaims)
 	}
 	if claims[redactedIdentityKeyV1(shortID)] != 0 || claims[redactedIdentityKeyV1(longID)] != 1 {
-		t.Fatalf("use-case claims joined by substring: short=%d long=%d", claims[redactedIdentityKeyV1(shortID)], claims[redactedIdentityKeyV1(longID)])
+		t.Fatalf("use-case claims not joined by scope: short=%d long=%d", claims[redactedIdentityKeyV1(shortID)], claims[redactedIdentityKeyV1(longID)])
 	}
 }

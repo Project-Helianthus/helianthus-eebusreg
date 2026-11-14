@@ -140,12 +140,13 @@ type DeviceV1 struct {
 }
 
 type EntityV1 struct {
-	DeviceAddress   string                 `json:"device_address"`
-	EntityAddress   string                 `json:"entity_address"`
-	Type            string                 `json:"type"`
-	Description     *string                `json:"description,omitempty"`
-	SecondaryDigest *string                `json:"secondary_digest,omitempty"`
-	Opaque          *[]OpaqueObservationV1 `json:"opaque,omitempty"`
+	DeviceAddress       string                 `json:"device_address"`
+	EntityAddress       string                 `json:"entity_address"`
+	ParentEntityAddress *string                `json:"parent_entity_address,omitempty"`
+	Type                string                 `json:"type"`
+	Description         *string                `json:"description,omitempty"`
+	SecondaryDigest     *string                `json:"secondary_digest,omitempty"`
+	Opaque              *[]OpaqueObservationV1 `json:"opaque,omitempty"`
 }
 
 type FeatureV1 struct {
@@ -161,6 +162,9 @@ type FeatureV1 struct {
 
 type UseCaseV1 struct {
 	ContextAddress      string                 `json:"context_address"`
+	DeviceAddress       *string                `json:"device_address,omitempty"`
+	EntityAddress       *string                `json:"entity_address,omitempty"`
+	FeatureAddress      *string                `json:"feature_address,omitempty"`
 	Name                string                 `json:"name"`
 	Actor               string                 `json:"actor"`
 	ResolvedRole        *string                `json:"resolved_role,omitempty"`
@@ -235,6 +239,9 @@ func (snapshot SnapshotV1) validate(checkHash bool) error {
 	if err := validateUseCasesV1(snapshot.UseCases); err != nil {
 		return err
 	}
+	if err := validateSpineContainment(rawContainmentGraph(snapshot)); err != nil {
+		return err
+	}
 	if err := validateSnapshotOpaqueV1(snapshot); err != nil {
 		return err
 	}
@@ -299,6 +306,7 @@ func (snapshot SnapshotV1) Clone() SnapshotV1 {
 	result.Entities = make([]EntityV1, len(snapshot.Entities))
 	for index, value := range snapshot.Entities {
 		result.Entities[index] = value
+		result.Entities[index].ParentEntityAddress = cloneStringPointerV1(value.ParentEntityAddress)
 		result.Entities[index].Description = cloneStringPointerV1(value.Description)
 		result.Entities[index].SecondaryDigest = cloneStringPointerV1(value.SecondaryDigest)
 		result.Entities[index].Opaque = cloneOpaquePointerV1(value.Opaque)
@@ -313,6 +321,9 @@ func (snapshot SnapshotV1) Clone() SnapshotV1 {
 	result.UseCases = make([]UseCaseV1, len(snapshot.UseCases))
 	for index, value := range snapshot.UseCases {
 		result.UseCases[index] = value
+		result.UseCases[index].DeviceAddress = cloneStringPointerV1(value.DeviceAddress)
+		result.UseCases[index].EntityAddress = cloneStringPointerV1(value.EntityAddress)
+		result.UseCases[index].FeatureAddress = cloneStringPointerV1(value.FeatureAddress)
 		result.UseCases[index].ResolvedRole = cloneStringPointerV1(value.ResolvedRole)
 		result.UseCases[index].Scenarios = cloneStringsPointerV1(value.Scenarios)
 		result.UseCases[index].Version = cloneStringPointerV1(value.Version)
@@ -533,6 +544,9 @@ func validateEntitiesV1(values []EntityV1) error {
 		if validateOptionalTextV1(value.Description, 4096) != nil {
 			return errors.New("entity description is invalid")
 		}
+		if !validOptionalAddress(value.ParentEntityAddress) {
+			return errors.New("entity parent address is invalid")
+		}
 		if err := validateSecondaryDigestV1(value.SecondaryDigest); err != nil {
 			return err
 		}
@@ -591,6 +605,10 @@ func validateUseCasesV1(values []UseCaseV1) error {
 				return errors.New("use case contains an invalid optional field")
 			}
 		}
+		if !validOptionalAddress(value.DeviceAddress) || !validOptionalAddress(value.EntityAddress) ||
+			!validOptionalAddress(value.FeatureAddress) {
+			return errors.New("use-case scope address is invalid")
+		}
 		if value.Scenarios != nil {
 			if len(*value.Scenarios) > 128 {
 				return errors.New("use-case scenarios exceed the member limit")
@@ -616,6 +634,33 @@ func validateUseCasesV1(values []UseCaseV1) error {
 		seen[key] = struct{}{}
 	}
 	return nil
+}
+
+func validOptionalAddress(value *string) bool {
+	return value == nil || validateRequiredTextV1(*value, 512) == nil
+}
+
+func rawContainmentGraph(snapshot SnapshotV1) spineContainment {
+	var graph spineContainment
+	for _, device := range snapshot.Devices {
+		graph.devices = append(graph.devices, device.Address)
+	}
+	for _, entity := range snapshot.Entities {
+		graph.entities = append(graph.entities, spineContainedEntity{entity.DeviceAddress, entity.EntityAddress, entity.ParentEntityAddress})
+	}
+	for _, feature := range snapshot.Features {
+		graph.features = append(graph.features, spineContainedFeature{feature.DeviceAddress, feature.EntityAddress, feature.FeatureAddress})
+	}
+	for _, claim := range snapshot.UseCases {
+		if claim.DeviceAddress == nil && claim.EntityAddress == nil && claim.FeatureAddress == nil {
+			continue
+		}
+		graph.claims = append(graph.claims, spineContainedClaim{
+			device: optionalStringV1(claim.DeviceAddress), entity: claim.EntityAddress, feature: claim.FeatureAddress,
+			identity: spineClaimIdentity(claim.Name, claim.Actor, claim.Version, claim.DocumentSubrevision),
+		})
+	}
+	return graph
 }
 
 func validateSnapshotOpaqueV1(snapshot SnapshotV1) error {

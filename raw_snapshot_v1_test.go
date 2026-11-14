@@ -184,6 +184,51 @@ func TestSnapshotV1ConstructorAndCloneDeepDetachNestedStorage(t *testing.T) {
 	}
 }
 
+func TestRawSnapshotCloneDetachesContainmentRelations(t *testing.T) {
+	source := rawSnapshotDraftV1(t, false)
+	source.Entities = append(source.Entities, EntityV1{
+		DeviceAddress: "device-a", EntityAddress: "entity-a-child",
+		ParentEntityAddress: stringPointerV1ForTest("entity-a"), Type: "type",
+	})
+	claim := &source.UseCases[0]
+	claim.DeviceAddress = stringPointerV1ForTest("device-a")
+	claim.EntityAddress = stringPointerV1ForTest("entity-a")
+	claim.FeatureAddress = stringPointerV1ForTest("feature-a")
+	first, err := NewSnapshotV1(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relations := func(snapshot SnapshotV1) []string {
+		result := []string{}
+		for _, entity := range snapshot.Entities {
+			result = append(result, optionalStringV1(entity.ParentEntityAddress))
+		}
+		claim := snapshot.UseCases[0]
+		return append(result, optionalStringV1(claim.DeviceAddress), optionalStringV1(claim.EntityAddress), optionalStringV1(claim.FeatureAddress))
+	}
+	want := relations(first)
+	if !slices.Equal(want, []string{"", "entity-a", "", "device-a", "entity-a", "feature-a"}) {
+		t.Fatalf("containment relations = %q", want)
+	}
+	mutate := func(snapshot SnapshotV1) {
+		for _, entity := range snapshot.Entities {
+			if entity.ParentEntityAddress != nil {
+				*entity.ParentEntityAddress = "mutated"
+			}
+		}
+		claim := snapshot.UseCases[0]
+		*claim.DeviceAddress, *claim.EntityAddress, *claim.FeatureAddress = "mutated", "mutated", "mutated"
+	}
+	mutate(source)
+	if got := relations(first); !slices.Equal(got, want) {
+		t.Fatalf("constructor retained relation storage: %q", got)
+	}
+	mutate(first.Clone())
+	if got := relations(first); !slices.Equal(got, want) {
+		t.Fatalf("Clone retained relation storage: %q", got)
+	}
+}
+
 func rawSnapshotV1(t *testing.T, reverse bool) SnapshotV1 {
 	t.Helper()
 	snapshot, err := NewSnapshotV1(rawSnapshotDraftV1(t, reverse))
