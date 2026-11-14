@@ -112,7 +112,9 @@ const (
 // services, sessions and the native device, entity, feature and use-case topology, plus opaque
 // native values kept as evidence. It carries raw identities such as SKIs and native addresses,
 // so it is meant only for consumers with raw authority; RedactedSnapshotV1 is the masked view.
-// Each collection is unique by its identity and sorted by it in canonical form. Entities,
+// Pairing, services, sessions, devices, entities, features and use cases are unique by their
+// identity and sorted in canonical form; services sort by identity plus their Visible and Paired
+// flags, while Opaque observations are canonicalized on their own. Entities,
 // features and scoped use cases must be contained by listed devices and entities under the
 // containment rule of NativeSnapshotV2. Limits: 256 services, 1024 devices, 4096 entities, 16384
 // features and 4096 use cases. Build it with NewSnapshotV1. String, GoString and Format print a
@@ -244,7 +246,8 @@ type FeatureV1 struct {
 // UseCaseV1 is one use-case claim as a peer advertised it. Its identity is ContextAddress, Name,
 // Actor, Version and DocumentSubrevision, and it must be unique. DeviceAddress, EntityAddress and
 // FeatureAddress scope the claim; when any is set the scope must resolve to listed topology, and
-// the context address never places it. Scenarios is sorted and free of duplicates, at most 128.
+// the context address never places it. Scenarios must be free of duplicates, at most 128;
+// canonicalization sorts them.
 type UseCaseV1 struct {
 	ContextAddress      string                 `json:"context_address"`
 	DeviceAddress       *string                `json:"device_address,omitempty"`

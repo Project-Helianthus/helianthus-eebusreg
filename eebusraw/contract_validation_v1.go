@@ -215,8 +215,8 @@ func ValidateFeatureDataGetDataV1(
 // ValidateMutationV1 checks a mutation record as a consumer receives it and returns decode_error
 // when the record is inconsistent: identity, binding, timestamps or mode are malformed, the audit
 // trail is empty, longer than 256 entries, not a hash-chained sequence of legal transitions or
-// does not end in State, the rollback before-image differs from Before, or the evidence present does not match
-// what State requires. Secret-classified content returns secret_detected.
+// does not end in State, the rollback before-image differs from Before, or the evidence present
+// does not match what State requires. Secret-classified content returns secret_detected.
 func ValidateMutationV1(mutation MutationV1) *ErrorV1 {
 	if terminal := validateCanonicalDocumentV1(mutation); terminal != nil {
 		return terminal
