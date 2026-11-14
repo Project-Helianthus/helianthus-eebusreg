@@ -2,18 +2,6 @@
   "version": 1,
   "violations": [
     {
-      "path": "admin_v1.go",
-      "symbol": "<file>",
-      "metric": "file_lines",
-      "value": 1713
-    },
-    {
-      "path": "admin_v1.go",
-      "symbol": "<file>",
-      "metric": "functions_per_file",
-      "value": 188
-    },
-    {
       "path": "admin_v1_red_test.go",
       "symbol": "<file>",
       "metric": "file_lines",
