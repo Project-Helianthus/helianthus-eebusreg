@@ -1,6 +1,7 @@
 package eebusruntime
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -304,322 +305,6 @@ type CandidateV1 struct {
 	AssociationComplete bool
 }
 
-const operatorAdminV1RedactedRendering = "admin_v1{redacted}"
-
-var errOperatorAdminV1Serialization = errors.New("AdminV1 owner value cannot be serialized")
-
-func operatorAdminV1Format(state fmt.State, _ rune) {
-	_, _ = io.WriteString(state, operatorAdminV1RedactedRendering)
-}
-func operatorAdminV1String() string               { return operatorAdminV1RedactedRendering }
-func operatorAdminV1MarshalJSON() ([]byte, error) { return nil, errOperatorAdminV1Serialization }
-
-// String returns the redacted rendering, never reducer state.
-func (*operatorAdminV1Reducer) String() string { return operatorAdminV1String() }
-
-// GoString returns the redacted rendering, never reducer state.
-func (*operatorAdminV1Reducer) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (*operatorAdminV1Reducer) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-
-// MarshalJSON always fails; the reducer has no serialized form.
-func (*operatorAdminV1Reducer) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the PartnerHandleV1 contents.
-func (PartnerHandleV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (PartnerHandleV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (PartnerHandleV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: a PartnerHandleV1 is an in-process value with no serialized form.
-func (PartnerHandleV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the ObservationHandleV1 contents.
-func (ObservationHandleV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (ObservationHandleV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (ObservationHandleV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-
-// MarshalJSON always fails: an ObservationHandleV1 is an in-process value with no serialized form.
-func (ObservationHandleV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the SelectionHandleV1 contents.
-func (SelectionHandleV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (SelectionHandleV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (SelectionHandleV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-
-// MarshalJSON always fails: a SelectionHandleV1 is an in-process value with no serialized form.
-func (SelectionHandleV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the CandidateHandleV1 contents.
-func (CandidateHandleV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (CandidateHandleV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (CandidateHandleV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-
-// MarshalJSON always fails: a CandidateHandleV1 is an in-process value with no serialized form.
-func (CandidateHandleV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the MutationPreconditionV1 contents.
-func (MutationPreconditionV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (MutationPreconditionV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (MutationPreconditionV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: a MutationPreconditionV1 is an in-process value with no serialized form.
-func (MutationPreconditionV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the AdminSnapshotRequestV1 contents.
-func (AdminSnapshotRequestV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (AdminSnapshotRequestV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (AdminSnapshotRequestV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: an AdminSnapshotRequestV1 is an in-process value with no serialized form.
-func (AdminSnapshotRequestV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the OpenPairingWindowRequestV1 contents.
-func (OpenPairingWindowRequestV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (OpenPairingWindowRequestV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (OpenPairingWindowRequestV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-
-// MarshalJSON always fails: an OpenPairingWindowRequestV1 is an in-process value with no serialized form.
-func (OpenPairingWindowRequestV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the ClosePairingWindowRequestV1 contents.
-func (ClosePairingWindowRequestV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (ClosePairingWindowRequestV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (ClosePairingWindowRequestV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-
-// MarshalJSON always fails: a ClosePairingWindowRequestV1 is an in-process value with no serialized form.
-func (ClosePairingWindowRequestV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the SelectRequestV1 contents.
-func (SelectRequestV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (SelectRequestV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (SelectRequestV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: a SelectRequestV1 is an in-process value with no serialized form.
-func (SelectRequestV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the ConnectRequestV1 contents.
-func (ConnectRequestV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (ConnectRequestV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (ConnectRequestV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: a ConnectRequestV1 is an in-process value with no serialized form.
-func (ConnectRequestV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the ConfirmRequestV1 contents.
-func (ConfirmRequestV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (ConfirmRequestV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (ConfirmRequestV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: a ConfirmRequestV1 is an in-process value with no serialized form.
-func (ConfirmRequestV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the CancelRequestV1 contents.
-func (CancelRequestV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (CancelRequestV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (CancelRequestV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: a CancelRequestV1 is an in-process value with no serialized form.
-func (CancelRequestV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the RetryTrustedRequestV1 contents.
-func (RetryTrustedRequestV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (RetryTrustedRequestV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (RetryTrustedRequestV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: a RetryTrustedRequestV1 is an in-process value with no serialized form.
-func (RetryTrustedRequestV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the UntrustRequestV1 contents.
-func (UntrustRequestV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (UntrustRequestV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (UntrustRequestV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: an UntrustRequestV1 is an in-process value with no serialized form.
-func (UntrustRequestV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the AdminMutationResultV1 contents.
-func (AdminMutationResultV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (AdminMutationResultV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (AdminMutationResultV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: an AdminMutationResultV1 is an in-process value with no serialized form.
-func (AdminMutationResultV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the ConnectResultV1 contents.
-func (ConnectResultV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (ConnectResultV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (ConnectResultV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: a ConnectResultV1 is an in-process value with no serialized form.
-func (ConnectResultV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the AdminSelectionResultV1 contents.
-func (AdminSelectionResultV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (AdminSelectionResultV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (AdminSelectionResultV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-
-// MarshalJSON always fails: an AdminSelectionResultV1 is an in-process value with no serialized form.
-func (AdminSelectionResultV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the AdminSnapshotV1 contents.
-func (AdminSnapshotV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (AdminSnapshotV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (AdminSnapshotV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: an AdminSnapshotV1 is an in-process value with no serialized form.
-func (AdminSnapshotV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the ActiveActionV1 contents.
-func (ActiveActionV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (ActiveActionV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (ActiveActionV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: an ActiveActionV1 is an in-process value with no serialized form.
-func (ActiveActionV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the TrustedPartnerV1 contents.
-func (TrustedPartnerV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (TrustedPartnerV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (TrustedPartnerV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: a TrustedPartnerV1 is an in-process value with no serialized form.
-func (TrustedPartnerV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the ConnectedPartnerV1 contents.
-func (ConnectedPartnerV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (ConnectedPartnerV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (ConnectedPartnerV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-
-// MarshalJSON always fails: a ConnectedPartnerV1 is an in-process value with no serialized form.
-func (ConnectedPartnerV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the DiscoveredPartnerV1 contents.
-func (DiscoveredPartnerV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (DiscoveredPartnerV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (DiscoveredPartnerV1) Format(state fmt.State, verb rune) {
-	operatorAdminV1Format(state, verb)
-}
-
-// MarshalJSON always fails: a DiscoveredPartnerV1 is an in-process value with no serialized form.
-func (DiscoveredPartnerV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
-// String returns the fixed redacted rendering, never the CandidateV1 contents.
-func (CandidateV1) String() string { return operatorAdminV1String() }
-
-// GoString returns the same redacted rendering as String.
-func (CandidateV1) GoString() string { return operatorAdminV1String() }
-
-// Format writes the redacted rendering for every fmt verb and flag.
-func (CandidateV1) Format(state fmt.State, verb rune) { operatorAdminV1Format(state, verb) }
-
-// MarshalJSON always fails: a CandidateV1 is an in-process value with no serialized form.
-func (CandidateV1) MarshalJSON() ([]byte, error) { return operatorAdminV1MarshalJSON() }
-
 type operatorAdminV1TransientPIN struct{ bytes []byte }
 
 func newOperatorAdminV1TransientPIN(value []byte) (operatorAdminV1TransientPIN, bool) {
@@ -817,4 +502,122 @@ type operatorAdminV1Reducer struct {
 	byTarget       map[operatorAdminV1HandleKind]map[string][32]byte
 	replays        map[string]operatorAdminV1Replay
 	replaySequence uint64
+}
+
+type operatorAdminV1Backend interface {
+	snapshotOperatorAdminV1(context.Context) (operatorAdminV1SnapshotFacts, *AdminErrorV1)
+	observeOperatorAdminV1ActiveAction(context.Context, string)
+	openOperatorAdminV1(context.Context, time.Duration) (operatorAdminV1Transition, *AdminErrorV1)
+	closeOperatorAdminV1(context.Context) (operatorAdminV1Transition, *AdminErrorV1)
+	selectOperatorAdminV1(context.Context, string, string) (string, operatorAdminV1Transition, *AdminErrorV1)
+	connectOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
+	connectOperatorAdminV1WithPIN(context.Context, string, operatorAdminV1PINProvider) (operatorAdminV1Transition, *AdminErrorV1)
+	confirmOperatorAdminV1(context.Context, string, string) (operatorAdminV1Transition, *AdminErrorV1)
+	cancelOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
+	retryTrustedOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
+	untrustOperatorAdminV1(context.Context, string) (operatorAdminV1Transition, *AdminErrorV1)
+}
+
+type operatorAdminV1BackendSlot struct {
+	mu      sync.RWMutex
+	backend operatorAdminV1Backend
+}
+
+func (slot *operatorAdminV1BackendSlot) attach(backend operatorAdminV1Backend) {
+	slot.mu.Lock()
+	slot.backend = backend
+	slot.mu.Unlock()
+}
+
+func (slot *operatorAdminV1BackendSlot) detach(backend operatorAdminV1Backend) {
+	slot.mu.Lock()
+	if slot.backend == backend {
+		slot.backend = nil
+	}
+	slot.mu.Unlock()
+}
+
+func (slot *operatorAdminV1BackendSlot) current() operatorAdminV1Backend {
+	if slot == nil {
+		return nil
+	}
+	slot.mu.RLock()
+	defer slot.mu.RUnlock()
+	return slot.backend
+}
+
+func (slot *operatorAdminV1BackendSlot) snapshotOperatorAdminV1(ctx context.Context) (operatorAdminV1SnapshotFacts, *AdminErrorV1) {
+	if backend := slot.current(); backend != nil {
+		return backend.snapshotOperatorAdminV1(ctx)
+	}
+	return operatorAdminV1SnapshotFacts{}, newAdminBoundaryUnavailableV1()
+}
+
+func (slot *operatorAdminV1BackendSlot) observeOperatorAdminV1ActiveAction(ctx context.Context, actionID string) {
+	if backend := slot.current(); backend != nil {
+		backend.observeOperatorAdminV1ActiveAction(ctx, actionID)
+	}
+}
+
+func (slot *operatorAdminV1BackendSlot) openOperatorAdminV1(ctx context.Context, duration time.Duration) (operatorAdminV1Transition, *AdminErrorV1) {
+	if backend := slot.current(); backend != nil {
+		return backend.openOperatorAdminV1(ctx, duration)
+	}
+	return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+}
+
+func (slot *operatorAdminV1BackendSlot) closeOperatorAdminV1(ctx context.Context) (operatorAdminV1Transition, *AdminErrorV1) {
+	if backend := slot.current(); backend != nil {
+		return backend.closeOperatorAdminV1(ctx)
+	}
+	return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+}
+
+func (slot *operatorAdminV1BackendSlot) selectOperatorAdminV1(ctx context.Context, reference, ski string) (string, operatorAdminV1Transition, *AdminErrorV1) {
+	if backend := slot.current(); backend != nil {
+		return backend.selectOperatorAdminV1(ctx, reference, ski)
+	}
+	return "", operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+}
+
+func (slot *operatorAdminV1BackendSlot) connectOperatorAdminV1(ctx context.Context, reference string) (operatorAdminV1Transition, *AdminErrorV1) {
+	if backend := slot.current(); backend != nil {
+		return backend.connectOperatorAdminV1(ctx, reference)
+	}
+	return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+}
+
+func (slot *operatorAdminV1BackendSlot) connectOperatorAdminV1WithPIN(ctx context.Context, reference string, provider operatorAdminV1PINProvider) (operatorAdminV1Transition, *AdminErrorV1) {
+	if backend := slot.current(); backend != nil && provider != nil {
+		return backend.connectOperatorAdminV1WithPIN(ctx, reference, provider)
+	}
+	return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+}
+
+func (slot *operatorAdminV1BackendSlot) confirmOperatorAdminV1(ctx context.Context, reference, ski string) (operatorAdminV1Transition, *AdminErrorV1) {
+	if backend := slot.current(); backend != nil {
+		return backend.confirmOperatorAdminV1(ctx, reference, ski)
+	}
+	return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+}
+
+func (slot *operatorAdminV1BackendSlot) cancelOperatorAdminV1(ctx context.Context, reference string) (operatorAdminV1Transition, *AdminErrorV1) {
+	if backend := slot.current(); backend != nil {
+		return backend.cancelOperatorAdminV1(ctx, reference)
+	}
+	return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+}
+
+func (slot *operatorAdminV1BackendSlot) retryTrustedOperatorAdminV1(ctx context.Context, reference string) (operatorAdminV1Transition, *AdminErrorV1) {
+	if backend := slot.current(); backend != nil {
+		return backend.retryTrustedOperatorAdminV1(ctx, reference)
+	}
+	return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
+}
+
+func (slot *operatorAdminV1BackendSlot) untrustOperatorAdminV1(ctx context.Context, reference string) (operatorAdminV1Transition, *AdminErrorV1) {
+	if backend := slot.current(); backend != nil {
+		return backend.untrustOperatorAdminV1(ctx, reference)
+	}
+	return operatorAdminV1Transition{}, newAdminBoundaryUnavailableV1()
 }

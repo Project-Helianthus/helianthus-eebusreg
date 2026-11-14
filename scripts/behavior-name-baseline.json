@@ -352,7 +352,17 @@
       "category": "filename"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_rendering.go",
+      "symbol": "admin_v1_rendering.go",
+      "category": "filename"
+    },
+    {
+      "path": "admin_v1_request_rendering.go",
+      "symbol": "admin_v1_request_rendering.go",
+      "category": "filename"
+    },
+    {
+      "path": "admin_v1_types.go",
       "symbol": "cancelOperatorAdminV1",
       "category": "identifier"
     },
@@ -362,22 +372,22 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "closeOperatorAdminV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "confirmOperatorAdminV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "connectOperatorAdminV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "connectOperatorAdminV1WithPIN",
       "category": "identifier"
     },
@@ -392,7 +402,7 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1_types.go",
+      "path": "admin_v1_rendering.go",
       "symbol": "errOperatorAdminV1Serialization",
       "category": "identifier"
     },
@@ -417,12 +427,12 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "observeOperatorAdminV1ActiveAction",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "openOperatorAdminV1",
       "category": "identifier"
     },
@@ -432,12 +442,12 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1Backend",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "operatorAdminV1BackendSlot",
       "category": "identifier"
     },
@@ -482,7 +492,7 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1_types.go",
+      "path": "admin_v1_rendering.go",
       "symbol": "operatorAdminV1Format",
       "category": "identifier"
     },
@@ -507,7 +517,7 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1_types.go",
+      "path": "admin_v1_rendering.go",
       "symbol": "operatorAdminV1MarshalJSON",
       "category": "identifier"
     },
@@ -562,7 +572,7 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1_types.go",
+      "path": "admin_v1_rendering.go",
       "symbol": "operatorAdminV1RedactedRendering",
       "category": "identifier"
     },
@@ -592,7 +602,7 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1_types.go",
+      "path": "admin_v1_rendering.go",
       "symbol": "operatorAdminV1String",
       "category": "identifier"
     },
@@ -627,22 +637,22 @@
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "retryTrustedOperatorAdminV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "selectOperatorAdminV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "snapshotOperatorAdminV1",
       "category": "identifier"
     },
     {
-      "path": "admin_v1.go",
+      "path": "admin_v1_types.go",
       "symbol": "untrustOperatorAdminV1",
       "category": "identifier"
     },
