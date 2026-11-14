@@ -1247,12 +1247,12 @@
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "boolPointerV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "boundedStringV1",
       "category": "identifier"
     },
@@ -1262,7 +1262,7 @@
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "contractValidationErrorV1",
       "category": "identifier"
     },
@@ -1272,17 +1272,22 @@
       "category": "filename"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
+      "symbol": "contract_validation_rules_v1.go",
+      "category": "filename"
+    },
+    {
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "hashPointersEqualV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "hashV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "idempotencyKeyV1",
       "category": "identifier"
     },
@@ -1302,72 +1307,72 @@
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "opaqueReferenceV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "optionalBoundedStringV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "runtimeBindingV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "timestampV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "typedScalarV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "typedValueNonNullV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "typedValuesEqualV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "validChangeabilityV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "validErrorCodeV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "validInitialMutationStateV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "validMutationStateV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "validMutationTransitionV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "validProtocolClassifierV1",
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "validSourceLayerV1",
       "category": "identifier"
     },
@@ -1382,7 +1387,7 @@
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "validateCanonicalDocumentV1",
       "category": "identifier"
     },
@@ -1452,7 +1457,7 @@
       "category": "identifier"
     },
     {
-      "path": "eebusraw/contract_validation_v1.go",
+      "path": "eebusraw/contract_validation_rules_v1.go",
       "symbol": "validateRollbackBeforeV1",
       "category": "identifier"
     },
@@ -10267,12 +10272,12 @@
       "category": "identifier"
     },
     {
-      "path": "raw_snapshot_v1.go",
+      "path": "raw_snapshot_value_v1.go",
       "symbol": "appendOpaqueSetV1",
       "category": "identifier"
     },
     {
-      "path": "raw_snapshot_v1.go",
+      "path": "raw_snapshot_value_v1.go",
       "symbol": "canonicalOpaquePointerV1",
       "category": "identifier"
     },
@@ -10287,7 +10292,7 @@
       "category": "identifier"
     },
     {
-      "path": "raw_snapshot_v1.go",
+      "path": "raw_snapshot_value_v1.go",
       "symbol": "cloneOpaquePointerV1",
       "category": "identifier"
     },
@@ -10302,7 +10307,7 @@
       "category": "identifier"
     },
     {
-      "path": "raw_snapshot_v1.go",
+      "path": "raw_snapshot_value_v1.go",
       "symbol": "containsSecretJSONV1",
       "category": "identifier"
     },
@@ -10422,12 +10427,12 @@
       "category": "identifier"
     },
     {
-      "path": "raw_snapshot_v1.go",
+      "path": "raw_snapshot_value_v1.go",
       "symbol": "validateSnapshotOpaqueV1",
       "category": "identifier"
     },
     {
-      "path": "raw_snapshot_v1.go",
+      "path": "raw_snapshot_value_v1.go",
       "symbol": "validateSnapshotSecretsV1",
       "category": "identifier"
     },
