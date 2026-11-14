@@ -492,16 +492,16 @@ func runtimeDevicesForRemoteDevice(remote spineapi.DeviceRemoteInterface, ski st
 		return nil, nil
 	}
 	address := remote.Address()
-	deviceType := remote.DeviceType()
-	if address == nil || deviceType == nil {
-		return nil, nil
-	}
-	deviceID, err := runtimeIdentity("device", ski, remote.Address())
+	deviceID, err := runtimeIdentity("device", ski, address)
 	if err != nil {
 		return nil, err
 	}
-	device := runtimeDeviceObservation{
-		ID: deviceID, SKI: ski, Address: string(*address), Type: string(*deviceType),
+	device := runtimeDeviceObservation{ID: deviceID, SKI: ski}
+	if address != nil {
+		device.Address = string(*address)
+	}
+	if deviceType := remote.DeviceType(); deviceType != nil {
+		device.Type = string(*deviceType)
 	}
 	destination := remote.DestinationData()
 	if description := destination.DeviceDescription; description != nil {
