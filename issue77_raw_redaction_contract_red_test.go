@@ -39,9 +39,9 @@ func TestIssue77InitialV1PublicValueSurfaceIsExact(t *testing.T) {
 		{ServiceV1{}, []string{"SKI:ski", "SHIPID:ship_id", "Kind:kind", "Visible:visible", "Paired:paired", "Name:name", "Identifier:identifier", "Brand:brand", "Type:type", "Model:model", "SecondaryDigest:secondary_digest", "Opaque:opaque"}},
 		{SessionV1{}, []string{"ID:id", "RemoteSKI:remote_ski", "State:state", "Since:since", "Opaque:opaque"}},
 		{DeviceV1{}, []string{"SKI:ski", "SHIPID:ship_id", "Address:address", "Type:type", "Description:description", "Metadata:metadata", "SecondaryDigest:secondary_digest", "Opaque:opaque"}},
-		{EntityV1{}, []string{"DeviceAddress:device_address", "EntityAddress:entity_address", "Type:type", "Description:description", "SecondaryDigest:secondary_digest", "Opaque:opaque"}},
+		{EntityV1{}, []string{"DeviceAddress:device_address", "EntityAddress:entity_address", "ParentEntityAddress:parent_entity_address", "Type:type", "Description:description", "SecondaryDigest:secondary_digest", "Opaque:opaque"}},
 		{FeatureV1{}, []string{"DeviceAddress:device_address", "EntityAddress:entity_address", "FeatureAddress:feature_address", "Type:type", "Role:role", "Description:description", "SecondaryDigest:secondary_digest", "Opaque:opaque"}},
-		{UseCaseV1{}, []string{"ContextAddress:context_address", "Name:name", "Actor:actor", "ResolvedRole:resolved_role", "Scenarios:scenarios", "Version:version", "Availability:availability", "DocumentSubrevision:document_subrevision", "SecondaryDigest:secondary_digest", "Opaque:opaque"}},
+		{UseCaseV1{}, []string{"ContextAddress:context_address", "DeviceAddress:device_address", "EntityAddress:entity_address", "FeatureAddress:feature_address", "Name:name", "Actor:actor", "ResolvedRole:resolved_role", "Scenarios:scenarios", "Version:version", "Availability:availability", "DocumentSubrevision:document_subrevision", "SecondaryDigest:secondary_digest", "Opaque:opaque"}},
 		{OpaqueObservationV1{}, []string{"Path:path", "Source:source", "Value:value"}},
 		{OpaqueValueV1{}, []string{"Scalar:scalar", "Array:array", "Object:object"}},
 		{OpaqueScalarV1{}, []string{"Null:null", "Boolean:boolean", "Integer:integer", "String:string"}},
@@ -50,9 +50,9 @@ func TestIssue77InitialV1PublicValueSurfaceIsExact(t *testing.T) {
 		{RedactedServiceV1{}, []string{"ID:id", "Kind:kind", "Visible:visible", "Paired:paired"}},
 		{RedactedSessionV1{}, []string{"ID:id", "Remote:remote", "State:state", "Since:since"}},
 		{RedactedDeviceV1{}, []string{"ID:id", "Entities:entities", "UseCaseClaims:usecase_claims"}},
-		{RedactedEntityV1{}, []string{"ID:id", "Features:features"}},
+		{RedactedEntityV1{}, []string{"ID:id", "ParentEntity:parent_entity", "Features:features"}},
 		{RedactedFeatureV1{}, []string{"ID:id", "Role:role"}},
-		{RedactedUseCaseV1{}, []string{"ID:id"}},
+		{RedactedUseCaseV1{}, []string{"ID:id", "Scope:scope"}},
 	} {
 		assertIssue77Fields(t, reflect.TypeOf(check.value), check.fields)
 	}
@@ -75,8 +75,12 @@ func TestIssue77InitialV1PublicValueSurfaceIsExact(t *testing.T) {
 	assertIssue77Type[*[]OpaqueObservationV1](t, service.Opaque)
 	assertIssue77Type[*string](t, device.Description)
 	assertIssue77Type[*MetadataV1](t, device.Metadata)
+	assertIssue77Type[*string](t, entity.ParentEntityAddress)
 	assertIssue77Type[*string](t, entity.Description)
 	assertIssue77Type[*string](t, feature.Description)
+	assertIssue77Type[*string](t, usecase.DeviceAddress)
+	assertIssue77Type[*string](t, usecase.EntityAddress)
+	assertIssue77Type[*string](t, usecase.FeatureAddress)
 	assertIssue77Type[*string](t, usecase.ResolvedRole)
 	assertIssue77Type[*[]string](t, usecase.Scenarios)
 	assertIssue77Type[*string](t, usecase.Version)

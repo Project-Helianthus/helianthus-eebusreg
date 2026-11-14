@@ -1,0 +1,152 @@
+{
+  "meta": {
+    "contract": "helianthus.eebus.runtime.raw-snapshot.v1",
+    "runtime": {
+      "kind": "peer",
+      "masked": "[redacted]",
+      "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+    },
+    "local_ski": "6666666666666666666666666666666666666666",
+    "mask_tier": "raw",
+    "captured_at": "2026-01-02T03:04:05Z",
+    "data_timestamp": "2026-01-02T03:04:05Z"
+  },
+  "status": {
+    "state": "ready"
+  },
+  "pairing": [
+    {
+      "remote_ski": "4444444444444444444444444444444444444444",
+      "state": "paired",
+      "since": "2026-01-02T03:04:05Z"
+    },
+    {
+      "remote_ski": "5555555555555555555555555555555555555555",
+      "state": "paired",
+      "since": "2026-01-02T03:04:05Z"
+    }
+  ],
+  "services": [
+    {
+      "ski": "4444444444444444444444444444444444444444",
+      "ship_id": "synthetic-ship-0002",
+      "kind": "remote",
+      "visible": true,
+      "paired": true
+    },
+    {
+      "ski": "5555555555555555555555555555555555555555",
+      "ship_id": "synthetic-ship-0001",
+      "kind": "remote",
+      "visible": true,
+      "paired": true
+    }
+  ],
+  "sessions": [
+    {
+      "id": "session:synthetic-ship-0001:1",
+      "remote_ski": "5555555555555555555555555555555555555555",
+      "state": "connected",
+      "since": "2026-01-02T03:04:05Z"
+    }
+  ],
+  "devices": [
+    {
+      "ski": "5555555555555555555555555555555555555555",
+      "ship_id": "synthetic-ship-0001",
+      "address": "d:_n:synthetic_controller",
+      "type": "EnergyManagementSystem"
+    },
+    {
+      "ski": "4444444444444444444444444444444444444444",
+      "ship_id": "synthetic-ship-0002",
+      "address": "d:_n:synthetic_peer",
+      "type": "Generic"
+    }
+  ],
+  "entities": [
+    {
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1,1]:",
+      "parent_entity_address": "d:_n:synthetic_controller:[1]:",
+      "type": "HeatingZone"
+    },
+    {
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1]:",
+      "type": "HeatingCircuit"
+    },
+    {
+      "device_address": "d:_n:synthetic_peer",
+      "entity_address": "d:_n:synthetic_peer:[1]:",
+      "type": "Generic"
+    }
+  ],
+  "features": [
+    {
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1,1]:",
+      "feature_address": "d:_n:synthetic_controller:[1,1]:0",
+      "type": "Setpoint",
+      "role": "server"
+    },
+    {
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1]:",
+      "feature_address": "d:_n:synthetic_controller:[1]:0",
+      "type": "HVAC",
+      "role": "server"
+    },
+    {
+      "device_address": "d:_n:synthetic_peer",
+      "entity_address": "d:_n:synthetic_peer:[1]:",
+      "feature_address": "d:_n:synthetic_peer:[1]:0",
+      "type": "Measurement",
+      "role": "client"
+    }
+  ],
+  "use_cases": [
+    {
+      "context_address": "d:_n:synthetic_controller:[1,1]:",
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1,1]:",
+      "name": "configurationOfRoomHeatingTemperature",
+      "actor": "HeatingZone",
+      "scenarios": ["1", "2"],
+      "version": "1.0.0",
+      "availability": true,
+      "document_subrevision": "release"
+    },
+    {
+      "context_address": "d:_n:synthetic_controller:[1]:0",
+      "device_address": "d:_n:synthetic_controller",
+      "entity_address": "d:_n:synthetic_controller:[1]:",
+      "feature_address": "d:_n:synthetic_controller:[1]:0",
+      "name": "monitoringOfRoomTemperature",
+      "actor": "HeatingCircuit",
+      "resolved_role": "server",
+      "scenarios": ["1", "2"],
+      "version": "1.0.0",
+      "availability": true,
+      "document_subrevision": "release"
+    },
+    {
+      "context_address": "d:_n:synthetic_controller:[]:",
+      "name": "monitoringOfGridConnectionPoint",
+      "actor": "EnergyManagementSystem",
+      "scenarios": ["1"],
+      "version": "1.0.0"
+    },
+    {
+      "context_address": "d:_n:synthetic_peer:[]:",
+      "device_address": "d:_n:synthetic_peer",
+      "name": "monitoringOfPowerConsumption",
+      "actor": "HeatPump",
+      "scenarios": ["1", "2"],
+      "version": "1.0.0",
+      "availability": true,
+      "document_subrevision": "release"
+    }
+  ],
+  "opaque": []
+}

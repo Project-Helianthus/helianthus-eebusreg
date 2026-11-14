@@ -19,7 +19,8 @@ import (
 // Identities become eebusraw.RedactedID values, pairing keeps only its states, feature roles
 // other than client and server become unspecified, and native addresses, metadata and opaque
 // observations are dropped. Devices nest their entities, features and use-case claims, and each
-// top-level entity, feature and use case must be referenced exactly once through them. Limits:
+// top-level entity, feature and scoped use case must be referenced exactly once through them; the
+// entity parent and the claim scope follow the containment rule of NativeSnapshotV2. Limits:
 // 256 services, 1024 devices, 4096 entities, 16384 features and 4096 use cases. Build it with
 // BuildRedactedSnapshotV1. String, GoString and Format print a fixed placeholder, so formatting
 // never reveals the content.
@@ -67,10 +68,11 @@ type RedactedSessionV1 struct {
 	Since  time.Time              `json:"since"`
 }
 
-// RedactedDeviceV1 is one remote device with its masked identity, the entities addressed under
-// it, and the use cases whose context address is the device address or begins with it and a
-// colon. ID has kind device and is derived from the device identity basis described by
-// NativeIdentityBasis, never from the SKI, so it survives a certificate replacement.
+// RedactedDeviceV1 is one remote device with its masked identity, every entity of the device at
+// any nesting depth, and the use-case claims whose scope is the device, one of its entities or one
+// of their features. The context address of a claim never places it. ID has kind device and is
+// derived from the device identity basis described by NativeIdentityBasis, never from the SKI, so
+// it survives a certificate replacement.
 type RedactedDeviceV1 struct {
 	ID            eebusraw.RedactedID `json:"id"`
 	Entities      []RedactedEntityV1  `json:"entities"`
@@ -79,10 +81,12 @@ type RedactedDeviceV1 struct {
 
 // RedactedEntityV1 is one entity with its masked identity and the features addressed under it;
 // the same value appears at top level and inside its device. ID has kind entity and is derived from
-// the basis of its device and its entity address.
+// the basis of its device and its entity address. ParentEntity is the identifier of the enclosing
+// entity of the same device and nil for a top-level entity; parent chains end.
 type RedactedEntityV1 struct {
-	ID       eebusraw.RedactedID `json:"id"`
-	Features []RedactedFeatureV1 `json:"features"`
+	ID           eebusraw.RedactedID  `json:"id"`
+	ParentEntity *eebusraw.RedactedID `json:"parent_entity,omitempty"`
+	Features     []RedactedFeatureV1  `json:"features"`
 }
 
 // RedactedFeatureV1 is one feature with its masked identity and its role reduced to client,
@@ -93,16 +97,18 @@ type RedactedFeatureV1 struct {
 	Role FeatureRoleV1       `json:"role"`
 }
 
-// RedactedUseCaseV1 is one use-case claim reduced to its masked identity.
+// RedactedUseCaseV1 is one use-case claim reduced to its masked identity. Scope is the identifier
+// of the device, entity or feature the claim is scoped to, and nil when the raw claim reports no
+// scope; a claim without a scope appears only at top level.
 type RedactedUseCaseV1 struct {
-	ID eebusraw.RedactedID `json:"id"`
+	ID    eebusraw.RedactedID  `json:"id"`
+	Scope *eebusraw.RedactedID `json:"scope,omitempty"`
 }
 
 // BuildRedactedSnapshotV1 validates source as NewSnapshotV1 does, masks it, sorts every
 // collection by masked identity, computes Meta.DataHash and validates the result. It fails, and
-// never returns a partial result, when the source is invalid or a relationship cannot be
-// represented, such as an entity or use case that matches no device, an entity or feature whose
-// device address names more than one device, or two devices that share one identity basis.
+// never returns a partial result, when the source is invalid, including a dangling, duplicate or
+// ambiguous containment endpoint, or when two devices share one identity basis.
 func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 	raw, err := NewSnapshotV1(source)
 	if err != nil {
@@ -171,16 +177,22 @@ func BuildRedactedSnapshotV1(source SnapshotV1) (RedactedSnapshotV1, error) {
 }
 
 func buildRedactedGraph(raw SnapshotV1, result *RedactedSnapshotV1) error {
-	bases, ambiguous := redactedDeviceBases(raw.Devices)
-	entitiesByDevice := make(map[string][]RedactedEntityV1, len(raw.Devices))
-	featuresByEntity := make(map[string][]RedactedFeatureV1, len(raw.Entities))
-	useCasesByDevice := make(map[string][]RedactedUseCaseV1, len(raw.Devices))
-	for _, feature := range raw.Features {
-		parent, err := redactedParentBasis(bases, ambiguous, feature.DeviceAddress)
+	bases := make(map[string]spineIdentityBasis, len(raw.Devices))
+	for _, device := range raw.Devices {
+		bases[device.Address] = spineDeviceBasis(device.SHIPID, device.Address)
+	}
+	entityIDs := make(map[spineEntityKey]eebusraw.RedactedID, len(raw.Entities))
+	for _, entity := range raw.Entities {
+		id, err := eebusraw.RedactID(eebusraw.IDKindEntity, bases[entity.DeviceAddress].entity(entity.EntityAddress).preimage())
 		if err != nil {
-			return err
+			return errors.New("redact entity identity")
 		}
-		basis := parent.entity(feature.EntityAddress).feature(feature.FeatureAddress)
+		entityIDs[spineEntityKey{entity.DeviceAddress, entity.EntityAddress}] = id
+	}
+	featureIDs := make(map[spineContainedFeature]eebusraw.RedactedID, len(raw.Features))
+	featuresByEntity := make(map[spineEntityKey][]RedactedFeatureV1, len(raw.Entities))
+	for _, feature := range raw.Features {
+		basis := bases[feature.DeviceAddress].entity(feature.EntityAddress).feature(feature.FeatureAddress)
 		id, err := eebusraw.RedactID(eebusraw.IDKindFeature, basis.preimage())
 		if err != nil {
 			return errors.New("redact feature identity")
@@ -194,48 +206,45 @@ func buildRedactedGraph(raw SnapshotV1, result *RedactedSnapshotV1) error {
 		}
 		value := RedactedFeatureV1{ID: id, Role: role}
 		result.Features = append(result.Features, value)
-		featuresByEntity[feature.DeviceAddress+"\x00"+feature.EntityAddress] =
-			append(featuresByEntity[feature.DeviceAddress+"\x00"+feature.EntityAddress], value)
+		featureIDs[spineContainedFeature{feature.DeviceAddress, feature.EntityAddress, feature.FeatureAddress}] = id
+		key := spineEntityKey{feature.DeviceAddress, feature.EntityAddress}
+		featuresByEntity[key] = append(featuresByEntity[key], value)
 	}
+	entitiesByDevice := make(map[string][]RedactedEntityV1, len(raw.Devices))
 	for _, entity := range raw.Entities {
-		parent, err := redactedParentBasis(bases, ambiguous, entity.DeviceAddress)
-		if err != nil {
-			return err
-		}
-		id, err := eebusraw.RedactID(eebusraw.IDKindEntity, parent.entity(entity.EntityAddress).preimage())
-		if err != nil {
-			return errors.New("redact entity identity")
-		}
-		value := RedactedEntityV1{
-			ID:       id,
-			Features: append([]RedactedFeatureV1(nil), featuresByEntity[entityIdentityV1(entity)]...),
+		key := spineEntityKey{entity.DeviceAddress, entity.EntityAddress}
+		value := RedactedEntityV1{ID: entityIDs[key], Features: append([]RedactedFeatureV1(nil), featuresByEntity[key]...)}
+		if entity.ParentEntityAddress != nil {
+			parent := entityIDs[spineEntityKey{entity.DeviceAddress, *entity.ParentEntityAddress}]
+			value.ParentEntity = &parent
 		}
 		sortRedactedFeaturesV1(value.Features)
 		result.Entities = append(result.Entities, value)
 		entitiesByDevice[entity.DeviceAddress] = append(entitiesByDevice[entity.DeviceAddress], value)
 	}
+	deviceIDs := make(map[string]eebusraw.RedactedID, len(raw.Devices))
+	for _, device := range raw.Devices {
+		id, err := eebusraw.RedactID(eebusraw.IDKindDevice, bases[device.Address].preimage())
+		if err != nil {
+			return errors.New("redact device identity")
+		}
+		deviceIDs[device.Address] = id
+	}
+	useCasesByDevice := make(map[string][]RedactedUseCaseV1, len(raw.Devices))
 	for _, useCase := range raw.UseCases {
 		id, err := eebusraw.RedactID(eebusraw.IDKindPeer, useCaseIdentityV1(useCase))
 		if err != nil {
 			return errors.New("redact use-case identity")
 		}
-		value := RedactedUseCaseV1{ID: id}
-		result.UseCases = append(result.UseCases, value)
-		for _, device := range raw.Devices {
-			if useCase.ContextAddress == device.Address ||
-				strings.HasPrefix(useCase.ContextAddress, device.Address+":") {
-				useCasesByDevice[device.Address] = append(useCasesByDevice[device.Address], value)
-				break
-			}
+		value := RedactedUseCaseV1{ID: id, Scope: redactedClaimScope(useCase, deviceIDs, entityIDs, featureIDs)}
+		if useCase.DeviceAddress != nil {
+			useCasesByDevice[*useCase.DeviceAddress] = append(useCasesByDevice[*useCase.DeviceAddress], value)
 		}
+		result.UseCases = append(result.UseCases, value)
 	}
 	for _, device := range raw.Devices {
-		id, err := eebusraw.RedactID(eebusraw.IDKindDevice, spineDeviceBasis(device.SHIPID, device.Address).preimage())
-		if err != nil {
-			return errors.New("redact device identity")
-		}
 		value := RedactedDeviceV1{
-			ID:            id,
+			ID:            deviceIDs[device.Address],
 			Entities:      append([]RedactedEntityV1(nil), entitiesByDevice[device.Address]...),
 			UseCaseClaims: append([]RedactedUseCaseV1(nil), useCasesByDevice[device.Address]...),
 		}
@@ -244,6 +253,152 @@ func buildRedactedGraph(raw SnapshotV1, result *RedactedSnapshotV1) error {
 		result.Devices = append(result.Devices, value)
 	}
 	return nil
+}
+
+func redactedClaimScope(useCase UseCaseV1, devices map[string]eebusraw.RedactedID, entities map[spineEntityKey]eebusraw.RedactedID, features map[spineContainedFeature]eebusraw.RedactedID) *eebusraw.RedactedID {
+	if useCase.DeviceAddress == nil {
+		return nil
+	}
+	device := *useCase.DeviceAddress
+	scope := devices[device]
+	if useCase.FeatureAddress != nil {
+		scope = features[spineContainedFeature{device, *useCase.EntityAddress, *useCase.FeatureAddress}]
+	} else if useCase.EntityAddress != nil {
+		scope = entities[spineEntityKey{device, *useCase.EntityAddress}]
+	}
+	return &scope
+}
+
+type spineContainedEntity struct {
+	device, entity string
+	parent         *string
+}
+
+type spineEntityKey struct{ device, entity string }
+
+type spineContainedFeature struct{ device, entity, feature string }
+
+type spineContainedClaim struct {
+	device, identity string
+	entity, feature  *string
+}
+
+type spineContainment struct {
+	devices  []string
+	entities []spineContainedEntity
+	features []spineContainedFeature
+	claims   []spineContainedClaim
+}
+
+type spineClaimKey struct {
+	device, identity, entity, feature string
+	entitySet, featureSet             bool
+}
+
+func spineClaimIdentity(name, actor string, version, subrevision *string) string {
+	encoded, _ := json.Marshal([]*string{&name, &actor, version, subrevision})
+	return string(encoded)
+}
+
+// validateSpineContainment applies the containment rule of NativeSnapshotV2 to a graph of native
+// addresses: device addresses are unique, every entity names an existing device and is unique by
+// device and entity address, a parent is another entity of the same device and parent chains end,
+// every feature names an existing entity and is unique, and every use-case claim scope resolves
+// and is unique together with the claim identity.
+func validateSpineContainment(graph spineContainment) error {
+	devices := make(map[string]struct{}, len(graph.devices))
+	for _, device := range graph.devices {
+		if _, found := devices[device]; found {
+			return errors.New("device address is ambiguous")
+		}
+		devices[device] = struct{}{}
+	}
+	parents := make(map[spineEntityKey]*string, len(graph.entities))
+	for _, entity := range graph.entities {
+		if _, found := devices[entity.device]; !found {
+			return errors.New("entity references a missing device")
+		}
+		key := spineEntityKey{entity.device, entity.entity}
+		if _, found := parents[key]; found {
+			return errors.New("duplicate entity")
+		}
+		parents[key] = entity.parent
+	}
+	if err := validateSpineParents(parents); err != nil {
+		return err
+	}
+	features := make(map[spineContainedFeature]struct{}, len(graph.features))
+	for _, feature := range graph.features {
+		if _, found := parents[spineEntityKey{feature.device, feature.entity}]; !found {
+			return errors.New("feature references a missing entity")
+		}
+		if _, found := features[feature]; found {
+			return errors.New("duplicate feature")
+		}
+		features[feature] = struct{}{}
+	}
+	claims := make(map[spineClaimKey]struct{}, len(graph.claims))
+	for _, claim := range graph.claims {
+		if !spineClaimResolves(claim, devices, parents, features) {
+			return errors.New("use-case claim references a missing scope")
+		}
+		key := spineClaimKey{device: claim.device, identity: claim.identity, entitySet: claim.entity != nil, featureSet: claim.feature != nil}
+		key.entity, key.feature = optionalStringV1(claim.entity), optionalStringV1(claim.feature)
+		if _, found := claims[key]; found {
+			return errors.New("duplicate use-case claim")
+		}
+		claims[key] = struct{}{}
+	}
+	return nil
+}
+
+func validateSpineParents(parents map[spineEntityKey]*string) error {
+	for key, parent := range parents {
+		if parent == nil {
+			continue
+		}
+		if _, found := parents[spineEntityKey{key.device, *parent}]; !found || *parent == key.entity {
+			return errors.New("entity references a missing parent entity")
+		}
+	}
+	const visiting, visited = 1, 2
+	state := make(map[spineEntityKey]uint8, len(parents))
+	for key := range parents {
+		var path []spineEntityKey
+		for current := key; state[current] != visited; {
+			if state[current] == visiting {
+				return errors.New("entity containment has a cycle")
+			}
+			state[current] = visiting
+			path = append(path, current)
+			parent := parents[current]
+			if parent == nil {
+				break
+			}
+			current = spineEntityKey{current.device, *parent}
+		}
+		for _, value := range path {
+			state[value] = visited
+		}
+	}
+	return nil
+}
+
+func spineClaimResolves(claim spineContainedClaim, devices map[string]struct{}, entities map[spineEntityKey]*string, features map[spineContainedFeature]struct{}) bool {
+	if _, found := devices[claim.device]; !found {
+		return false
+	}
+	if claim.entity == nil {
+		return claim.feature == nil
+	}
+	if _, found := entities[spineEntityKey{claim.device, *claim.entity}]; !found {
+		return false
+	}
+	if claim.feature == nil {
+		return true
+	}
+	_, found := features[spineContainedFeature{claim.device, *claim.entity, *claim.feature}]
+	return found
 }
 
 const (
@@ -290,30 +445,6 @@ func (basis spineIdentityBasis) preimage() string {
 	}
 	encoded, _ := json.Marshal(members)
 	return string(encoded)
-}
-
-func redactedDeviceBases(devices []DeviceV1) (map[string]spineIdentityBasis, map[string]struct{}) {
-	bases := make(map[string]spineIdentityBasis, len(devices))
-	ambiguous := make(map[string]struct{})
-	for _, device := range devices {
-		if _, found := bases[device.Address]; found {
-			ambiguous[device.Address] = struct{}{}
-			continue
-		}
-		bases[device.Address] = spineDeviceBasis(device.SHIPID, device.Address)
-	}
-	return bases, ambiguous
-}
-
-func redactedParentBasis(bases map[string]spineIdentityBasis, ambiguous map[string]struct{}, address string) (spineIdentityBasis, error) {
-	if _, found := ambiguous[address]; found {
-		return spineIdentityBasis{}, errors.New("redacted node matches more than one device")
-	}
-	basis, found := bases[address]
-	if !found {
-		return spineIdentityBasis{}, errors.New("redacted node matches no device")
-	}
-	return basis, nil
 }
 
 // MarshalJSON validates the snapshot, including its data hash, and writes it as canonical JSON
@@ -365,7 +496,8 @@ func (snapshot *RedactedSnapshotV1) UnmarshalJSON(data []byte) error {
 }
 
 // Validate checks the contract and mask tier, the kind of every masked identity, the closed state
-// values, uniqueness and collection limits, the device graph with matching feature roles, and that
+// values, uniqueness and collection limits, the device graph with matching feature roles, entity
+// parents and use-case scopes under the containment rule of NativeSnapshotV2, and that
 // Meta.DataHash matches the content. It reports the first violation.
 func (snapshot RedactedSnapshotV1) Validate() error {
 	if snapshot.Meta.Contract != SnapshotContractV1 {
@@ -513,8 +645,12 @@ func validateRedactedGraphV1(snapshot RedactedSnapshotV1) error {
 		}
 		for _, useCase := range device.UseCaseClaims {
 			key := redactedIdentityKeyV1(useCase.ID)
-			if _, exists := useCases[key]; !exists {
+			top, exists := useCases[key]
+			if !exists || redactedOptionalIdentityKey(top.Scope) != redactedOptionalIdentityKey(useCase.Scope) {
 				return errors.New("redacted device contains an invalid use-case relationship")
+			}
+			if useCase.Scope == nil {
+				return errors.New("redacted use-case claim without a scope is placed under a device")
 			}
 			if _, duplicate := referencedUseCases[key]; duplicate {
 				return errors.New("redacted use-case relationship is duplicated")
@@ -522,12 +658,54 @@ func validateRedactedGraphV1(snapshot RedactedSnapshotV1) error {
 			referencedUseCases[key] = struct{}{}
 		}
 	}
-	if len(referencedEntities) != len(entities) ||
-		len(referencedFeatures) != len(features) ||
-		len(referencedUseCases) != len(useCases) {
+	for _, useCase := range useCases {
+		if _, referenced := referencedUseCases[redactedIdentityKeyV1(useCase.ID)]; referenced != (useCase.Scope != nil) {
+			return errors.New("redacted graph contains an unreferenced relationship")
+		}
+	}
+	if len(referencedEntities) != len(entities) || len(referencedFeatures) != len(features) {
 		return errors.New("redacted graph contains an unreferenced relationship")
 	}
-	return nil
+	return validateSpineContainment(redactedContainmentGraph(snapshot.Devices))
+}
+
+func redactedContainmentGraph(devices []RedactedDeviceV1) spineContainment {
+	var graph spineContainment
+	for _, device := range devices {
+		deviceKey := redactedIdentityKeyV1(device.ID)
+		graph.devices = append(graph.devices, deviceKey)
+		owners := make(map[string]string)
+		for _, entity := range device.Entities {
+			entityKey := redactedIdentityKeyV1(entity.ID)
+			var parent *string
+			if entity.ParentEntity != nil {
+				value := redactedIdentityKeyV1(*entity.ParentEntity)
+				parent = &value
+			}
+			graph.entities = append(graph.entities, spineContainedEntity{device: deviceKey, entity: entityKey, parent: parent})
+			for _, feature := range entity.Features {
+				featureKey := redactedIdentityKeyV1(feature.ID)
+				owners[featureKey] = entityKey
+				graph.features = append(graph.features, spineContainedFeature{device: deviceKey, entity: entityKey, feature: featureKey})
+			}
+		}
+		for _, useCase := range device.UseCaseClaims {
+			claim := spineContainedClaim{device: deviceKey, identity: redactedIdentityKeyV1(useCase.ID)}
+			scope := redactedOptionalIdentityKey(useCase.Scope)
+			switch {
+			case scope == deviceKey:
+			case useCase.Scope != nil && useCase.Scope.Kind == eebusraw.IDKindFeature:
+				if owner, found := owners[scope]; found {
+					claim.entity = &owner
+				}
+				claim.feature = &scope
+			default:
+				claim.entity = &scope
+			}
+			graph.claims = append(graph.claims, claim)
+		}
+	}
+	return graph
 }
 
 func redactedDeviceIndexV1(values []RedactedDeviceV1) (map[string]RedactedDeviceV1, error) {
@@ -556,6 +734,9 @@ func redactedEntityIndexV1(values []RedactedEntityV1) (map[string]RedactedEntity
 	for _, value := range values {
 		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindEntity); err != nil {
 			return nil, errors.New("redacted entity identity is invalid")
+		}
+		if value.ParentEntity != nil && validateSnapshotIDV1(*value.ParentEntity, eebusraw.IDKindEntity) != nil {
+			return nil, errors.New("redacted entity parent identity is invalid")
 		}
 		key := redactedIdentityKeyV1(value.ID)
 		if _, exists := result[key]; exists {
@@ -598,6 +779,9 @@ func redactedUseCaseIndexV1(values []RedactedUseCaseV1) (map[string]RedactedUseC
 		if err := validateSnapshotIDV1(value.ID, eebusraw.IDKindPeer); err != nil {
 			return nil, errors.New("redacted use-case identity is invalid")
 		}
+		if value.Scope != nil && validateSnapshotIDV1(*value.Scope, eebusraw.IDKindDevice, eebusraw.IDKindEntity, eebusraw.IDKindFeature) != nil {
+			return nil, errors.New("redacted use-case scope identity is invalid")
+		}
 		key := redactedIdentityKeyV1(value.ID)
 		if _, exists := result[key]; exists {
 			return nil, errors.New("redacted use cases contain a duplicate identity")
@@ -609,6 +793,7 @@ func redactedUseCaseIndexV1(values []RedactedUseCaseV1) (map[string]RedactedUseC
 
 func equalRedactedEntityV1(left, right RedactedEntityV1) bool {
 	if redactedIdentityKeyV1(left.ID) != redactedIdentityKeyV1(right.ID) ||
+		redactedOptionalIdentityKey(left.ParentEntity) != redactedOptionalIdentityKey(right.ParentEntity) ||
 		len(left.Features) != len(right.Features) {
 		return false
 	}
@@ -682,7 +867,7 @@ func canonicalRedactedSnapshotV1(source RedactedSnapshotV1) RedactedSnapshotV1 {
 	result.Devices = cloneRedactedDevicesV1(source.Devices)
 	result.Entities = cloneRedactedEntitiesV1(source.Entities)
 	result.Features = append([]RedactedFeatureV1(nil), source.Features...)
-	result.UseCases = append([]RedactedUseCaseV1(nil), source.UseCases...)
+	result.UseCases = cloneRedactedUseCases(source.UseCases)
 	sortRedactedDevicesV1(result.Devices)
 	sortRedactedEntitiesV1(result.Entities)
 	sortRedactedFeaturesV1(result.Features)
@@ -716,7 +901,7 @@ func cloneRedactedDevicesV1(source []RedactedDeviceV1) []RedactedDeviceV1 {
 	for index, device := range source {
 		result[index] = device
 		result[index].Entities = cloneRedactedEntitiesV1(device.Entities)
-		result[index].UseCaseClaims = append([]RedactedUseCaseV1(nil), device.UseCaseClaims...)
+		result[index].UseCaseClaims = cloneRedactedUseCases(device.UseCaseClaims)
 	}
 	return result
 }
@@ -725,9 +910,29 @@ func cloneRedactedEntitiesV1(source []RedactedEntityV1) []RedactedEntityV1 {
 	result := make([]RedactedEntityV1, len(source))
 	for index, entity := range source {
 		result[index] = entity
+		result[index].ParentEntity = cloneRedactedIdentity(entity.ParentEntity)
 		result[index].Features = append([]RedactedFeatureV1(nil), entity.Features...)
 	}
 	return result
+}
+
+func cloneRedactedUseCases(source []RedactedUseCaseV1) []RedactedUseCaseV1 {
+	if source == nil {
+		return nil
+	}
+	result := make([]RedactedUseCaseV1, len(source))
+	for index, useCase := range source {
+		result[index] = RedactedUseCaseV1{ID: useCase.ID, Scope: cloneRedactedIdentity(useCase.Scope)}
+	}
+	return result
+}
+
+func cloneRedactedIdentity(source *eebusraw.RedactedID) *eebusraw.RedactedID {
+	if source == nil {
+		return nil
+	}
+	value := *source
+	return &value
 }
 
 func sortRedactedDevicesV1(values []RedactedDeviceV1) {
@@ -763,4 +968,11 @@ func sortRedactedUseCasesV1(values []RedactedUseCaseV1) {
 
 func redactedIdentityKeyV1(id eebusraw.RedactedID) string {
 	return string(id.Kind) + "\x00" + id.Digest
+}
+
+func redactedOptionalIdentityKey(id *eebusraw.RedactedID) string {
+	if id == nil {
+		return ""
+	}
+	return redactedIdentityKeyV1(*id)
 }

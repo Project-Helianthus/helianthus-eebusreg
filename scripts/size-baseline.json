@@ -59,7 +59,7 @@
       "path": "internal/apiboundary/stable_contract_specs.go",
       "symbol": "stableSnapshotV1ContractSpec",
       "metric": "function_lines",
-      "value": 219
+      "value": 175
     },
     {
       "path": "internal/eebusfacade/first_trust.go",

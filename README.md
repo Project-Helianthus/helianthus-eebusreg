@@ -503,3 +503,14 @@ Building a redacted snapshot fails when two devices share one basis or when an
 entity or feature cannot be placed under exactly one device. Use-case claims and
 services keep the `peer` identifier kind; sessions keep `session` and
 `remote-ski`.
+
+Raw v1, the redacted snapshot and native runtime v2 validate containment under
+one rule: an entity names its device and, when nested, its parent entity of the
+same device (`parent_entity_address`, or `parent_entity` in the redacted view);
+a feature names its entity; a use-case claim names its scope as a device,
+optionally narrowed to an entity and then a feature (`device_address`,
+`entity_address`, `feature_address`, or `scope` in the redacted view).
+Dangling, duplicate and ambiguous endpoints and parent cycles are rejected. A
+claim's context address is kept as reported and never places the claim; a raw
+claim that reports no scope stays at the top level of the redacted view. How
+these native relations map to the common graph is not decided here.
