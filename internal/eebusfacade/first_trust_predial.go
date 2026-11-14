@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 )
@@ -37,6 +38,19 @@ func (coordinator *firstTrustCoordinator) prepareOutgoingAttempt(
 	return coordinator.prepareOutgoingAttemptLocked(ctx, request, nil)
 }
 
+type firstTrustOutgoingAttemptPreparation struct {
+	scope                        [32]byte
+	candidateConnection          uint64
+	candidateRebind              *firstTrustCandidateGenerationRebind
+	failedIndex, quarantineIndex int
+	quarantine                   firstTrustQuarantineRecord
+	quarantineExists             bool
+	publicationID                [32]byte
+	operationClass               string
+	target                       firstTrustControlRecord
+	record                       firstTrustOutgoingAttemptRecord
+}
+
 func (coordinator *firstTrustCoordinator) prepareOutgoingAttemptLocked(
 	ctx context.Context,
 	request firstTrustOutgoingAttemptRequest,
@@ -45,134 +59,28 @@ func (coordinator *firstTrustCoordinator) prepareOutgoingAttemptLocked(
 	if ctx.Err() != nil || !firstTrustOutgoingAttemptRequestValid(request) {
 		return nil, "attempt_denied"
 	}
-
 	coordinator.mu.Lock()
-	if !coordinator.firstTrustOutgoingAttemptEligibleLocked(request.remoteSKI) ||
-		coordinator.outgoingAttemptLease <= 0 || coordinator.outgoingAttemptSchedule == nil ||
-		coordinator.controlView.control.controlEpoch == math.MaxUint64 ||
-		coordinator.successfulOutgoingAttemptOwnerLocked(request.remoteSKI) {
+	preparation, admitted := coordinator.admitOutgoingAttemptLocked(request, failed)
+	if !admitted || !coordinator.reserveOutgoingAttemptLocked(request, &preparation) {
 		coordinator.mu.Unlock()
 		return nil, "attempt_denied"
 	}
-	var candidateConnection uint64
-	var candidateRebind *firstTrustCandidateGenerationRebind
-	if candidate := coordinator.currentCandidate; candidate != nil && bytes.Equal(candidate.remote, request.remoteSKI) {
-		candidateConnection = candidate.connection
-		candidateRebind = coordinator.outgoingAttemptCandidateGenerationRebindLocked(request.remoteSKI, candidateConnection)
-	}
-	scope := firstTrustRuntimeRetryScope(firstTrustNormalizedSKI(request.remoteSKI))
-	failedIndex := -1
-	var failedRecord firstTrustOutgoingAttemptRecord
-	if failed != nil {
-		failedIndex = coordinator.firstTrustOutgoingAttemptMetadataLocked(*failed)
-		if failedIndex < 0 {
-			coordinator.mu.Unlock()
-			return nil, "attempt_denied"
-		}
-		failedRecord = coordinator.controlView.control.attempts[failedIndex]
-		failedRuntime, runtimeOK := coordinator.outgoingAttemptContexts[failed.attemptID]
-		if failedRecord.state != firstTrustAttemptLaunchAuthorized || failedRecord.scope != scope ||
-			!bytes.Equal(failedRecord.remoteSKI, request.remoteSKI) || !runtimeOK ||
-			failedRuntime.metadata != *failed || failedRuntime.cancellationGeneration != failedRecord.cancellationGeneration {
-			coordinator.mu.Unlock()
-			return nil, "attempt_denied"
-		}
-	} else if coordinator.firstTrustOutgoingAttemptForScopeLocked(scope) >= 0 {
-		coordinator.mu.Unlock()
-		return nil, "attempt_denied"
-	}
-	ownedCapacity := coordinator.outgoingAttemptOwnerCountLocked()
-	if failed != nil {
-		ownedCapacity--
-	}
-	if ownedCapacity >= firstTrustMaximumOutgoingAttempts {
-		coordinator.mu.Unlock()
-		return nil, "attempt_denied"
-	}
-	quarantineIndex, quarantine, quarantineExists := coordinator.firstTrustQuarantineLocked(scope)
-	if quarantineExists && !coordinator.firstTrustOutgoingAttemptRetryReadyLocked(quarantine) {
-		coordinator.mu.Unlock()
-		return nil, "attempt_denied"
-	}
-	explicitRecoveryRetry := false
-	if failed == nil && coordinator.recovery == "QUARANTINED" {
-		_, recoveryScope, recoveryReady := coordinator.retryReadyRecoveryAssociationLocked()
-		explicitRecoveryRetry = recoveryReady && recoveryScope == scope
-	}
-	if coordinator.retryInflight[scope] != (failed != nil || explicitRecoveryRetry) {
-		coordinator.mu.Unlock()
-		return nil, "attempt_denied"
-	}
-	attemptID, idOK := firstTrustReadOrdinal(coordinator.random)
-	publicationID, publicationOK := firstTrustReadOrdinal(coordinator.random)
-	if !idOK || !publicationOK || coordinator.outgoingAttemptCancellationGeneration == math.MaxUint64 ||
-		coordinator.outgoingAttemptReservationOrder == math.MaxUint64 {
-		coordinator.mu.Unlock()
-		return nil, "attempt_denied"
-	}
-	for _, existing := range coordinator.controlView.control.attempts {
-		if existing.attemptID == attemptID {
-			coordinator.mu.Unlock()
-			return nil, "attempt_denied"
-		}
-	}
-	target := cloneFirstTrustControlRecord(coordinator.controlView.control)
-	target.controlEpoch++
-	if !quarantineExists {
-		if len(target.quarantines) >= firstTrustMaximumQuarantineRecords {
-			coordinator.mu.Unlock()
-			return nil, "attempt_denied"
-		}
-		quarantine = firstTrustQuarantineRecord{
-			scope: scope, reason: "RETRYABLE_FAILURE", state: "RETRY_READY",
-			retentionBudget: firstTrustQuarantineRetention, lastControlEpoch: target.controlEpoch,
-		}
-		target.quarantines = append(target.quarantines, quarantine)
-	} else if quarantine.state == "BACKOFF_ACTIVE" {
-		quarantine.state = "RETRY_READY"
-		quarantine.remainingDelay = 0
-		quarantine.lastControlEpoch = target.controlEpoch
-		target.quarantines[quarantineIndex] = quarantine
-	}
-	coordinator.outgoingAttemptCancellationGeneration++
-	coordinator.outgoingAttemptReservationOrder++
-	timestamp := coordinator.now().UnixNano()
-	if timestamp < 0 {
-		timestamp = 0
-	}
-	record := firstTrustOutgoingAttemptRecord{
-		state: firstTrustAttemptReserved, attemptID: attemptID, remoteSKI: bytes.Clone(request.remoteSKI), scope: scope,
-		controlEpoch: target.controlEpoch, associationLineage: target.associationLineage, endpoint: request.endpoint,
-		path: request.path, cancellationGeneration: coordinator.outgoingAttemptCancellationGeneration,
-		reservationOrder: coordinator.outgoingAttemptReservationOrder, reservationTimestamp: timestamp,
-		attemptCountBefore: quarantine.attemptCount,
-	}
-	if failedIndex >= 0 {
-		target.attempts = append(target.attempts[:failedIndex], target.attempts[failedIndex+1:]...)
-	}
-	target.attempts = append(target.attempts, record)
 	attemptContext, cancel := context.WithCancel(ctx)
 	expectedEpoch := coordinator.controlView.control.controlEpoch
 	coordinator.mu.Unlock()
-
-	operationClass := "attempt_prepare"
-	if failed != nil {
-		operationClass = "attempt_fallback_prepare"
-	}
 	publication, outcome := coordinator.publishSelectedOutgoingAttemptControl(
-		ctx, expectedEpoch, target, publicationID, operationClass, candidateRebind,
+		ctx, expectedEpoch, preparation.target, preparation.publicationID, preparation.operationClass, preparation.candidateRebind,
 	)
 	if outcome != "durable" {
 		cancel()
 		return nil, "attempt_denied"
 	}
 	if failed != nil {
-		coordinator.cancelOutgoingAttemptRuntime(failedRecord.attemptID)
+		coordinator.cancelOutgoingAttemptRuntime(failed.attemptID)
 	}
-	metadata := firstTrustOutgoingAttemptMetadata{attemptID: attemptID, scope: scope, controlEpoch: record.controlEpoch}
-	handle := &firstTrustOutgoingAttemptHandle{
-		metadata: metadata, context: attemptContext, cancellationGeneration: record.cancellationGeneration,
-	}
+	record, scope := preparation.record, preparation.scope
+	metadata := firstTrustOutgoingAttemptMetadata{attemptID: record.attemptID, scope: scope, controlEpoch: record.controlEpoch}
+	handle := &firstTrustOutgoingAttemptHandle{metadata: metadata, context: attemptContext, cancellationGeneration: record.cancellationGeneration}
 	leaseDeadline := firstTrustSaturatingDurationAdd(coordinator.monotonicNow(), coordinator.outgoingAttemptLease)
 	coordinator.mu.Lock()
 	if coordinator.firstTrustOutgoingAttemptExactLocked(metadata, record.cancellationGeneration) < 0 ||
@@ -181,16 +89,108 @@ func (coordinator *firstTrustCoordinator) prepareOutgoingAttemptLocked(
 		cancel()
 		return nil, "attempt_denied"
 	}
-	coordinator.outgoingAttemptContexts[attemptID] = firstTrustOutgoingAttemptRuntime{
+	coordinator.outgoingAttemptContexts[record.attemptID] = firstTrustOutgoingAttemptRuntime{
 		metadata: metadata, remoteSKI: bytes.Clone(request.remoteSKI), context: attemptContext, cancel: cancel,
-		cancellationGeneration: record.cancellationGeneration,
-		candidateConnection:    candidateConnection, leaseDeadline: leaseDeadline,
+		cancellationGeneration: record.cancellationGeneration, candidateConnection: preparation.candidateConnection, leaseDeadline: leaseDeadline,
 	}
 	coordinator.retryInflight[scope] = true
 	coordinator.storeGeneration = publication.target.manifest.current.sequence
 	coordinator.mu.Unlock()
 	coordinator.armOutgoingAttemptLease(request.remoteSKI, metadata, record.cancellationGeneration, leaseDeadline)
 	return handle, "attempt_reserved"
+}
+
+func (coordinator *firstTrustCoordinator) admitOutgoingAttemptLocked(
+	request firstTrustOutgoingAttemptRequest,
+	failed *firstTrustOutgoingAttemptMetadata,
+) (preparation firstTrustOutgoingAttemptPreparation, admitted bool) {
+	if !coordinator.firstTrustOutgoingAttemptEligibleLocked(request.remoteSKI) ||
+		coordinator.outgoingAttemptLease <= 0 || coordinator.outgoingAttemptSchedule == nil ||
+		coordinator.controlView.control.controlEpoch == math.MaxUint64 ||
+		coordinator.successfulOutgoingAttemptOwnerLocked(request.remoteSKI) {
+		return preparation, false
+	}
+	if candidate := coordinator.currentCandidate; candidate != nil && bytes.Equal(candidate.remote, request.remoteSKI) {
+		preparation.candidateConnection = candidate.connection
+		preparation.candidateRebind = coordinator.outgoingAttemptCandidateGenerationRebindLocked(request.remoteSKI, candidate.connection)
+	}
+	scope := firstTrustRuntimeRetryScope(firstTrustNormalizedSKI(request.remoteSKI))
+	preparation.scope, preparation.failedIndex, preparation.operationClass = scope, -1, "attempt_prepare"
+	ownedCapacity := coordinator.outgoingAttemptOwnerCountLocked()
+	if failed != nil {
+		ownedCapacity--
+		preparation.operationClass = "attempt_fallback_prepare"
+		preparation.failedIndex = coordinator.firstTrustOutgoingAttemptMetadataLocked(*failed)
+		if preparation.failedIndex < 0 {
+			return preparation, false
+		}
+		failedRecord := coordinator.controlView.control.attempts[preparation.failedIndex]
+		failedRuntime, runtimeOK := coordinator.outgoingAttemptContexts[failed.attemptID]
+		if failedRecord.state != firstTrustAttemptLaunchAuthorized || failedRecord.scope != scope ||
+			!bytes.Equal(failedRecord.remoteSKI, request.remoteSKI) || !runtimeOK ||
+			failedRuntime.metadata != *failed || failedRuntime.cancellationGeneration != failedRecord.cancellationGeneration {
+			return preparation, false
+		}
+	} else if coordinator.firstTrustOutgoingAttemptForScopeLocked(scope) >= 0 {
+		return preparation, false
+	}
+	if ownedCapacity >= firstTrustMaximumOutgoingAttempts {
+		return preparation, false
+	}
+	preparation.quarantineIndex, preparation.quarantine, preparation.quarantineExists = coordinator.firstTrustQuarantineLocked(scope)
+	if preparation.quarantineExists && !coordinator.firstTrustOutgoingAttemptRetryReadyLocked(preparation.quarantine) {
+		return preparation, false
+	}
+	explicitRecoveryRetry := false
+	if failed == nil && coordinator.recovery == "QUARANTINED" {
+		_, recoveryScope, recoveryReady := coordinator.retryReadyRecoveryAssociationLocked()
+		explicitRecoveryRetry = recoveryReady && recoveryScope == scope
+	}
+	return preparation, coordinator.retryInflight[scope] == (failed != nil || explicitRecoveryRetry)
+}
+
+func (coordinator *firstTrustCoordinator) reserveOutgoingAttemptLocked(
+	request firstTrustOutgoingAttemptRequest,
+	preparation *firstTrustOutgoingAttemptPreparation,
+) bool {
+	attemptID, idOK := firstTrustReadOrdinal(coordinator.random)
+	publicationID, publicationOK := firstTrustReadOrdinal(coordinator.random)
+	if !idOK || !publicationOK || coordinator.outgoingAttemptCancellationGeneration == math.MaxUint64 ||
+		coordinator.outgoingAttemptReservationOrder == math.MaxUint64 ||
+		slices.ContainsFunc(coordinator.controlView.control.attempts, func(existing firstTrustOutgoingAttemptRecord) bool {
+			return existing.attemptID == attemptID
+		}) {
+		return false
+	}
+	target, quarantine := cloneFirstTrustControlRecord(coordinator.controlView.control), preparation.quarantine
+	target.controlEpoch++
+	if !preparation.quarantineExists {
+		if len(target.quarantines) >= firstTrustMaximumQuarantineRecords {
+			return false
+		}
+		quarantine = firstTrustQuarantineRecord{
+			scope: preparation.scope, reason: "RETRYABLE_FAILURE", state: "RETRY_READY",
+			retentionBudget: firstTrustQuarantineRetention, lastControlEpoch: target.controlEpoch,
+		}
+		target.quarantines = append(target.quarantines, quarantine)
+	} else if quarantine.state == "BACKOFF_ACTIVE" {
+		quarantine.state, quarantine.remainingDelay, quarantine.lastControlEpoch = "RETRY_READY", 0, target.controlEpoch
+		target.quarantines[preparation.quarantineIndex] = quarantine
+	}
+	coordinator.outgoingAttemptCancellationGeneration++
+	coordinator.outgoingAttemptReservationOrder++
+	record := firstTrustOutgoingAttemptRecord{
+		state: firstTrustAttemptReserved, attemptID: attemptID, remoteSKI: bytes.Clone(request.remoteSKI), scope: preparation.scope,
+		controlEpoch: target.controlEpoch, associationLineage: target.associationLineage, endpoint: request.endpoint,
+		path: request.path, cancellationGeneration: coordinator.outgoingAttemptCancellationGeneration, attemptCountBefore: quarantine.attemptCount,
+		reservationOrder: coordinator.outgoingAttemptReservationOrder, reservationTimestamp: max(coordinator.now().UnixNano(), 0),
+	}
+	if preparation.failedIndex >= 0 {
+		target.attempts = append(target.attempts[:preparation.failedIndex], target.attempts[preparation.failedIndex+1:]...)
+	}
+	target.attempts = append(target.attempts, record)
+	preparation.publicationID, preparation.target, preparation.record = publicationID, target, record
+	return true
 }
 
 func (coordinator *firstTrustCoordinator) authorizeOutgoingAttempt(
