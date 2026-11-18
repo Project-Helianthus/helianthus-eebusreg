@@ -3,7 +3,12 @@ package eebusruntime
 import (
 	"sort"
 	"strings"
+
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 )
+
+// The EVSE features land on the facade node of the running runtime service.
+var _ shipNode = (*eebusfacade.OutputNode)(nil)
 
 const (
 	useCaseEVSECommissioning = "EVSE Commissioning and Configuration"
@@ -27,13 +32,15 @@ var chargerEVUseCases = map[string]struct{}{
 }
 
 // chargerUseCaseFeatures lists, per announced use case, the server features
-// the EVSE entity needs to fill its mandatory scenario.
+// the EVSE entity needs to fill its mandatory scenario. Measurement comes before
+// electrical connection, so a rejected measurement leaves no feature of the
+// withdrawn power monitoring on the entity.
 var chargerUseCaseFeatures = []struct {
 	useCase  string
 	features []string
 }{
 	{useCaseEVSECommissioning, []string{featureDiagnosis}},
-	{useCasePowerMonitoring, []string{featureElectrical, featureMeasurement}},
+	{useCasePowerMonitoring, []string{featureMeasurement, featureElectrical}},
 }
 
 // monitorChargerLens decides which use cases the EVSE entity announces for an

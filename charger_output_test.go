@@ -282,3 +282,29 @@ func chargerOutputLens(resourceID string) LensResult {
 		},
 	}
 }
+
+func TestChargerOutputRejectedMeasurementLeavesNoFeature(t *testing.T) {
+	// A rejected measurement withdraws Monitoring of Power Consumption before electrical
+	// connection is attached, so the EVSE entity keeps no feature of the withdrawn use case.
+	node := &chargerOutputRejectNode{outputBindingFakeNode: newOutputBindingFakeNode(), reject: "measurement"}
+	useOutputBindingNode(t, func() (shipNode, error) { return node, nil })
+	binding, err := NewOutputBinding(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := chargerOutputLens("bay")
+	if loss := binding.Apply(result); len(loss) != 0 {
+		t.Fatalf("apply loss %v", loss)
+	}
+	outcome := chargerOutputServe(binding, result)
+	if monitoringListed(outcome.Announced, "Monitoring of Power Consumption") || !monitoringListed(outcome.Loss, "measurement") {
+		t.Fatalf("announced %v loss %v", outcome.Announced, outcome.Loss)
+	}
+	features := binding.ServerFeatures("bay")
+	if outputBindingHasType(features, "electrical connection") || outputBindingHasType(features, "measurement") {
+		t.Fatalf("withdrawn power monitoring left %v", features)
+	}
+	if !outputBindingHasType(features, "device diagnosis") {
+		t.Fatalf("commissioning features %v", features)
+	}
+}
