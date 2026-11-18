@@ -72,8 +72,9 @@ func TestInverterMonitoringStringResource(t *testing.T) {
 }
 
 func TestInverterMonitoringStringServed(t *testing.T) {
-	// A cited string with power, current and voltage announces the use case and asks for the
-	// measurement and electrical connection server features. String dc energy is not required.
+	// Applying a cited string with power, current and voltage attaches the measurement and
+	// electrical connection server features. String dc energy is not required. A string missing
+	// one of those elements stays unannounced and gains neither feature.
 	binding := newOutputBinding(t)
 	if len(binding.Apply(outputBindingInverter("north"))) != 0 {
 		t.Fatal("inverter")
@@ -83,13 +84,6 @@ func TestInverterMonitoringStringServed(t *testing.T) {
 	if len(binding.Apply(result)) != 0 {
 		t.Fatal("string")
 	}
-	outcome := binding.serveInverterMonitoring(result)
-	if len(outcome.Announced) != 1 || outcome.Announced[0] != "Monitoring of PV String" {
-		t.Fatalf("announced %v", outcome.Announced)
-	}
-	if monitoringListed(outcome.Loss, "string dc energy") || monitoringListed(outcome.Loss, "string dc power") {
-		t.Fatalf("loss %v", outcome.Loss)
-	}
 	features := binding.ServerFeatures("east")
 	if !outputBindingHasType(features, "measurement") || !outputBindingHasType(features, "electrical connection") {
 		t.Fatalf("features %v", features)
@@ -97,6 +91,46 @@ func TestInverterMonitoringStringServed(t *testing.T) {
 	if outputBindingHasType(features, "load control") {
 		t.Fatalf("load control %v", features)
 	}
+
+	incomplete := monitoringString("south")
+	incomplete.Elements = []string{"string dc power", "string dc current"}
+	if len(binding.Apply(incomplete)) != 0 {
+		t.Fatal("incomplete")
+	}
+	if got := binding.ServerFeatures("south"); len(got) != 0 {
+		t.Fatalf("incomplete features %v", got)
+	}
+}
+
+func TestInverterMonitoringFeatureReject(t *testing.T) {
+	// A cited string whose server feature cannot be attached is not applied.
+	// The production gate returns the existing-node loss and leaves that feature off.
+	node := &monitoringRejectNode{outputBindingFakeNode: newOutputBindingFakeNode()}
+	useOutputBindingNode(t, func() (shipNode, error) { return node, nil })
+	binding, err := NewOutputBinding(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(binding.Apply(outputBindingInverter("north"))) != 0 {
+		t.Fatal("inverter")
+	}
+	result := monitoringString("east")
+	result.Elements = []string{"string dc power", "string dc current", "string dc voltage"}
+	loss := binding.Apply(result)
+	if len(loss) != 1 || loss[0] != "existing_node" {
+		t.Fatalf("loss %v", loss)
+	}
+	if got := binding.ServerFeatures("east"); len(got) != 0 {
+		t.Fatalf("features %v", got)
+	}
+}
+
+type monitoringRejectNode struct {
+	*outputBindingFakeNode
+}
+
+func (n *monitoringRejectNode) AddServerFeature(string, string) error {
+	return errExistingNode
 }
 
 func TestInverterMonitoringInverterGaps(t *testing.T) {

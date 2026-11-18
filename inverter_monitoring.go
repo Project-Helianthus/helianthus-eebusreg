@@ -23,14 +23,15 @@ type monitoringOutcome struct {
 	Operations []string
 }
 
+// serveInverterMonitoring admits the lens result and attaches the PV-string
+// server features when that use case is announced. Apply calls it while holding
+// outputBindingGate, on the node that just received the entity.
 func (b *OutputBinding) serveInverterMonitoring(result LensResult) monitoringOutcome {
 	outcome := monitorInverterLens(result)
 	if b == nil || !monitoringHas(outcome.Announced, "Monitoring of PV String") {
 		return outcome
 	}
-	outputBindingGate.Lock()
-	defer outputBindingGate.Unlock()
-	node := monitoringBoundNode(b.liveNodeLocked())
+	node := monitoringBoundNode(b.node)
 	entity, ok := b.byResource[result.ResourceID]
 	if node == nil || !ok || entity.kind != "PV String" || entity.address == "" {
 		return monitoringWithdraw(outcome, "existing node")
@@ -41,6 +42,12 @@ func (b *OutputBinding) serveInverterMonitoring(result LensResult) monitoringOut
 		}
 	}
 	return outcome
+}
+
+func monitoringFeatureGap(outcome monitoringOutcome) bool {
+	return monitoringHas(outcome.Loss, "existing node") ||
+		monitoringHas(outcome.Loss, featureMeasurement) ||
+		monitoringHas(outcome.Loss, featureElectrical)
 }
 
 func productionLimitAdmitted(result LensResult) bool {
