@@ -77,7 +77,6 @@ type OutputBinding struct {
 	byResource map[string]boundEntity
 	order      []string
 	node       shipNode
-	open       func() (shipNode, error)
 }
 
 type boundEntity struct {
@@ -124,8 +123,7 @@ func NewOutputBinding(directory string) (*OutputBinding, error) {
 	if err != nil {
 		return nil, err
 	}
-	open := openShipNode
-	node, err := open()
+	node, err := openShipNode()
 	if err != nil || node == nil {
 		return nil, errExistingNode
 	}
@@ -134,7 +132,6 @@ func NewOutputBinding(directory string) (*OutputBinding, error) {
 		addresses:  addresses,
 		byResource: map[string]boundEntity{},
 		node:       node,
-		open:       open,
 	}, nil
 }
 
@@ -143,10 +140,10 @@ func NewOutputBinding(directory string) (*OutputBinding, error) {
 // it added on the old node, keeps the stored addresses, and adds each entity
 // again when a lens result names it. Without a running service it has no node.
 func (b *OutputBinding) liveNodeLocked() shipNode {
-	if b == nil || b.open == nil {
+	if b == nil {
 		return nil
 	}
-	node, err := b.open()
+	node, err := openShipNode()
 	if err != nil || node == nil {
 		node = nil
 	}

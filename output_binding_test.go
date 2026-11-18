@@ -260,7 +260,7 @@ func TestOutputBindingAddressIdentity(t *testing.T) {
 	if err := os.WriteFile(conflict, []byte("east a\neast b\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openOutputBindingOnFakeNode(directory, newOutputBindingFakeNode()); err == nil {
+	if _, err := openOutputBindingOnFakeNode(t, directory, newOutputBindingFakeNode()); err == nil {
 		t.Fatal("conflicting stored address admitted")
 	}
 }
@@ -433,7 +433,7 @@ func newOutputBinding(t *testing.T) *OutputBinding {
 
 func newOutputBindingAt(t *testing.T, directory string) *OutputBinding {
 	t.Helper()
-	binding, err := openOutputBindingOnFakeNode(directory, newOutputBindingFakeNode())
+	binding, err := openOutputBindingOnFakeNode(t, directory, newOutputBindingFakeNode())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,17 +442,21 @@ func newOutputBindingAt(t *testing.T, directory string) *OutputBinding {
 
 // openOutputBindingOnFakeNode builds a binding on an injected node. The root
 // package cannot prepare the runtime service; the facade package tests the
-// binding on the real node.
-func openOutputBindingOnFakeNode(directory string, node *outputBindingFakeNode) (*OutputBinding, error) {
-	outputBindingOpenMu.Lock()
-	defer outputBindingOpenMu.Unlock()
-	original := openShipNode
-	openShipNode = func() (shipNode, error) { return node, nil }
-	defer func() { openShipNode = original }()
+// binding on the real node. The binding resolves the node on every call, so the
+// injected node stays the running node until the test ends.
+func openOutputBindingOnFakeNode(t *testing.T, directory string, node *outputBindingFakeNode) (*OutputBinding, error) {
+	t.Helper()
+	useOutputBindingNode(t, func() (shipNode, error) { return node, nil })
 	return NewOutputBinding(directory)
 }
 
-var outputBindingOpenMu sync.Mutex
+// useOutputBindingNode makes open the running node until the test ends.
+func useOutputBindingNode(t *testing.T, open func() (shipNode, error)) {
+	t.Helper()
+	original := openShipNode
+	openShipNode = open
+	t.Cleanup(func() { openShipNode = original })
+}
 
 func outputBindingNode(t *testing.T, binding *OutputBinding) *outputBindingFakeNode {
 	t.Helper()
@@ -491,7 +495,7 @@ func TestOutputBindingObservesNodeCounts(t *testing.T) {
 	node.advertisements = 4
 	node.services = 2
 	node.deviceType = "ProbeNode"
-	binding, err := openOutputBindingOnFakeNode(t.TempDir(), node)
+	binding, err := openOutputBindingOnFakeNode(t, t.TempDir(), node)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -519,9 +523,7 @@ func TestOutputBindingRequiresExistingNode(t *testing.T) {
 	if _, err := NewOutputBinding(t.TempDir()); !errors.Is(err, errExistingNode) {
 		t.Fatalf("binding without a runtime node err=%v", err)
 	}
-	original := openShipNode
-	openShipNode = func() (shipNode, error) { return nil, errors.New("absent") }
-	t.Cleanup(func() { openShipNode = original })
+	useOutputBindingNode(t, func() (shipNode, error) { return nil, errors.New("absent") })
 	if _, err := NewOutputBinding(t.TempDir()); !errors.Is(err, errExistingNode) {
 		t.Fatalf("binding on an absent node err=%v", err)
 	}
@@ -532,17 +534,13 @@ func TestOutputBindingFollowsReplacedNode(t *testing.T) {
 	// while no node runs, and then adds the entity on the new node at its stored address.
 	first := newOutputBindingFakeNode()
 	var current shipNode = first
-	outputBindingOpenMu.Lock()
-	original := openShipNode
-	openShipNode = func() (shipNode, error) {
+	useOutputBindingNode(t, func() (shipNode, error) {
 		if current == nil {
 			return nil, errors.New("released")
 		}
 		return current, nil
-	}
+	})
 	binding, err := NewOutputBinding(t.TempDir())
-	openShipNode = original
-	outputBindingOpenMu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
