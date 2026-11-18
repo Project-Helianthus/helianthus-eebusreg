@@ -36,6 +36,7 @@ func OutputBinding.DeviceType
 func OutputBinding.EntityAddress
 func OutputBinding.EntityAddresses
 func OutputBinding.EntityTypes
+func OutputBinding.MonitoringLoss
 func OutputBinding.ParentAddress
 func OutputBinding.ServerFeatures
 func OutputBinding.ServiceCount

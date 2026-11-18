@@ -143,18 +143,15 @@ func TestChargerOutputMandatoryScenarios(t *testing.T) {
 }
 
 func TestChargerOutputServedOnEVSE(t *testing.T) {
-	// Apply adds the EVSE entity. Serving attaches measurement and electrical connection for
-	// Monitoring of Power Consumption and device diagnosis for EVSE Commissioning and
-	// Configuration on that entity. The monitored unit is the EVSE entity, so the CEM entity
-	// gains no feature.
+	// Apply adds the EVSE entity and serves it. It attaches measurement and electrical
+	// connection for Monitoring of Power Consumption and device diagnosis for EVSE
+	// Commissioning and Configuration on that entity. The monitored unit is the EVSE
+	// entity, so the CEM entity gains no feature. The caller of Apply reads the device
+	// classification gap from MonitoringLoss.
 	binding := newOutputBinding(t)
 	result := chargerOutputLens("bay")
 	if loss := binding.Apply(result); len(loss) != 0 {
 		t.Fatalf("apply loss %v", loss)
-	}
-	outcome := chargerOutputServe(binding, result)
-	if !monitoringListed(outcome.Announced, "EVSE Commissioning and Configuration") || !monitoringListed(outcome.Announced, "Monitoring of Power Consumption") {
-		t.Fatalf("announced %v loss %v", outcome.Announced, outcome.Loss)
 	}
 	features := binding.ServerFeatures("bay")
 	for _, want := range []string{"measurement", "electrical connection", "device diagnosis"} {
@@ -171,6 +168,102 @@ func TestChargerOutputServedOnEVSE(t *testing.T) {
 	}
 	if !outputBindingHasType(binding.EntityTypes(), "EVSE") {
 		t.Fatalf("entities %v", binding.EntityTypes())
+	}
+	gaps := binding.MonitoringLoss("bay")
+	if len(gaps) != 1 || gaps[0] != "device classification" {
+		t.Fatalf("monitoring loss %v", gaps)
+	}
+}
+
+func TestChargerOutputApplyMandatoryElement(t *testing.T) {
+	// Apply serves each use case only when its mandatory element is admitted.
+	// operating state: absent leaves device diagnosis off the EVSE entity and names the element.
+	// total active power: absent leaves measurement and electrical connection off and names the element.
+	// missing element: an element the lens also names as missing is not admitted either.
+	cases := []struct {
+		name    string
+		mutate  func(*LensResult)
+		element string
+		off     []string
+		on      []string
+	}{
+		{"operating state", func(r *LensResult) { r.Elements = monitoringDrop(r.Elements, "operating state") },
+			"operating state", []string{"device diagnosis"}, []string{"measurement", "electrical connection"}},
+		{"total active power", func(r *LensResult) { r.Elements = monitoringDrop(r.Elements, "total active power") },
+			"total active power", []string{"measurement", "electrical connection"}, []string{"device diagnosis"}},
+		{"missing total", func(r *LensResult) { r.MissingElements = []string{"total active power"} },
+			"total active power", []string{"measurement", "electrical connection"}, []string{"device diagnosis"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			binding := newOutputBinding(t)
+			result := chargerOutputLens("bay")
+			tc.mutate(&result)
+			binding.Apply(result)
+			features := binding.ServerFeatures("bay")
+			for _, off := range tc.off {
+				if outputBindingHasType(features, off) {
+					t.Fatalf("%s served in %v", off, features)
+				}
+			}
+			for _, on := range tc.on {
+				if !outputBindingHasType(features, on) {
+					t.Fatalf("%s missing in %v", on, features)
+				}
+			}
+			gaps := binding.MonitoringLoss("bay")
+			if !monitoringListed(gaps, tc.element) || !monitoringListed(gaps, "device classification") {
+				t.Fatalf("monitoring loss %v", gaps)
+			}
+		})
+	}
+}
+
+func TestChargerOutputApplyConsumptionLimit(t *testing.T) {
+	// A Limitation of Power Consumption result applied on a charger keeps its returned
+	// loss, and MonitoringLoss gives the caller both write entries: the missing active-power
+	// operation and the allocated current operation that was not called.
+	binding := newOutputBinding(t)
+	result := chargerOutputLens("bay")
+	result.UseCase = "Limitation of Power Consumption"
+	result.Operations = []LensOperation{{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true}}
+	loss := binding.Apply(result)
+	if len(loss) != 1 || loss[0] != "consumption_limit_not_applied" {
+		t.Fatalf("apply loss %v", loss)
+	}
+	gaps := binding.MonitoringLoss("bay")
+	for _, want := range []string{
+		"missing operation: active power consumption limit",
+		"not called: evse.operation.set_allocated_current",
+		"device classification",
+	} {
+		if !monitoringListed(gaps, want) {
+			t.Fatalf("monitoring loss omits %s: %v", want, gaps)
+		}
+	}
+	if monitoringListed(gaps, "Limitation of Power Consumption") {
+		t.Fatalf("monitoring loss %v", gaps)
+	}
+
+	plain := chargerOutputLens("other")
+	binding.Apply(plain)
+	if gaps := binding.MonitoringLoss("other"); monitoringListed(gaps, "not called: evse.operation.set_allocated_current") {
+		t.Fatalf("write loss without a write %v", gaps)
+	}
+}
+
+func TestChargerOutputApplyEVActor(t *testing.T) {
+	// A charger result whose actor is the EV adds the EVSE entity but serves no use case on it.
+	// MonitoringLoss names the EV.
+	binding := newOutputBinding(t)
+	result := chargerOutputLens("bay")
+	result.Actor = "EV"
+	binding.Apply(result)
+	if got := binding.ServerFeatures("bay"); len(got) != 0 {
+		t.Fatalf("features %v", got)
+	}
+	if gaps := binding.MonitoringLoss("bay"); len(gaps) != 1 || gaps[0] != "EV" {
+		t.Fatalf("monitoring loss %v", gaps)
 	}
 }
 
@@ -200,14 +293,15 @@ func TestChargerOutputUnboundEntity(t *testing.T) {
 }
 
 func TestChargerOutputFeatureReject(t *testing.T) {
-	// A server feature the node rejects withdraws only the use case that needs it.
-	// device diagnosis: commissioning is withdrawn and named. Power monitoring stays announced.
-	// measurement: power monitoring is withdrawn and named. Commissioning stays announced.
-	// electrical connection: power monitoring is withdrawn and named. Commissioning stays announced.
-	cases := map[string]string{
-		"device diagnosis":      "EVSE Commissioning and Configuration",
-		"measurement":           "Monitoring of Power Consumption",
-		"electrical connection": "Monitoring of Power Consumption",
+	// A server feature the node rejects during Apply withdraws only the use case that needs it.
+	// device diagnosis: commissioning is withdrawn and named. Power monitoring keeps both features.
+	// measurement: power monitoring is withdrawn and named. Commissioning keeps device diagnosis.
+	// electrical connection: power monitoring is withdrawn and named, and the measurement it
+	// already added is taken back. Commissioning keeps device diagnosis.
+	cases := map[string][]string{
+		"device diagnosis":      {"device diagnosis"},
+		"measurement":           {"measurement", "electrical connection"},
+		"electrical connection": {"measurement", "electrical connection"},
 	}
 	for feature, withdrawn := range cases {
 		t.Run(feature, func(t *testing.T) {
@@ -217,16 +311,18 @@ func TestChargerOutputFeatureReject(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result := chargerOutputLens("bay")
-			if loss := binding.Apply(result); len(loss) != 0 {
+			if loss := binding.Apply(chargerOutputLens("bay")); len(loss) != 0 {
 				t.Fatalf("apply loss %v", loss)
 			}
-			outcome := chargerOutputServe(binding, result)
-			if monitoringListed(outcome.Announced, withdrawn) || !monitoringListed(outcome.Loss, feature) {
-				t.Fatalf("announced %v loss %v", outcome.Announced, outcome.Loss)
+			gaps := binding.MonitoringLoss("bay")
+			if !monitoringListed(gaps, feature) {
+				t.Fatalf("monitoring loss %v", gaps)
 			}
-			if len(outcome.Announced) != 1 {
-				t.Fatalf("announced %v", outcome.Announced)
+			features := binding.ServerFeatures("bay")
+			for _, name := range []string{"device diagnosis", "measurement", "electrical connection"} {
+				if outputBindingHasType(features, name) == monitoringListed(withdrawn, name) {
+					t.Fatalf("%s withdrawn=%v features %v", name, monitoringListed(withdrawn, name), features)
+				}
 			}
 		})
 	}
@@ -286,28 +382,58 @@ func chargerOutputLens(resourceID string) LensResult {
 	}
 }
 
-func TestChargerOutputRejectedMeasurementLeavesNoFeature(t *testing.T) {
-	// A rejected measurement withdraws Monitoring of Power Consumption before electrical
-	// connection is attached, so the EVSE entity keeps no feature of the withdrawn use case.
-	node := &chargerOutputRejectNode{outputBindingFakeNode: newOutputBindingFakeNode(), reject: "measurement"}
+func TestChargerOutputRejectedConnectionTakesBackMeasurement(t *testing.T) {
+	// The node accepts measurement and rejects electrical connection. Power monitoring is
+	// withdrawn, the measurement it added is taken back, and the EVSE entity keeps only
+	// the commissioning feature.
+	node := &chargerOutputRejectNode{outputBindingFakeNode: newOutputBindingFakeNode(), reject: "electrical connection"}
 	useOutputBindingNode(t, func() (shipNode, error) { return node, nil })
 	binding, err := NewOutputBinding(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := chargerOutputLens("bay")
-	if loss := binding.Apply(result); len(loss) != 0 {
+	if loss := binding.Apply(chargerOutputLens("bay")); len(loss) != 0 {
 		t.Fatalf("apply loss %v", loss)
 	}
-	outcome := chargerOutputServe(binding, result)
-	if monitoringListed(outcome.Announced, "Monitoring of Power Consumption") || !monitoringListed(outcome.Loss, "measurement") {
-		t.Fatalf("announced %v loss %v", outcome.Announced, outcome.Loss)
-	}
 	features := binding.ServerFeatures("bay")
-	if outputBindingHasType(features, "electrical connection") || outputBindingHasType(features, "measurement") {
+	if outputBindingHasType(features, "measurement") || outputBindingHasType(features, "electrical connection") {
 		t.Fatalf("withdrawn power monitoring left %v", features)
 	}
 	if !outputBindingHasType(features, "device diagnosis") {
 		t.Fatalf("commissioning features %v", features)
 	}
+	gaps := binding.MonitoringLoss("bay")
+	if !monitoringListed(gaps, "electrical connection") || monitoringListed(gaps, "not removed: measurement") {
+		t.Fatalf("monitoring loss %v", gaps)
+	}
+}
+
+func TestChargerOutputKeptFeatureNamed(t *testing.T) {
+	// A node that cannot take a feature back keeps the measurement of the withdrawn use case.
+	// MonitoringLoss names that kept feature, so the caller learns the entity still serves it.
+	inner := newOutputBindingFakeNode()
+	node := &chargerOutputFixedNode{shipNode: inner, reject: "electrical connection"}
+	useOutputBindingNode(t, func() (shipNode, error) { return node, nil })
+	binding, err := NewOutputBinding(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.Apply(chargerOutputLens("bay"))
+	gaps := binding.MonitoringLoss("bay")
+	if !monitoringListed(gaps, "electrical connection") || !monitoringListed(gaps, "not removed: measurement") {
+		t.Fatalf("monitoring loss %v", gaps)
+	}
+}
+
+// chargerOutputFixedNode rejects one feature and cannot take a feature back.
+type chargerOutputFixedNode struct {
+	shipNode
+	reject string
+}
+
+func (n *chargerOutputFixedNode) AddServerFeature(address, name string) error {
+	if name == n.reject {
+		return errExistingNode
+	}
+	return n.shipNode.AddServerFeature(address, name)
 }

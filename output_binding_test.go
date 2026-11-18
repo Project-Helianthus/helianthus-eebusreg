@@ -608,6 +608,7 @@ func TestOutputBindingConcurrentReaders(t *testing.T) {
 			_ = binding.DeviceType()
 			_ = binding.EntityAddresses()
 			_ = binding.ParentAddress("na")
+			_ = binding.MonitoringLoss("na")
 		}
 	}()
 	for ordinal := 0; ordinal < 8; ordinal++ {
@@ -686,6 +687,22 @@ func (n *outputBindingFakeNode) AddServerFeature(address, name string) error {
 		n.features[address] = append(n.features[address], name)
 		sort.Strings(n.features[address])
 	}
+	return nil
+}
+
+// RemoveServerFeature takes back a server feature, as a node that supports
+// withdrawing a use case does.
+func (n *outputBindingFakeNode) RemoveServerFeature(address, name string) error {
+	if !outputBindingHasType(n.features[address], name) {
+		return errors.New("missing feature")
+	}
+	var kept []string
+	for _, feature := range n.features[address] {
+		if feature != name {
+			kept = append(kept, feature)
+		}
+	}
+	n.features[address] = kept
 	return nil
 }
 
