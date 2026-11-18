@@ -40,11 +40,34 @@ type RemoteFeatureDataBackend interface {
 
 var _ RemoteFeatureDataBackend = (*serviceBackend)(nil)
 
+// remoteSubscriptionRefusedLimit bounds the refusals kept for requests whose message counter is not
+// registered yet; a result can arrive before the request that caused it is registered.
+const remoteSubscriptionRefusedLimit = 64
+
 type remoteSubscriptionState struct {
 	io       sync.Mutex
 	active   map[string]*remoteSubscriptionEntry
 	notified map[string]remoteNotifiedData
 	queue    []remoteSubscriptionAction
+	pending  map[remoteSubscriptionRequest]*remoteSubscriptionEntry
+	refused  map[remoteSubscriptionRequest]struct{}
+	results  spineapi.NodeManagementInterface
+}
+
+// remoteSubscriptionRequest identifies one subscription request by the responder device and the
+// message counter the result refers to.
+type remoteSubscriptionRequest struct {
+	device  spinemodel.AddressDeviceType
+	counter spinemodel.MsgCounterType
+}
+
+func (state *remoteSubscriptionState) initLocked() {
+	if state.active == nil {
+		state.active = make(map[string]*remoteSubscriptionEntry)
+		state.notified = make(map[string]remoteNotifiedData)
+		state.pending = make(map[remoteSubscriptionRequest]*remoteSubscriptionEntry)
+		state.refused = make(map[remoteSubscriptionRequest]struct{})
+	}
 }
 
 type remoteSubscriptionEntry struct {
@@ -64,6 +87,7 @@ type remoteNotifiedData struct {
 	target     eebusraw.FeatureTargetV1
 	runtime    eebusraw.RuntimeBindingV1
 	value      eebusraw.TypedValueV1
+	failure    *eebusraw.ErrorV1
 	notifiedAt time.Time
 }
 
@@ -87,19 +111,61 @@ func (backend *serviceBackend) FeatureNotifiedDataGet(
 	return backend.rawFeatures.featureNotifiedDataGet(auth, target, trusted)
 }
 
+// routeRemoteNotify keeps the subscription store in step with SPINE events: a remote that disappears
+// loses its subscriptions and notified data, any event for a remote whose trust is withdrawn removes
+// its subscriptions and notified data, and a NOTIFY from a trusted remote updates the stored data.
 func (handler *runtimeServiceHandler) routeRemoteNotify(payload spineapi.EventPayload) {
-	if payload.EventType != spineapi.EventTypeDataChange || payload.CmdClassifier == nil ||
-		*payload.CmdClassifier != spinemodel.CmdClassifierTypeNotify ||
-		isNilRawRuntimeValue(payload.Feature) || payload.Function == "" {
+	ski := strings.ToLower(strings.TrimSpace(payload.Ski))
+	if ski == "" {
 		return
 	}
-	ski := strings.ToLower(strings.TrimSpace(payload.Ski))
 	handler.mu.Lock()
 	bridge := handler.rawFeatures
-	allowed := handler.spineEventsActive && handler.remoteLivenessAllowedLocked(ski)
+	active := handler.spineEventsActive
+	allowed := active && handler.remoteLivenessAllowedLocked(ski)
 	handler.mu.Unlock()
-	if bridge != nil && allowed {
+	if bridge == nil || !active {
+		return
+	}
+	switch {
+	case payload.EventType == spineapi.EventTypeDeviceChange && payload.ChangeType == spineapi.ElementChangeRemove:
+		bridge.forgetRemoteSubscriptions(ski, payload.Device)
+	case !allowed:
+		bridge.withdrawRemoteSubscriptions(ski)
+	case payload.EventType == spineapi.EventTypeDataChange && payload.CmdClassifier != nil &&
+		*payload.CmdClassifier == spinemodel.CmdClassifierTypeNotify &&
+		!isNilRawRuntimeValue(payload.Feature) && payload.Function != "":
 		bridge.recordRemoteNotify(ski, payload.Feature, payload.Function)
+	}
+}
+
+// withdrawRemoteSubscriptions removes the subscriptions and notified data of a remote that is no
+// longer trusted and asks the responder to delete each subscription.
+func (bridge *rawFeatureRuntimeBridge) withdrawRemoteSubscriptions(ski string) {
+	bridge.mu.Lock()
+	queued := false
+	for _, entry := range bridge.remoteSubscriptions.active {
+		if entry.lease.ski == ski {
+			bridge.dropRemoteSubscriptionLocked(entry, true)
+			queued = true
+		}
+	}
+	bridge.mu.Unlock()
+	if queued {
+		bridge.runRemoteSubscriptionActions()
+	}
+}
+
+// forgetRemoteSubscriptions removes the subscriptions and notified data of a remote device that
+// disappeared. No request is sent because the responder is gone.
+func (bridge *rawFeatureRuntimeBridge) forgetRemoteSubscriptions(ski string, device spineapi.DeviceRemoteInterface) {
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	for _, entry := range bridge.remoteSubscriptions.active {
+		if entry.lease.ski == ski &&
+			(isNilRawRuntimeValue(device) || sameRawRuntimeValue(entry.lease.remote, device)) {
+			bridge.dropRemoteSubscriptionLocked(entry, false)
+		}
 	}
 }
 
@@ -151,10 +217,7 @@ func (bridge *rawFeatureRuntimeBridge) planRemoteSubscriptionsLocked(
 	features []spineapi.FeatureRemoteInterface,
 ) {
 	state := &bridge.remoteSubscriptions
-	if state.active == nil {
-		state.active = make(map[string]*remoteSubscriptionEntry)
-		state.notified = make(map[string]remoteNotifiedData)
-	}
+	state.initLocked()
 	wanted := make(map[string]spineapi.FeatureRemoteInterface)
 	for _, feature := range features {
 		if remoteSubscriptionReadable(feature) {
@@ -208,6 +271,11 @@ func (bridge *rawFeatureRuntimeBridge) dropRemoteSubscriptionLocked(
 			delete(state.notified, key)
 		}
 	}
+	for request, pending := range state.pending {
+		if pending == entry {
+			delete(state.pending, request)
+		}
+	}
 	if unsubscribe {
 		state.queue = append(state.queue, remoteSubscriptionAction{entry: entry})
 	}
@@ -221,6 +289,10 @@ func (bridge *rawFeatureRuntimeBridge) runRemoteSubscriptionActions() {
 	actions := state.queue
 	state.queue = nil
 	bridge.mu.Unlock()
+	if len(actions) == 0 {
+		return
+	}
+	bridge.prepareRemoteSubscriptionClients(actions)
 	for _, action := range actions {
 		if !action.subscribe {
 			unsubscribeRemoteFeature(bridge.local, action.entry)
@@ -229,14 +301,105 @@ func (bridge *rawFeatureRuntimeBridge) runRemoteSubscriptionActions() {
 		bridge.mu.Lock()
 		current := state.active[action.entry.key] == action.entry && !action.entry.lease.retired
 		bridge.mu.Unlock()
-		if !current || subscribeRemoteFeature(bridge.local, action.entry) == nil {
+		if !current {
 			continue
 		}
+		counter, err := subscribeRemoteFeature(bridge.local, action.entry)
 		bridge.mu.Lock()
-		if state.active[action.entry.key] == action.entry {
-			delete(state.active, action.entry.key)
-		}
+		bridge.registerRemoteSubscriptionLocked(action.entry, counter, err)
 		bridge.mu.Unlock()
+	}
+	bridge.mu.Lock()
+	clear(state.refused)
+	bridge.mu.Unlock()
+}
+
+// prepareRemoteSubscriptionClients creates the local client features the queued subscriptions need,
+// announces new ones before any request is sent so a responder knows the client address when it
+// handles the request, and watches the subscription results.
+func (bridge *rawFeatureRuntimeBridge) prepareRemoteSubscriptionClients(actions []remoteSubscriptionAction) {
+	created := false
+	for _, action := range actions {
+		if !action.subscribe {
+			continue
+		}
+		if _, added := remoteSubscriptionClient(bridge.local, action.entry.featureType, true); added {
+			created = true
+		}
+	}
+	if created {
+		announceRemoteSubscriptionClients(bridge.local)
+	}
+	if isNilRawRuntimeValue(bridge.local) {
+		return
+	}
+	management := bridge.local.NodeManagement()
+	if isNilRawRuntimeValue(management) {
+		return
+	}
+	bridge.mu.Lock()
+	watched := sameRawRuntimeValue(bridge.remoteSubscriptions.results, management)
+	bridge.remoteSubscriptions.results = management
+	bridge.mu.Unlock()
+	if !watched {
+		management.AddResultCallback(bridge.recordRemoteSubscriptionResult)
+	}
+}
+
+// registerRemoteSubscriptionLocked keeps a sent request until its result arrives. A request that
+// could not be sent, or whose refusal already arrived, leaves the feature eligible for the next
+// discovery refresh.
+func (bridge *rawFeatureRuntimeBridge) registerRemoteSubscriptionLocked(
+	entry *remoteSubscriptionEntry,
+	counter *spinemodel.MsgCounterType,
+	err error,
+) {
+	state := &bridge.remoteSubscriptions
+	if state.active[entry.key] != entry {
+		return
+	}
+	if err != nil {
+		bridge.dropRemoteSubscriptionLocked(entry, false)
+		return
+	}
+	if counter == nil || entry.address.Device == nil {
+		return
+	}
+	request := remoteSubscriptionRequest{device: *entry.address.Device, counter: *counter}
+	if _, refused := state.refused[request]; refused {
+		delete(state.refused, request)
+		bridge.dropRemoteSubscriptionLocked(entry, false)
+		return
+	}
+	state.pending[request] = entry
+}
+
+// recordRemoteSubscriptionResult receives the responder's result for a subscription request. A
+// refusal removes the subscription so the next discovery refresh requests it again.
+func (bridge *rawFeatureRuntimeBridge) recordRemoteSubscriptionResult(message spineapi.ResponseMessage) {
+	if isNilRawRuntimeValue(message.DeviceRemote) || message.DeviceRemote.Address() == nil {
+		return
+	}
+	result, _ := message.Data.(*spinemodel.ResultDataType)
+	refused := result != nil && result.ErrorNumber != nil &&
+		*result.ErrorNumber != spinemodel.ErrorNumberTypeNoError
+	request := remoteSubscriptionRequest{
+		device:  *message.DeviceRemote.Address(),
+		counter: message.MsgCounterReference,
+	}
+	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
+	state := &bridge.remoteSubscriptions
+	state.initLocked()
+	if entry, found := state.pending[request]; found {
+		delete(state.pending, request)
+		if refused {
+			bridge.dropRemoteSubscriptionLocked(entry, false)
+		}
+		return
+	}
+	if refused && len(state.refused) < remoteSubscriptionRefusedLimit {
+		state.refused[request] = struct{}{}
 	}
 }
 
@@ -244,51 +407,98 @@ func remoteSubscriptionClient(
 	local spineapi.DeviceLocalInterface,
 	featureType spinemodel.FeatureTypeType,
 	create bool,
-) spineapi.FeatureLocalInterface {
+) (spineapi.FeatureLocalInterface, bool) {
 	if isNilRawRuntimeValue(local) {
-		return nil
+		return nil, false
 	}
 	cem := local.EntityForType(spinemodel.EntityTypeTypeCEM)
 	if isNilRawRuntimeValue(cem) || cem.EntityType() != spinemodel.EntityTypeTypeCEM {
-		return nil
+		return nil, false
 	}
 	client := cem.FeatureOfTypeAndRole(featureType, spinemodel.RoleTypeClient)
 	if !isNilRawRuntimeValue(client) {
 		if client.Type() != featureType || client.Role() != spinemodel.RoleTypeClient {
-			return nil
+			return nil, false
 		}
-		return client
+		return client, false
 	}
 	if !create {
-		return nil
+		return nil, false
 	}
 	id := cem.NextFeatureId()
 	for _, existing := range cem.Features() {
 		if isNilRawRuntimeValue(existing) || existing.Address() == nil ||
 			existing.Address().Feature == nil || uint(*existing.Address().Feature) == id {
-			return nil
+			return nil, false
 		}
 	}
 	created := spine.NewFeatureLocal(id, cem, featureType, spinemodel.RoleTypeClient)
 	created.SetDescriptionString(string(featureType) + " Client")
 	cem.AddFeature(created)
-	return created
+	return created, true
 }
 
-func subscribeRemoteFeature(local spineapi.DeviceLocalInterface, entry *remoteSubscriptionEntry) error {
-	client := remoteSubscriptionClient(local, entry.featureType, true)
+// announceRemoteSubscriptionClients notifies the subscribers of the host's node management with the
+// CEM entity and its current feature list, in the partial detailed-discovery form the host also uses
+// when it adds an entity.
+func announceRemoteSubscriptionClients(local spineapi.DeviceLocalInterface) {
+	cem := local.EntityForType(spinemodel.EntityTypeTypeCEM)
+	management := local.NodeManagement()
+	if isNilRawRuntimeValue(cem) || isNilRawRuntimeValue(management) || management.Address() == nil {
+		return
+	}
+	entity := cem.Information()
+	if entity == nil || entity.Description == nil {
+		return
+	}
+	description := *entity.Description
+	added := spinemodel.NetworkManagementStateChangeTypeAdded
+	description.LastStateChange = &added
+	entity.Description = &description
+	var features []spinemodel.NodeManagementDetailedDiscoveryFeatureInformationType
+	for _, feature := range cem.Features() {
+		if isNilRawRuntimeValue(feature) {
+			continue
+		}
+		if information := feature.Information(); information != nil {
+			features = append(features, *information)
+		}
+	}
+	function := spinemodel.FunctionTypeNodeManagementDetailedDiscoveryData
+	local.NotifySubscribers(management.Address(), spinemodel.CmdType{
+		Function: &function,
+		Filter:   []spinemodel.FilterType{*spinemodel.NewFilterTypePartial()},
+		NodeManagementDetailedDiscoveryData: &spinemodel.NodeManagementDetailedDiscoveryDataType{
+			SpecificationVersionList: &spinemodel.NodeManagementSpecificationVersionListType{
+				SpecificationVersion: []spinemodel.SpecificationVersionDataType{
+					spinemodel.SpecificationVersionDataType(spine.SpecificationVersion),
+				},
+			},
+			DeviceInformation:  local.Information(),
+			EntityInformation:  []spinemodel.NodeManagementDetailedDiscoveryEntityInformationType{*entity},
+			FeatureInformation: features,
+		},
+	})
+}
+
+func subscribeRemoteFeature(
+	local spineapi.DeviceLocalInterface,
+	entry *remoteSubscriptionEntry,
+) (*spinemodel.MsgCounterType, error) {
+	client, _ := remoteSubscriptionClient(local, entry.featureType, true)
 	if client == nil {
-		return errRemoteSubscriptionUnavailable
+		return nil, errRemoteSubscriptionUnavailable
 	}
 	address := cloneRawFeatureAddress(entry.address)
-	if _, failure := client.SubscribeToRemote(&address); failure != nil {
-		return errRemoteSubscriptionUnavailable
+	counter, failure := client.SubscribeToRemote(&address)
+	if failure != nil {
+		return nil, errRemoteSubscriptionUnavailable
 	}
-	return nil
+	return counter, nil
 }
 
 func unsubscribeRemoteFeature(local spineapi.DeviceLocalInterface, entry *remoteSubscriptionEntry) {
-	if client := remoteSubscriptionClient(local, entry.featureType, false); client != nil {
+	if client, _ := remoteSubscriptionClient(local, entry.featureType, false); client != nil {
 		address := cloneRawFeatureAddress(entry.address)
 		_, _ = client.RemoveRemoteSubscription(&address)
 	}
@@ -318,9 +528,11 @@ func (bridge *rawFeatureRuntimeBridge) recordRemoteNotify(
 	if err != nil {
 		return
 	}
+	var failure *eebusraw.ErrorV1
 	value, err := remoteNotifiedValue(current.DataCopy(function))
 	if err != nil {
-		return
+		value = eebusraw.TypedValueV1{}
+		failure = remoteNotifiedDecodeError()
 	}
 	locator := inventory.Feature
 	target := eebusraw.FeatureTargetV1{
@@ -339,8 +551,20 @@ func (bridge *rawFeatureRuntimeBridge) recordRemoteNotify(
 		target:     target,
 		runtime:    inventory.Runtime,
 		value:      value,
+		failure:    failure,
 		notifiedAt: bridge.timestamp(),
 	}
+}
+
+// remoteNotifiedDecodeError answers a read whose last notification arrived but could not be
+// represented as a typed value, so it is not mistaken for a missing notification.
+func remoteNotifiedDecodeError() *eebusraw.ErrorV1 {
+	return eebusraw.NewErrorV1(
+		eebusraw.ErrorCodeV1DecodeError,
+		"notified raw feature data contained no complete typed data",
+		false,
+		eebusraw.SourceLayerV1Decode,
+	)
 }
 
 func remoteNotifiedValue(data any) (eebusraw.TypedValueV1, error) {
@@ -367,6 +591,12 @@ func (bridge *rawFeatureRuntimeBridge) featureNotifiedDataGet(
 	}); terminal != nil {
 		return eebusraw.ReadObservationV1{}, terminal
 	}
+	notAvailable := eebusraw.NewErrorV1(
+		eebusraw.ErrorCodeV1NotFound,
+		"notified raw feature data is not available",
+		true,
+		eebusraw.SourceLayerV1Runtime,
+	)
 	bridge.mu.Lock()
 	state := &bridge.remoteSubscriptions
 	stored, found := state.notified[remoteNotifiedKey(target)]
@@ -375,13 +605,23 @@ func (bridge *rawFeatureRuntimeBridge) featureNotifiedDataGet(
 		bridge.leasesBySKI[stored.entry.lease.ski] == stored.entry.lease &&
 		bridge.currentRuntimeEpoch() == stored.runtime.RuntimeEpoch
 	bridge.mu.Unlock()
-	if !available || trusted == nil || !trusted(stored.entry.lease.ski) {
-		return eebusraw.ReadObservationV1{}, eebusraw.NewErrorV1(
-			eebusraw.ErrorCodeV1NotFound,
-			"notified raw feature data is not available",
-			true,
-			eebusraw.SourceLayerV1Runtime,
-		)
+	if !available {
+		return eebusraw.ReadObservationV1{}, notAvailable
+	}
+	ski := stored.entry.lease.ski
+	if trusted == nil || !trusted(ski) {
+		bridge.withdrawRemoteSubscriptions(ski)
+		return eebusraw.ReadObservationV1{}, notAvailable
+	}
+	if !isNilRawRuntimeValue(bridge.local) {
+		if present := bridge.local.RemoteDeviceForSki(ski); !sameRawRuntimeValue(present, stored.entry.lease.remote) {
+			bridge.forgetRemoteSubscriptions(ski, stored.entry.lease.remote)
+			return eebusraw.ReadObservationV1{}, notAvailable
+		}
+	}
+	if stored.failure != nil {
+		failure := stored.failure.Clone()
+		return eebusraw.ReadObservationV1{}, &failure
 	}
 	value := stored.value.Clone()
 	observation := eebusraw.ReadObservationV1{

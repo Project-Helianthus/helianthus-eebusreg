@@ -1170,23 +1170,6 @@ func (sender *issue83RoundTripper) RoundTrip(
 	return issue83MeasurementReply(request, 41, 11, 215), nil
 }
 
-func (sender *issue83RoundTripper) Subscribe(
-	*spinemodel.FeatureAddressType,
-	*spinemodel.FeatureAddressType,
-	spinemodel.FeatureTypeType,
-) (*spinemodel.MsgCounterType, error) {
-	counter := spinemodel.MsgCounterType(1)
-	return &counter, nil
-}
-
-func (sender *issue83RoundTripper) Unsubscribe(
-	*spinemodel.FeatureAddressType,
-	*spinemodel.FeatureAddressType,
-) (*spinemodel.MsgCounterType, error) {
-	counter := spinemodel.MsgCounterType(1)
-	return &counter, nil
-}
-
 func (sender *issue83RoundTripper) Stats() spineapi.CorrelatedRoundTripStats {
 	return spineapi.CorrelatedRoundTripStats{}
 }
