@@ -4,16 +4,25 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
+	"sync"
 	"testing"
 )
 
 func TestOutputBinding(t *testing.T) {
 	binding := newOutputBinding(t)
-	if binding.AdvertisementCount() != 1 || binding.ServiceCount() != 1 {
+	node := outputBindingNode(t, binding)
+	if binding.AdvertisementCount() != node.AdvertisementCount() || binding.ServiceCount() != node.ServiceCount() {
 		t.Fatalf("advertisements=%d services=%d", binding.AdvertisementCount(), binding.ServiceCount())
 	}
-	if binding.DeviceType() != "EnergyManagementSystem" {
+	if binding.AdvertisementCount() != 1 || binding.ServiceCount() != 1 {
+		t.Fatalf("node advertisements=%d services=%d", node.AdvertisementCount(), node.ServiceCount())
+	}
+	if binding.DeviceType() != node.DeviceType() || binding.DeviceType() != "EnergyManagementSystem" {
 		t.Fatalf("device type %q", binding.DeviceType())
+	}
+	if len(node.added) != 0 {
+		t.Fatalf("node entity before a lens result %v", node.added)
 	}
 	types := binding.EntityTypes()
 	if len(types) != 1 || types[0] != "CEM" {
@@ -33,6 +42,9 @@ func TestOutputBinding(t *testing.T) {
 		t.Fatalf("loss %v", loss)
 	}
 	types = binding.EntityTypes()
+	if len(node.added) != 1 || node.added[0].kind != "Inverter" || node.added[0].address != binding.EntityAddress("north") {
+		t.Fatalf("node entities after inverter lens %v", node.added)
+	}
 	if !outputBindingHasType(types, "CEM") || !outputBindingHasType(types, "Inverter") {
 		t.Fatalf("entities after inverter lens %v", types)
 	}
@@ -58,7 +70,7 @@ func TestOutputBindingResourceFields(t *testing.T) {
 	if len(binding.Apply(outputBindingInverter("north"))) != 0 {
 		t.Fatal("inverter lens")
 	}
-	base := lensResult{
+	base := LensResult{
 		Family: "pv string", ResourceID: "east", ParentResourceID: "north",
 		LensAdmitted: true, RuntimeEnabled: true, ContainsCited: true,
 	}
@@ -68,17 +80,21 @@ func TestOutputBindingResourceFields(t *testing.T) {
 	if binding.ParentAddress("east") == "" || binding.ParentAddress("east") != binding.EntityAddress("north") {
 		t.Fatal("string parent is not the inverter")
 	}
+	node := outputBindingNode(t, binding)
+	if node.parentOf(binding.EntityAddress("east")) != binding.EntityAddress("north") {
+		t.Fatalf("string is not nested under the inverter on the node %v", node.added)
+	}
 
 	cases := []struct {
 		name   string
-		mutate func(*lensResult)
+		mutate func(*LensResult)
 	}{
-		{"family", func(result *lensResult) { result.Family = "heating"; result.ResourceID = "heat" }},
-		{"lens admitted", func(result *lensResult) { result.LensAdmitted = false; result.ResourceID = "west" }},
-		{"runtime enabled", func(result *lensResult) { result.RuntimeEnabled = false; result.ResourceID = "south" }},
-		{"input dimension", func(result *lensResult) { result.InputDimension = true; result.ResourceID = "flat" }},
-		{"parent", func(result *lensResult) { result.ParentResourceID = ""; result.ResourceID = "orphan" }},
-		{"contains cited", func(result *lensResult) { result.ContainsCited = false; result.ResourceID = "loose" }},
+		{"family", func(result *LensResult) { result.Family = "heating"; result.ResourceID = "heat" }},
+		{"lens admitted", func(result *LensResult) { result.LensAdmitted = false; result.ResourceID = "west" }},
+		{"runtime enabled", func(result *LensResult) { result.RuntimeEnabled = false; result.ResourceID = "south" }},
+		{"input dimension", func(result *LensResult) { result.InputDimension = true; result.ResourceID = "flat" }},
+		{"parent", func(result *LensResult) { result.ParentResourceID = ""; result.ResourceID = "orphan" }},
+		{"contains cited", func(result *LensResult) { result.ContainsCited = false; result.ResourceID = "loose" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,12 +108,12 @@ func TestOutputBindingResourceFields(t *testing.T) {
 			}
 		})
 	}
-	if loss := binding.Apply(lensResult{
+	if loss := binding.Apply(LensResult{
 		Family: "battery", ResourceID: "pack", LensAdmitted: true, RuntimeEnabled: true,
 	}); len(loss) != 0 || binding.EntityAddress("pack") != "" {
 		t.Fatal("battery published")
 	}
-	if loss := binding.Apply(lensResult{
+	if loss := binding.Apply(LensResult{
 		Family: "charger", ResourceID: "bay", LensAdmitted: true, RuntimeEnabled: true,
 	}); len(loss) != 0 || !outputBindingHasType(binding.EntityTypes(), "EVSE") {
 		t.Fatal("charger not published")
@@ -121,7 +137,7 @@ func TestOutputBindingBasisAndMerge(t *testing.T) {
 	if len(binding.Apply(outputBindingInverter("north"))) != 0 {
 		t.Fatal("empty basis")
 	}
-	charger := lensResult{Family: "charger", ResourceID: "north", LensAdmitted: true, RuntimeEnabled: true}
+	charger := LensResult{Family: "charger", ResourceID: "north", LensAdmitted: true, RuntimeEnabled: true}
 	loss := binding.Apply(charger)
 	if len(loss) != 1 || loss[0] != "merged_resources" {
 		t.Fatalf("loss %v", loss)
@@ -244,7 +260,7 @@ func TestOutputBindingAddressIdentity(t *testing.T) {
 	if err := os.WriteFile(conflict, []byte("east a\neast b\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewOutputBinding(directory); err == nil {
+	if _, err := openOutputBindingOnFakeNode(directory, newOutputBindingFakeNode()); err == nil {
 		t.Fatal("conflicting stored address admitted")
 	}
 }
@@ -285,7 +301,7 @@ func TestOutputBindingServerFeatures(t *testing.T) {
 	binding := newOutputBinding(t)
 	inverter := outputBindingInverter("north")
 	inverter.Elements = []string{"inverter ac measurement", "energy", "temperature", "operating state", "apparent power", "reactive power", "line-to-line voltage", "string dc"}
-	inverter.Operations = []lensOperation{{
+	inverter.Operations = []LensOperation{{
 		Name: "pv.operation.set_active_power_limit", Unit: "W", OwnCapability: true,
 	}}
 	if len(binding.Apply(inverter)) != 0 {
@@ -300,24 +316,30 @@ func TestOutputBindingServerFeatures(t *testing.T) {
 	if outputBindingHasType(features, "apparent power") || outputBindingHasType(features, "string dc") {
 		t.Fatalf("rejected element became a feature %v", features)
 	}
+	added := outputBindingNode(t, binding).features[binding.EntityAddress("north")]
+	for _, want := range []string{"measurement", "device diagnosis", "electrical connection", "load control"} {
+		if !outputBindingHasType(added, want) {
+			t.Fatalf("node missing %s in %v", want, added)
+		}
+	}
 
 	cases := []struct {
 		name       string
 		resourceID string
-		operation  lensOperation
+		operation  LensOperation
 		want       bool
 	}{
-		{"system export", "exportop", lensOperation{Name: "system export", Unit: "W", OwnCapability: true}, false},
-		{"amperes", "ampereunit", lensOperation{Name: "pv.operation.set_active_power_limit", Unit: "A", OwnCapability: true}, false},
-		{"visibility", "visibleonly", lensOperation{Name: "pv.operation.set_active_power_limit", Unit: "W"}, false},
-		{"converted", "convertedop", lensOperation{Name: "pv.operation.set_active_power_limit", Unit: "W", OwnCapability: true, Converted: true}, false},
+		{"system export", "exportop", LensOperation{Name: "system export", Unit: "W", OwnCapability: true}, false},
+		{"amperes", "ampereunit", LensOperation{Name: "pv.operation.set_active_power_limit", Unit: "A", OwnCapability: true}, false},
+		{"visibility", "visibleonly", LensOperation{Name: "pv.operation.set_active_power_limit", Unit: "W"}, false},
+		{"converted", "convertedop", LensOperation{Name: "pv.operation.set_active_power_limit", Unit: "W", OwnCapability: true, Converted: true}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			one := newOutputBinding(t)
 			result := outputBindingInverter("roof")
 			result.ResourceID = tc.resourceID
-			result.Operations = []lensOperation{tc.operation}
+			result.Operations = []LensOperation{tc.operation}
 			if len(one.Apply(result)) != 0 {
 				t.Fatal("apply")
 			}
@@ -327,16 +349,16 @@ func TestOutputBindingServerFeatures(t *testing.T) {
 		})
 	}
 	charger := newOutputBinding(t)
-	admitted := lensResult{
+	admitted := LensResult{
 		Family: "charger", ResourceID: "bay", LensAdmitted: true, RuntimeEnabled: true,
-		Operations: []lensOperation{{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true}},
+		Operations: []LensOperation{{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true}},
 	}
 	if len(charger.Apply(admitted)) != 0 || !outputBindingHasType(charger.ServerFeatures("bay"), "load control") {
 		t.Fatalf("allocated current %v", charger.ServerFeatures("bay"))
 	}
 	watts := admitted
 	watts.ResourceID = "otherbay"
-	watts.Operations = []lensOperation{{Name: "active power", Unit: "W", OwnCapability: true}}
+	watts.Operations = []LensOperation{{Name: "active power", Unit: "W", OwnCapability: true}}
 	if len(charger.Apply(watts)) != 0 || outputBindingHasType(charger.ServerFeatures("otherbay"), "load control") {
 		t.Fatal("charger active power became load control")
 	}
@@ -354,7 +376,7 @@ func TestOutputBindingAnnouncement(t *testing.T) {
 	overlap := outputBindingInverter("north")
 	overlap.Overlapping = true
 	overlap.UseCase = "Limitation of Power Production"
-	overlap.Operations = []lensOperation{{Name: "pv.operation.set_active_power_limit", Unit: "W", OwnCapability: true}}
+	overlap.Operations = []LensOperation{{Name: "pv.operation.set_active_power_limit", Unit: "W", OwnCapability: true}}
 	loss := binding.Apply(overlap)
 	if len(loss) != 1 || loss[0] != "conflict" {
 		t.Fatalf("loss %v", loss)
@@ -366,7 +388,7 @@ func TestOutputBindingAnnouncement(t *testing.T) {
 		t.Fatal("conflict removed the entity")
 	}
 
-	ev := lensResult{Family: "ev", ResourceID: "car", LensAdmitted: true, RuntimeEnabled: true, DeviceActor: "EV", UseCase: "Overload protection"}
+	ev := LensResult{Family: "ev", ResourceID: "car", LensAdmitted: true, RuntimeEnabled: true, DeviceActor: "EV", UseCase: "Overload protection"}
 	loss = binding.Apply(ev)
 	if len(loss) != 1 || loss[0] != "EV" || binding.EntityAddress("car") != "" {
 		t.Fatalf("ev loss %v address %q", loss, binding.EntityAddress("car"))
@@ -387,10 +409,10 @@ func TestOutputBindingAnnouncement(t *testing.T) {
 		t.Fatalf("present element dropped %v", binding.ServerFeatures("south"))
 	}
 
-	charger := lensResult{
+	charger := LensResult{
 		Family: "charger", ResourceID: "bay", LensAdmitted: true, RuntimeEnabled: true,
 		UseCase:    "Limitation of Power Consumption",
-		Operations: []lensOperation{{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true}},
+		Operations: []LensOperation{{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true}},
 	}
 	loss = binding.Apply(charger)
 	if len(loss) != 1 || loss[0] != "consumption_limit_not_applied" {
@@ -411,15 +433,38 @@ func newOutputBinding(t *testing.T) *OutputBinding {
 
 func newOutputBindingAt(t *testing.T, directory string) *OutputBinding {
 	t.Helper()
-	binding, err := NewOutputBinding(directory)
+	binding, err := openOutputBindingOnFakeNode(directory, newOutputBindingFakeNode())
 	if err != nil {
 		t.Fatal(err)
 	}
 	return binding
 }
 
-func outputBindingInverter(resourceID string) lensResult {
-	return lensResult{Family: "inverter", ResourceID: resourceID, LensAdmitted: true, RuntimeEnabled: true}
+// openOutputBindingOnFakeNode builds a binding on an injected node. The root
+// package cannot prepare the runtime service; the facade package tests the
+// binding on the real node.
+func openOutputBindingOnFakeNode(directory string, node *outputBindingFakeNode) (*OutputBinding, error) {
+	outputBindingOpenMu.Lock()
+	defer outputBindingOpenMu.Unlock()
+	original := openShipNode
+	openShipNode = func() (shipNode, error) { return node, nil }
+	defer func() { openShipNode = original }()
+	return NewOutputBinding(directory)
+}
+
+var outputBindingOpenMu sync.Mutex
+
+func outputBindingNode(t *testing.T, binding *OutputBinding) *outputBindingFakeNode {
+	t.Helper()
+	node, ok := binding.node.(*outputBindingFakeNode)
+	if !ok || node == nil {
+		t.Fatal("binding is not attached to the node")
+	}
+	return node
+}
+
+func outputBindingInverter(resourceID string) LensResult {
+	return LensResult{Family: "inverter", ResourceID: resourceID, LensAdmitted: true, RuntimeEnabled: true}
 }
 
 func outputBindingHasType(values []string, want string) bool {
@@ -438,4 +483,164 @@ func outputBindingHasDigit(value string) bool {
 		}
 	}
 	return false
+}
+
+func TestOutputBindingObservesNodeCounts(t *testing.T) {
+	// The counts and the device type come from the node, not from the binding.
+	node := newOutputBindingFakeNode()
+	node.advertisements = 4
+	node.services = 2
+	node.deviceType = "ProbeNode"
+	binding, err := openOutputBindingOnFakeNode(t.TempDir(), node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.AdvertisementCount() != 4 || binding.ServiceCount() != 2 || binding.DeviceType() != "ProbeNode" {
+		t.Fatalf("ads=%d services=%d type=%q", binding.AdvertisementCount(), binding.ServiceCount(), binding.DeviceType())
+	}
+	inverter := outputBindingInverter("north")
+	inverter.Elements = []string{"temperature"}
+	if len(binding.Apply(inverter)) != 0 {
+		t.Fatal("apply")
+	}
+	if len(node.added) != 1 || node.added[0].kind != "Inverter" {
+		t.Fatalf("node additions %v", node.added)
+	}
+	if !outputBindingHasType(binding.EntityTypes(), "Inverter") {
+		t.Fatalf("types %v", binding.EntityTypes())
+	}
+	if !outputBindingHasType(node.features[binding.EntityAddress("north")], "measurement") {
+		t.Fatalf("features were not added on the node %v", node.features)
+	}
+}
+
+func TestOutputBindingRequiresExistingNode(t *testing.T) {
+	// Without a running runtime service the binding is refused and nothing is composed.
+	if _, err := NewOutputBinding(t.TempDir()); !errors.Is(err, errExistingNode) {
+		t.Fatalf("binding without a runtime node err=%v", err)
+	}
+	original := openShipNode
+	openShipNode = func() (shipNode, error) { return nil, errors.New("absent") }
+	t.Cleanup(func() { openShipNode = original })
+	if _, err := NewOutputBinding(t.TempDir()); !errors.Is(err, errExistingNode) {
+		t.Fatalf("binding on an absent node err=%v", err)
+	}
+}
+
+func TestOutputBindingConcurrentReaders(t *testing.T) {
+	binding := newOutputBinding(t)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = binding.EntityTypes()
+			_ = binding.EntityAddress("na")
+			_ = binding.ServerFeatures("na")
+			_ = binding.AdvertisementCount()
+			_ = binding.ServiceCount()
+			_ = binding.DeviceType()
+			_ = binding.EntityAddresses()
+			_ = binding.ParentAddress("na")
+		}
+	}()
+	for ordinal := 0; ordinal < 8; ordinal++ {
+		result := outputBindingInverter("n" + letterToken(ordinal))
+		if loss := binding.Apply(result); len(loss) != 0 {
+			close(stop)
+			wg.Wait()
+			t.Fatalf("loss %v", loss)
+		}
+	}
+	close(stop)
+	wg.Wait()
+}
+
+type outputBindingFakeEntity struct {
+	kind    string
+	address string
+	parent  string
+}
+
+// outputBindingFakeNode records what the binding adds on the node. It is not
+// synchronised, so the race detector reports any call outside the binding gate.
+type outputBindingFakeNode struct {
+	advertisements int
+	services       int
+	deviceType     string
+	added          []outputBindingFakeEntity
+	features       map[string][]string
+}
+
+func newOutputBindingFakeNode() *outputBindingFakeNode {
+	return &outputBindingFakeNode{
+		advertisements: 1,
+		services:       1,
+		deviceType:     "EnergyManagementSystem",
+		features:       map[string][]string{},
+	}
+}
+
+func (n *outputBindingFakeNode) AdvertisementCount() int { return n.advertisements }
+
+func (n *outputBindingFakeNode) ServiceCount() int { return n.services }
+
+func (n *outputBindingFakeNode) DeviceType() string { return n.deviceType }
+
+func (n *outputBindingFakeNode) EntityTypes() []string {
+	types := []string{"CEM"}
+	for _, entity := range n.added {
+		types = append(types, entity.kind)
+	}
+	return types
+}
+
+func (n *outputBindingFakeNode) AddEntity(kind, address, parent string) error {
+	for _, entity := range n.added {
+		if entity.address == address {
+			return errors.New("duplicate address")
+		}
+	}
+	if parent != "" && n.find(parent) == nil {
+		return errors.New("missing parent")
+	}
+	n.added = append(n.added, outputBindingFakeEntity{kind: kind, address: address, parent: parent})
+	return nil
+}
+
+func (n *outputBindingFakeNode) ServerFeatures(address string) []string {
+	return append([]string(nil), n.features[address]...)
+}
+
+func (n *outputBindingFakeNode) AddServerFeature(address, name string) error {
+	if n.find(address) == nil {
+		return errors.New("missing entity")
+	}
+	if !outputBindingHasType(n.features[address], name) {
+		n.features[address] = append(n.features[address], name)
+		sort.Strings(n.features[address])
+	}
+	return nil
+}
+
+func (n *outputBindingFakeNode) find(address string) *outputBindingFakeEntity {
+	for index := range n.added {
+		if n.added[index].address == address {
+			return &n.added[index]
+		}
+	}
+	return nil
+}
+
+func (n *outputBindingFakeNode) parentOf(address string) string {
+	if entity := n.find(address); entity != nil {
+		return entity.parent
+	}
+	return ""
 }

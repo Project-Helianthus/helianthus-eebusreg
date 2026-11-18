@@ -44,6 +44,8 @@ func ParticipationConfigurationV1.Validate
 func ParticipationContributionV1.Validate
 func ValidateParticipationChangeV1
 func ValidateParticipationControlV1
+type LensOperation
+type LensResult
 type OutputBinding
 type ParticipationAdmissionV1
 type ParticipationApplyRequestV1

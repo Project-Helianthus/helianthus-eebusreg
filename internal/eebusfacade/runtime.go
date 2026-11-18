@@ -377,6 +377,7 @@ func (acquisition *runtimeAcquisition) openService(serializer runtimeSnapshotSer
 }
 
 func (acquisition *runtimeAcquisition) closeRuntime(cause error) error {
+	releaseOutputService(acquisition.service)
 	acquisition.service.Shutdown()
 	attemptErr := acquisition.outgoingAttemptBridge.shutdown()
 	trustErr := acquisition.closeFirstTrust()
@@ -854,6 +855,7 @@ func (backend *serviceBackend) Close() error {
 		backend.handler.waitForSPINEEvents()
 	}
 	if backend.service != nil {
+		releaseOutputService(backend.service)
 		backend.service.Shutdown()
 	}
 	var attemptErr error
@@ -916,6 +918,7 @@ func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebu
 	if candidate == nil {
 		return nil, errors.New("released scoped service construction failed")
 	}
+	adoptOutputService(candidate)
 	return candidate, nil
 }
 

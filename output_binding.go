@@ -6,12 +6,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 )
 
 const (
-	deviceTypeName            = "EnergyManagementSystem"
 	cemAddress                = "cem"
-	cemKind                   = "CEM"
 	addressFileName           = "entity-addresses"
 	useCaseConsumption        = "Limitation of Power Consumption"
 	featureMeasurement        = "measurement"
@@ -27,7 +28,33 @@ var (
 	errAddressStore             = errors.New("entity address store is unavailable")
 	errStoredAddressReplacement = errors.New("stored address replacement is rejected")
 	errMergedResources          = errors.New("merged resources")
+	errExistingNode             = errors.New("existing node is unavailable")
 )
+
+// outputBindingGate serialises every binding read and write, so a host may
+// apply lens results and read entities from different goroutines.
+var outputBindingGate sync.Mutex
+
+// shipNode is the node of the running runtime service.
+type shipNode interface {
+	AdvertisementCount() int
+	ServiceCount() int
+	DeviceType() string
+	EntityTypes() []string
+	AddEntity(kind, address, parent string) error
+	ServerFeatures(address string) []string
+	AddServerFeature(address, name string) error
+}
+
+// openShipNode attaches to the node of the running runtime service. It never
+// composes a second service.
+var openShipNode = func() (shipNode, error) {
+	node, err := eebusfacade.OpenOutputNode()
+	if err != nil || node == nil {
+		return nil, errExistingNode
+	}
+	return node, nil
+}
 
 var syncBindingFile = func(file *os.File) error {
 	return file.Sync()
@@ -49,7 +76,7 @@ type OutputBinding struct {
 	addresses  map[string]string
 	byResource map[string]boundEntity
 	order      []string
-	features   map[string][]string
+	node       shipNode
 }
 
 type boundEntity struct {
@@ -58,7 +85,8 @@ type boundEntity struct {
 	parent  string
 }
 
-type lensResult struct {
+// LensResult is an admitted lens result. It carries no SPINE type.
+type LensResult struct {
 	Family           string
 	ResourceID       string
 	ParentResourceID string
@@ -68,7 +96,7 @@ type lensResult struct {
 	ContainsCited    bool
 	Basis            string
 	Elements         []string
-	Operations       []lensOperation
+	Operations       []LensOperation
 	UseCase          string
 	Actor            string
 	UseCaseText      string
@@ -77,7 +105,8 @@ type lensResult struct {
 	Overlapping      bool
 }
 
-type lensOperation struct {
+// LensOperation is one operation on a lens result. It carries no SPINE type.
+type LensOperation struct {
 	Name          string
 	Unit          string
 	OwnCapability bool
@@ -94,63 +123,99 @@ func NewOutputBinding(directory string) (*OutputBinding, error) {
 	if err != nil {
 		return nil, err
 	}
+	node, err := openShipNode()
+	if err != nil || node == nil {
+		return nil, errExistingNode
+	}
 	return &OutputBinding{
 		directory:  directory,
 		addresses:  addresses,
 		byResource: map[string]boundEntity{},
-		features:   map[string][]string{},
+		node:       node,
 	}, nil
 }
 
 // Apply adds an Inverter, a PV String whose parent is that Inverter, or an EVSE
 // entity when the publication contract admits the lens result. A use-case text
 // that forbids device type EnergyManagementSystem adds nothing and names that prohibition.
-func (b *OutputBinding) Apply(result lensResult) []string {
+func (b *OutputBinding) Apply(result LensResult) []string {
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
 	if !b.admitted(result) {
 		return announcementLoss(result)
 	}
-	if loss := prohibitedDeviceType(result); loss != nil {
+	if loss := b.prohibitedDeviceType(result); loss != nil {
 		return loss
 	}
 	if err := b.ensureEntity(result); err != nil {
 		return applyLoss(err)
 	}
 	if !result.Overlapping {
-		b.bindFeatures(result)
+		if err := b.bindFeatures(result); err != nil {
+			return applyLoss(err)
+		}
 	}
 	return announcementLoss(result)
 }
 
-// AdvertisementCount is the one advertisement of the existing node.
-func (*OutputBinding) AdvertisementCount() int { return 1 }
+// AdvertisementCount is the advertisement count of the existing node.
+func (b *OutputBinding) AdvertisementCount() int {
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	if b == nil || b.node == nil {
+		return 0
+	}
+	return b.node.AdvertisementCount()
+}
 
-// ServiceCount is the one service of the existing node.
-func (*OutputBinding) ServiceCount() int { return 1 }
+// ServiceCount is the service count of the existing node.
+func (b *OutputBinding) ServiceCount() int {
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	if b == nil || b.node == nil {
+		return 0
+	}
+	return b.node.ServiceCount()
+}
 
 // DeviceType is the device type of the existing node.
-func (*OutputBinding) DeviceType() string { return deviceTypeName }
-
-// EntityTypes lists the CEM entity and each admitted entity.
-func (b *OutputBinding) EntityTypes() []string {
-	types := []string{cemKind}
-	for _, id := range b.resourceOrder() {
-		types = append(types, b.byResource[id].kind)
+func (b *OutputBinding) DeviceType() string {
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	if b == nil || b.node == nil {
+		return ""
 	}
-	return types
+	return b.node.DeviceType()
+}
+
+// EntityTypes lists the CEM entity and each admitted entity on the existing node.
+func (b *OutputBinding) EntityTypes() []string {
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	if b == nil || b.node == nil {
+		return nil
+	}
+	return b.node.EntityTypes()
 }
 
 // EntityAddress returns the address stored for a resource identifier.
 func (b *OutputBinding) EntityAddress(resourceID string) string {
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
 	return b.byResource[resourceID].address
 }
 
 // ParentAddress returns the parent entity address of a resource identifier.
 func (b *OutputBinding) ParentAddress(resourceID string) string {
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
 	return b.byResource[resourceID].parent
 }
 
 // EntityAddresses lists the CEM address and every stored entity address.
 func (b *OutputBinding) EntityAddresses() []string {
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
 	addresses := []string{cemAddress}
 	for _, id := range b.resourceOrder() {
 		addresses = append(addresses, b.byResource[id].address)
@@ -160,10 +225,19 @@ func (b *OutputBinding) EntityAddresses() []string {
 
 // ServerFeatures lists the server features mapped for a resource identifier.
 func (b *OutputBinding) ServerFeatures(resourceID string) []string {
-	return append([]string(nil), b.features[resourceID]...)
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	if b == nil || b.node == nil {
+		return nil
+	}
+	address := b.byResource[resourceID].address
+	if address == "" {
+		return nil
+	}
+	return b.node.ServerFeatures(address)
 }
 
-func (b *OutputBinding) admitted(result lensResult) bool {
+func (b *OutputBinding) admitted(result LensResult) bool {
 	if !publishedFamily(result) || result.ResourceID == "" || result.Basis != "" {
 		return false
 	}
@@ -173,7 +247,7 @@ func (b *OutputBinding) admitted(result lensResult) bool {
 	return result.Family != "pv string" || b.stringParentAdmitted(result)
 }
 
-func publishedFamily(result lensResult) bool {
+func publishedFamily(result LensResult) bool {
 	if !result.LensAdmitted || !result.RuntimeEnabled {
 		return false
 	}
@@ -187,7 +261,7 @@ func publishedFamily(result lensResult) bool {
 	}
 }
 
-func (b *OutputBinding) stringParentAdmitted(result lensResult) bool {
+func (b *OutputBinding) stringParentAdmitted(result LensResult) bool {
 	if !result.ContainsCited || result.ParentResourceID == "" {
 		return false
 	}
@@ -195,14 +269,15 @@ func (b *OutputBinding) stringParentAdmitted(result lensResult) bool {
 	return ok && parent.kind == "Inverter"
 }
 
-func prohibitedDeviceType(result lensResult) []string {
-	if result.Actor == "" || result.UseCaseText == "" {
+func (b *OutputBinding) prohibitedDeviceType(result LensResult) []string {
+	if b == nil || b.node == nil || result.Actor == "" || result.UseCaseText == "" {
 		return nil
 	}
-	if !textForbidsDeviceType(result.UseCaseText, result.Actor, deviceTypeName) {
+	deviceType := b.node.DeviceType()
+	if deviceType == "" || !textForbidsDeviceType(result.UseCaseText, result.Actor, deviceType) {
 		return nil
 	}
-	return []string{"device_type_prohibition", deviceTypeName}
+	return []string{"device_type_prohibition", deviceType}
 }
 
 func textForbidsDeviceType(text, actor, deviceType string) bool {
@@ -259,7 +334,7 @@ func wordByte(value byte) bool {
 	return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z')
 }
 
-func (b *OutputBinding) ensureEntity(result lensResult) error {
+func (b *OutputBinding) ensureEntity(result LensResult) error {
 	kind := entityKind(result.Family)
 	if existing, ok := b.byResource[result.ResourceID]; ok {
 		if existing.kind != kind {
@@ -271,11 +346,17 @@ func (b *OutputBinding) ensureEntity(result lensResult) error {
 	if err != nil {
 		return err
 	}
-	entity := boundEntity{kind: kind, address: address}
+	parent := ""
 	if result.Family == "pv string" {
-		entity.parent = b.byResource[result.ParentResourceID].address
+		parent = b.byResource[result.ParentResourceID].address
 	}
-	b.byResource[result.ResourceID] = entity
+	if b.node == nil {
+		return errExistingNode
+	}
+	if err := b.node.AddEntity(kind, address, parent); err != nil {
+		return errExistingNode
+	}
+	b.byResource[result.ResourceID] = boundEntity{kind: kind, address: address, parent: parent}
 	b.order = append(b.order, result.ResourceID)
 	return nil
 }
@@ -298,7 +379,7 @@ func (b *OutputBinding) allocate(resourceID string) (string, error) {
 		return address, nil
 	}
 	address := b.freshAddress()
-	if err := b.noteAddress(resourceID, address); err != nil {
+	if err := b.noteAddressLocked(resourceID, address); err != nil {
 		return "", err
 	}
 	return address, nil
@@ -337,6 +418,12 @@ func letterToken(ordinal int) string {
 }
 
 func (b *OutputBinding) noteAddress(resourceID, address string) error {
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	return b.noteAddressLocked(resourceID, address)
+}
+
+func (b *OutputBinding) noteAddressLocked(resourceID, address string) error {
 	if resourceID == "" || !letterAddress(address) {
 		return errAddressStore
 	}
@@ -446,13 +533,17 @@ func loadAddresses(path string) (map[string]string, error) {
 	return addresses, nil
 }
 
-func (b *OutputBinding) bindFeatures(result lensResult) {
+func (b *OutputBinding) bindFeatures(result LensResult) error {
+	if b.node == nil {
+		return errExistingNode
+	}
+	address := b.byResource[result.ResourceID].address
 	blocked := map[string]struct{}{}
 	for _, name := range result.MissingElements {
 		blocked[name] = struct{}{}
 	}
 	present := map[string]struct{}{}
-	for _, name := range b.features[result.ResourceID] {
+	for _, name := range b.node.ServerFeatures(address) {
 		present[name] = struct{}{}
 	}
 	for _, element := range result.Elements {
@@ -473,7 +564,12 @@ func (b *OutputBinding) bindFeatures(result lensResult) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	b.features[result.ResourceID] = names
+	for _, name := range names {
+		if err := b.node.AddServerFeature(address, name); err != nil {
+			return errExistingNode
+		}
+	}
+	return nil
 }
 
 func featuresForElement(family, element string) []string {
@@ -492,7 +588,7 @@ func featuresForElement(family, element string) []string {
 	}
 }
 
-func featuresForOperation(family string, operation lensOperation) []string {
+func featuresForOperation(family string, operation LensOperation) []string {
 	if !operation.OwnCapability || operation.Converted {
 		return nil
 	}
@@ -509,7 +605,7 @@ func featuresForOperation(family string, operation lensOperation) []string {
 	return nil
 }
 
-func announcementLoss(result lensResult) []string {
+func announcementLoss(result LensResult) []string {
 	if result.Overlapping {
 		return []string{"conflict"}
 	}
@@ -530,7 +626,7 @@ func announcementLoss(result lensResult) []string {
 	return nil
 }
 
-func consumptionApplied(result lensResult) bool {
+func consumptionApplied(result LensResult) bool {
 	if result.Family == "charger" || result.Overlapping {
 		return false
 	}
@@ -548,6 +644,8 @@ func applyLoss(err error) []string {
 		return []string{"merged_resources"}
 	case errors.Is(err, errStoredAddressReplacement):
 		return []string{"stored_address_replacement"}
+	case errors.Is(err, errExistingNode):
+		return []string{"existing_node"}
 	default:
 		return []string{"address_store"}
 	}

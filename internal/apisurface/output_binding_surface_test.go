@@ -5,10 +5,19 @@ import "testing"
 // outputBindingSymbol keeps the historical public projection byte-identical.
 // TestOutputBindingSurfaceIsClosed attests the binding on its own.
 func outputBindingSymbol(symbol symbol) bool {
-	if symbol.Name == "NewOutputBinding" || symbol.Name == "OutputBinding" {
+	switch symbol.Name {
+	case "NewOutputBinding", "OutputBinding", "LensResult", "LensOperation":
 		return true
 	}
-	return symbol.Receiver != nil && symbol.Receiver.Base == "OutputBinding"
+	if symbol.Receiver == nil {
+		return false
+	}
+	switch symbol.Receiver.Base {
+	case "OutputBinding", "LensResult", "LensOperation":
+		return true
+	default:
+		return false
+	}
 }
 
 func TestOutputBindingSurfaceIsClosed(t *testing.T) {
@@ -20,7 +29,7 @@ func TestOutputBindingSurfaceIsClosed(t *testing.T) {
 	want := map[string]string{
 		"func NewOutputBinding":                 "func NewOutputBinding(string) (*OutputBinding, error)",
 		"func OutputBinding.AdvertisementCount": "func (*OutputBinding) AdvertisementCount() int",
-		"func OutputBinding.Apply":              "func (*OutputBinding) Apply(lensResult) []string",
+		"func OutputBinding.Apply":              "func (*OutputBinding) Apply(LensResult) []string",
 		"func OutputBinding.DeviceType":         "func (*OutputBinding) DeviceType() string",
 		"func OutputBinding.EntityAddress":      "func (*OutputBinding) EntityAddress(string) string",
 		"func OutputBinding.EntityAddresses":    "func (*OutputBinding) EntityAddresses() []string",
@@ -28,7 +37,9 @@ func TestOutputBindingSurfaceIsClosed(t *testing.T) {
 		"func OutputBinding.ParentAddress":      "func (*OutputBinding) ParentAddress(string) string",
 		"func OutputBinding.ServerFeatures":     "func (*OutputBinding) ServerFeatures(string) []string",
 		"func OutputBinding.ServiceCount":       "func (*OutputBinding) ServiceCount() int",
-		"type OutputBinding":                    "type OutputBinding struct{ directory string; addresses map[string]string; byResource map[string]boundEntity; order []string; features map[string][]string }",
+		"type LensOperation":                    "type LensOperation struct{ Name string; Unit string; OwnCapability bool; Converted bool }",
+		"type LensResult":                       "type LensResult struct{ Family string; ResourceID string; ParentResourceID string; LensAdmitted bool; RuntimeEnabled bool; InputDimension bool; ContainsCited bool; Basis string; Elements []string; Operations []LensOperation; UseCase string; Actor string; UseCaseText string; DeviceActor string; MissingElements []string; Overlapping bool }",
+		"type OutputBinding":                    "type OutputBinding struct{ directory string; addresses map[string]string; byResource map[string]boundEntity; order []string; node shipNode }",
 	}
 	got := map[string]string{}
 	for _, symbol := range root.Symbols {
