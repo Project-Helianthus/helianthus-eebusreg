@@ -14,7 +14,9 @@
 // defines the evidence references and envelopes that participation provenance retains. The
 // protocol stack sits behind an internal facade, so no SHIP or SPINE type crosses this API. The
 // package records native observations as evidence and does not interpret them into
-// cross-protocol semantics, which belong to their respective owners.
+// cross-protocol semantics, which belong to their respective owners. The output
+// binding maps an admitted lens result onto this node's server features and exports
+// no SPINE type.
 //
 // Protocol and API semantics are documented at
 // https://github.com/Project-Helianthus/helianthus-docs-eebus.
