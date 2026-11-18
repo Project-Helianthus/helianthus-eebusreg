@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,6 +51,8 @@ type remoteSubscriptionSender struct {
 	unsubscribed []remoteSubscriptionCall
 	failures     map[spinemodel.FeatureTypeType]int
 	sequence     []string
+	// unsubscribeFailures counts the next unsubscribe requests that fail to send.
+	unsubscribeFailures int
 }
 
 func (sender *remoteSubscriptionSender) Subscribe(
@@ -102,6 +105,10 @@ func (sender *remoteSubscriptionSender) Unsubscribe(
 ) (*spinemodel.MsgCounterType, error) {
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
+	if sender.unsubscribeFailures > 0 {
+		sender.unsubscribeFailures--
+		return nil, errRemoteSubscriptionTestFailure
+	}
 	sender.unsubscribed = append(sender.unsubscribed, remoteSubscriptionCall{
 		source: source.String(), destination: destination.String(),
 	})
@@ -346,7 +353,7 @@ func remoteSubscriptionAuthorization() eebusraw.ReadAuthorizationV1 {
 
 func TestRemoteSubscriptionTrustedRemoteIsSubscribedOnceAndServesNotifiedData(t *testing.T) {
 	fixture := newRemoteSubscriptionFixture(t, strings.Repeat("a", 40), remoteSubscriptionMeasurementSpec())
-	handler := newRemoteSubscriptionHandler(t, fixture, func(string) bool { return true })
+	handler := newRemoteSubscriptionHandler(t, fixture, remoteSubscriptionTrustAll)
 	backend := &serviceBackend{rawFeatures: fixture.bridge, handler: handler}
 	target := fixture.target(11, spinemodel.FeatureTypeTypeMeasurement, spinemodel.FunctionTypeMeasurementListData)
 
@@ -761,7 +768,7 @@ func TestRemoteSubscriptionUndecodableNotifyIsReportedAsDecodeError(t *testing.T
 		function:    spinemodel.FunctionTypeElectricalConnectionPermittedValueSetListData,
 		readable:    true,
 	}})
-	handler := newRemoteSubscriptionHandler(t, fixture, func(string) bool { return true })
+	handler := newRemoteSubscriptionHandler(t, fixture, remoteSubscriptionTrustAll)
 	backend := &serviceBackend{rawFeatures: fixture.bridge, handler: handler}
 	fixture.admit(t, 4)
 	connection := spinemodel.ElectricalConnectionIdType(1)
@@ -856,7 +863,7 @@ func TestRemoteSubscriptionDroppedWhenFeatureOrRemoteDisappears(t *testing.T) {
 		function: spinemodel.FunctionTypeDeviceDiagnosisStateData, readable: true,
 	})
 	fixture := newRemoteSubscriptionFixture(t, strings.Repeat("d", 40), specs)
-	handler := newRemoteSubscriptionHandler(t, fixture, func(string) bool { return true })
+	handler := newRemoteSubscriptionHandler(t, fixture, remoteSubscriptionTrustAll)
 	backend := &serviceBackend{rawFeatures: fixture.bridge, handler: handler}
 	fixture.admit(t, 4)
 	measurement := fixture.target(11, spinemodel.FeatureTypeTypeMeasurement, spinemodel.FunctionTypeMeasurementListData)
@@ -916,11 +923,32 @@ func TestRemoteSubscriptionFailedRequestIsRetriedOnNextDiscovery(t *testing.T) {
 	if subscribed, _ := fixture.sender.calls(); len(subscribed) != 1 {
 		t.Fatalf("retry subscriptions = %+v, want one", subscribed)
 	}
+
+	// An unsubscribe that fails to send stays queued until it reaches the responder, once.
+	fixture.sender.mu.Lock()
+	fixture.sender.unsubscribeFailures = 1
+	fixture.sender.mu.Unlock()
+	measurement := fixture.feature(11).Address().String()
+	fixture.remote.hideFeature(11)
+	if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+		t.Fatal(err)
+	}
+	if _, unsubscribed := fixture.sender.calls(); len(unsubscribed) != 0 {
+		t.Fatalf("failed unsubscribe was recorded: %+v", unsubscribed)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+			t.Fatal(err)
+		}
+		if _, unsubscribed := fixture.sender.calls(); len(unsubscribed) != 1 || unsubscribed[0].destination != measurement {
+			t.Fatalf("refresh %d unsubscriptions = %+v, want the Measurement unsubscribe sent once", attempt, unsubscribed)
+		}
+	}
 }
 
 func TestRemoteSubscriptionReadKeyVariesEveryTargetField(t *testing.T) {
 	fixture := newRemoteSubscriptionFixture(t, strings.Repeat("a", 40), remoteSubscriptionMeasurementSpec())
-	handler := newRemoteSubscriptionHandler(t, fixture, func(string) bool { return true })
+	handler := newRemoteSubscriptionHandler(t, fixture, remoteSubscriptionTrustAll)
 	backend := &serviceBackend{rawFeatures: fixture.bridge, handler: handler}
 	fixture.admit(t, 4)
 	handler.HandleEvent(remoteSubscriptionNotify(
@@ -980,5 +1008,127 @@ func TestRemoteSubscriptionFullReadKeepsItsBehaviour(t *testing.T) {
 	}
 	if fixture.sender.calls.Load() != 1 {
 		t.Fatalf("full READ round trips = %d, want 1", fixture.sender.calls.Load())
+	}
+}
+
+func remoteSubscriptionTrustAll(string) bool { return true }
+
+func TestRemoteSubscriptionReadDoesNotRaceDiscoveryRefresh(t *testing.T) {
+	fixture := newRemoteSubscriptionFixture(t, strings.Repeat("ab", 20), remoteSubscriptionMeasurementSpec())
+	handler := newRemoteSubscriptionHandler(t, fixture, remoteSubscriptionTrustAll)
+	backend := &serviceBackend{rawFeatures: fixture.bridge, handler: handler}
+	target := fixture.target(11, spinemodel.FeatureTypeTypeMeasurement, spinemodel.FunctionTypeMeasurementListData)
+	fixture.admit(t, 4)
+	handler.HandleEvent(remoteSubscriptionNotify(
+		t, fixture, fixture.feature(11), spinemodel.FunctionTypeMeasurementListData,
+		remoteSubscriptionMeasurementData(215),
+	))
+	const rounds = 200
+	refreshed := make(chan error, 1)
+	go func() {
+		for round := 0; round < rounds; round++ {
+			if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+				refreshed <- err
+				return
+			}
+		}
+		refreshed <- nil
+	}()
+	for round := 0; round < rounds; round++ {
+		if _, terminal := backend.FeatureNotifiedDataGet(
+			context.Background(), remoteSubscriptionAuthorization(), target,
+		); terminal != nil {
+			t.Errorf("read during discovery refresh = %+v", terminal)
+			break
+		}
+	}
+	if err := <-refreshed; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemoteSubscriptionTrustWithdrawalSeenByRefreshOrEmptyReadDropsSubscription(t *testing.T) {
+	fixture := newRemoteSubscriptionFixture(t, strings.Repeat("7", 40), remoteSubscriptionMeasurementSpec())
+	handler, backend, trusted := newRemoteSubscriptionTrustSwitch(t, fixture)
+	target := fixture.target(11, spinemodel.FeatureTypeTypeMeasurement, spinemodel.FunctionTypeMeasurementListData)
+	measurement := fixture.feature(11).Address().String()
+	fixture.admit(t, 4)
+	handler.HandleEvent(remoteSubscriptionNotify(
+		t, fixture, fixture.feature(11), spinemodel.FunctionTypeMeasurementListData,
+		remoteSubscriptionMeasurementData(215),
+	))
+	if _, terminal := backend.FeatureNotifiedDataGet(context.Background(), remoteSubscriptionAuthorization(), target); terminal != nil {
+		t.Fatalf("trusted read error = %+v", terminal)
+	}
+
+	// A discovery refresh that runs after the withdrawal takes no subscription and drops the data.
+	trusted.Delete(fixture.remoteSKI)
+	if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+		t.Fatal(err)
+	}
+	subscribed, unsubscribed := fixture.sender.calls()
+	if len(subscribed) != 1 || len(unsubscribed) != 1 || unsubscribed[0].destination != measurement {
+		t.Fatalf("refresh after trust withdrawal: subscriptions = %+v, unsubscriptions = %+v", subscribed, unsubscribed)
+	}
+	if active := fixture.activeSubscriptions(); active != 0 {
+		t.Fatalf("untrusted remote keeps %d subscriptions", active)
+	}
+	trusted.Store(fixture.remoteSKI, true)
+	if _, terminal := backend.FeatureNotifiedDataGet(
+		context.Background(), remoteSubscriptionAuthorization(), target,
+	); terminal == nil || terminal.Code != eebusraw.ErrorCodeV1NotFound {
+		t.Fatalf("later grant served the pre-withdrawal data: %+v", terminal)
+	}
+	if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+		t.Fatal(err)
+	}
+	if subscribed, _ := fixture.sender.calls(); len(subscribed) != 2 {
+		t.Fatalf("subscriptions after the later grant = %+v, want a new request", subscribed)
+	}
+
+	// A read that finds no stored notification still withdraws an untrusted remote.
+	trusted.Delete(fixture.remoteSKI)
+	if _, terminal := backend.FeatureNotifiedDataGet(
+		context.Background(), remoteSubscriptionAuthorization(), target,
+	); terminal == nil || terminal.Code != eebusraw.ErrorCodeV1NotFound {
+		t.Fatalf("read after the second withdrawal = %+v, want not_found", terminal)
+	}
+	if _, unsubscribed := fixture.sender.calls(); len(unsubscribed) != 2 || unsubscribed[1].destination != measurement {
+		t.Fatalf("read without a notification left the subscription: unsubscriptions = %+v", unsubscribed)
+	}
+	if active := fixture.activeSubscriptions(); active != 0 {
+		t.Fatalf("untrusted remote keeps %d subscriptions after the read", active)
+	}
+}
+
+func TestRemoteSubscriptionEpochChangeIsReportedAsMismatch(t *testing.T) {
+	fixture := newRemoteSubscriptionFixture(t, strings.Repeat("9", 40), remoteSubscriptionMeasurementSpec())
+	var epoch atomic.Uint64
+	epoch.Store(9)
+	fixture.bridge.runtimeEpoch = epoch.Load
+	handler := newRemoteSubscriptionHandler(t, fixture, remoteSubscriptionTrustAll)
+	backend := &serviceBackend{rawFeatures: fixture.bridge, handler: handler}
+	target := fixture.target(11, spinemodel.FeatureTypeTypeMeasurement, spinemodel.FunctionTypeMeasurementListData)
+	fixture.admit(t, 4)
+	handler.HandleEvent(remoteSubscriptionNotify(
+		t, fixture, fixture.feature(11), spinemodel.FunctionTypeMeasurementListData,
+		remoteSubscriptionMeasurementData(215),
+	))
+	if _, terminal := backend.FeatureNotifiedDataGet(context.Background(), remoteSubscriptionAuthorization(), target); terminal != nil {
+		t.Fatalf("read before the epoch change = %+v", terminal)
+	}
+
+	epoch.Store(10)
+	if _, terminal := backend.FeatureNotifiedDataGet(
+		context.Background(), remoteSubscriptionAuthorization(), target,
+	); terminal == nil || terminal.Code != eebusraw.ErrorCodeV1RuntimeEpochMismatch || !terminal.Retriable {
+		t.Fatalf("read of an older-epoch notification = %+v, want retriable runtime_epoch_mismatch", terminal)
+	}
+	missing := target.Clone()
+	missing.Function = string(spinemodel.FunctionTypeMeasurementDescriptionListData)
+	if _, terminal := backend.FeatureNotifiedDataGet(
+		context.Background(), remoteSubscriptionAuthorization(), missing,
+	); terminal == nil || terminal.Code != eebusraw.ErrorCodeV1NotFound {
+		t.Fatalf("read of a never-notified function = %+v, want not_found", terminal)
 	}
 }

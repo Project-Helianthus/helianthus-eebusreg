@@ -52,6 +52,7 @@ type remoteSubscriptionState struct {
 	pending  map[remoteSubscriptionRequest]*remoteSubscriptionEntry
 	refused  map[remoteSubscriptionRequest]struct{}
 	results  spineapi.NodeManagementInterface
+	trusted  func(string) bool
 }
 
 // remoteSubscriptionRequest identifies one subscription request by the responder device and the
@@ -109,6 +110,26 @@ func (backend *serviceBackend) FeatureNotifiedDataGet(
 		trusted = backend.handler.remoteLivenessAllowed
 	}
 	return backend.rawFeatures.featureNotifiedDataGet(auth, target, trusted)
+}
+
+// bindRemoteSubscriptionTrust hands the subscription store the trust gate the SPINE event path
+// uses, so a discovery refresh never subscribes a remote that is not trusted and drops what such a
+// remote still holds.
+func (handler *runtimeServiceHandler) bindRemoteSubscriptionTrust() {
+	handler.mu.Lock()
+	bridge := handler.rawFeatures
+	handler.mu.Unlock()
+	if bridge == nil {
+		return
+	}
+	bridge.mu.Lock()
+	bridge.remoteSubscriptions.trusted = handler.remoteLivenessAllowed
+	bridge.mu.Unlock()
+}
+
+func (bridge *rawFeatureRuntimeBridge) remoteSubscriptionTrustedLocked(ski string) bool {
+	trusted := bridge.remoteSubscriptions.trusted
+	return trusted == nil || trusted(ski)
 }
 
 // routeRemoteNotify keeps the subscription store in step with SPINE events: a remote that disappears
@@ -218,9 +239,10 @@ func (bridge *rawFeatureRuntimeBridge) planRemoteSubscriptionsLocked(
 ) {
 	state := &bridge.remoteSubscriptions
 	state.initLocked()
+	trusted := bridge.remoteSubscriptionTrustedLocked(lease.ski)
 	wanted := make(map[string]spineapi.FeatureRemoteInterface)
 	for _, feature := range features {
-		if remoteSubscriptionReadable(feature) {
+		if trusted && remoteSubscriptionReadable(feature) {
 			wanted[remoteSubscriptionKey(lease.ski, feature)] = feature
 		}
 	}
@@ -293,13 +315,23 @@ func (bridge *rawFeatureRuntimeBridge) runRemoteSubscriptionActions() {
 		return
 	}
 	bridge.prepareRemoteSubscriptionClients(actions)
+	var retry []remoteSubscriptionAction
 	for _, action := range actions {
 		if !action.subscribe {
-			unsubscribeRemoteFeature(bridge.local, action.entry)
+			bridge.mu.Lock()
+			due := bridge.remoteUnsubscribeDueLocked(action.entry)
+			bridge.mu.Unlock()
+			if due && !unsubscribeRemoteFeature(bridge.local, action.entry) {
+				retry = append(retry, action)
+			}
 			continue
 		}
 		bridge.mu.Lock()
 		current := state.active[action.entry.key] == action.entry && !action.entry.lease.retired
+		if current && !bridge.remoteSubscriptionTrustedLocked(action.entry.lease.ski) {
+			bridge.dropRemoteSubscriptionLocked(action.entry, false)
+			current = false
+		}
 		bridge.mu.Unlock()
 		if !current {
 			continue
@@ -311,7 +343,16 @@ func (bridge *rawFeatureRuntimeBridge) runRemoteSubscriptionActions() {
 	}
 	bridge.mu.Lock()
 	clear(state.refused)
+	// An unsubscribe that could not be sent runs again, ahead of anything queued meanwhile, at the
+	// next run.
+	state.queue = append(retry, state.queue...)
 	bridge.mu.Unlock()
+}
+
+// remoteUnsubscribeDueLocked reports whether an unsubscribe still has to reach the responder: the
+// connection that carried the subscription is live and the feature has not been subscribed again.
+func (bridge *rawFeatureRuntimeBridge) remoteUnsubscribeDueLocked(entry *remoteSubscriptionEntry) bool {
+	return !entry.lease.retired && bridge.remoteSubscriptions.active[entry.key] == nil
 }
 
 // prepareRemoteSubscriptionClients creates the local client features the queued subscriptions need,
@@ -497,11 +538,16 @@ func subscribeRemoteFeature(
 	return counter, nil
 }
 
-func unsubscribeRemoteFeature(local spineapi.DeviceLocalInterface, entry *remoteSubscriptionEntry) {
-	if client, _ := remoteSubscriptionClient(local, entry.featureType, false); client != nil {
-		address := cloneRawFeatureAddress(entry.address)
-		_, _ = client.RemoveRemoteSubscription(&address)
+// unsubscribeRemoteFeature reports whether the responder needs no further request: the unsubscribe
+// was sent, or no local client exists, so no subscription was ever requested from one.
+func unsubscribeRemoteFeature(local spineapi.DeviceLocalInterface, entry *remoteSubscriptionEntry) bool {
+	client, _ := remoteSubscriptionClient(local, entry.featureType, false)
+	if client == nil {
+		return true
 	}
+	address := cloneRawFeatureAddress(entry.address)
+	_, failure := client.RemoveRemoteSubscription(&address)
+	return failure == nil
 }
 
 func (bridge *rawFeatureRuntimeBridge) recordRemoteNotify(
@@ -597,25 +643,37 @@ func (bridge *rawFeatureRuntimeBridge) featureNotifiedDataGet(
 		true,
 		eebusraw.SourceLayerV1Runtime,
 	)
+	if ski := strings.ToLower(strings.TrimSpace(target.RemoteSKI)); trusted == nil || !trusted(ski) {
+		bridge.withdrawRemoteSubscriptions(ski)
+		return eebusraw.ReadObservationV1{}, notAvailable
+	}
 	bridge.mu.Lock()
 	state := &bridge.remoteSubscriptions
 	stored, found := state.notified[remoteNotifiedKey(target)]
 	available := found && state.active[stored.entry.key] == stored.entry &&
 		!stored.entry.lease.retired &&
-		bridge.leasesBySKI[stored.entry.lease.ski] == stored.entry.lease &&
-		bridge.currentRuntimeEpoch() == stored.runtime.RuntimeEpoch
+		bridge.leasesBySKI[stored.entry.lease.ski] == stored.entry.lease
+	var remote spineapi.DeviceRemoteInterface
+	if available {
+		remote = stored.entry.lease.remote
+	}
+	stale := available && bridge.currentRuntimeEpoch() != stored.runtime.RuntimeEpoch
 	bridge.mu.Unlock()
 	if !available {
 		return eebusraw.ReadObservationV1{}, notAvailable
 	}
-	ski := stored.entry.lease.ski
-	if trusted == nil || !trusted(ski) {
-		bridge.withdrawRemoteSubscriptions(ski)
-		return eebusraw.ReadObservationV1{}, notAvailable
+	if stale {
+		return eebusraw.ReadObservationV1{}, eebusraw.NewErrorV1(
+			eebusraw.ErrorCodeV1RuntimeEpochMismatch,
+			"runtime epoch changed after the raw feature notification",
+			true,
+			eebusraw.SourceLayerV1Runtime,
+		)
 	}
+	ski := stored.entry.lease.ski
 	if !isNilRawRuntimeValue(bridge.local) {
-		if present := bridge.local.RemoteDeviceForSki(ski); !sameRawRuntimeValue(present, stored.entry.lease.remote) {
-			bridge.forgetRemoteSubscriptions(ski, stored.entry.lease.remote)
+		if present := bridge.local.RemoteDeviceForSki(ski); !sameRawRuntimeValue(present, remote) {
+			bridge.forgetRemoteSubscriptions(ski, remote)
 			return eebusraw.ReadObservationV1{}, notAvailable
 		}
 	}

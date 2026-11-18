@@ -37,6 +37,7 @@ func (handler *runtimeServiceHandler) activateSPINEEvents(service runtimeService
 	handler.spinePending = make(map[string]runtimeSPINERefresh)
 	handler.spineWork.Add(1)
 	handler.mu.Unlock()
+	handler.bindRemoteSubscriptionTrust()
 	go handler.runSPINERefreshWorker(workerContext)
 }
 
