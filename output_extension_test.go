@@ -1,6 +1,12 @@
 package eebusruntime
 
-import "testing"
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"go/types"
+	"testing"
+)
 
 func TestOutputExtensionStringEnergy(t *testing.T) {
 	// A cited string with power, current and voltage is served. String DC energy fills
@@ -233,5 +239,22 @@ func TestOutputExtensionKeepsResult(t *testing.T) {
 	}
 	if !monitoringListed(filled.Elements, "apparent power") {
 		t.Fatalf("filled %v", filled.Elements)
+	}
+}
+
+func TestOutputExtensionTypeChecksAlone(t *testing.T) {
+	// The file imports no internal package, so the API boundary gate type-checks it
+	// with the stable contract files only. It must not depend on a declaration of a
+	// file that imports an internal package, such as LensResult.
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "output_extension.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Imports) != 0 {
+		t.Fatalf("output_extension.go imports %d packages", len(file.Imports))
+	}
+	if _, err := new(types.Config).Check("eebusruntime", fset, []*ast.File{file}, nil); err != nil {
+		t.Fatalf("output_extension.go does not type-check on its own: %v", err)
 	}
 }

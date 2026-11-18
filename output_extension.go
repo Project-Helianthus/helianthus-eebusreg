@@ -26,37 +26,48 @@ var outputExtensions = []outputExtension{
 	{element: "infrastructure.ac.voltage_line_line", family: "inverter", fills: "line-to-line voltage", named: true},
 }
 
-// withExtensionElements returns a copy of the result whose elements also list
-// each scenario element an extension element of that family fills. An
-// extension element the result also cites as missing, by its own name or by
-// the scenario element it fills, fills nothing.
-func withExtensionElements(result LensResult) LensResult {
-	elements := append([]string(nil), result.Elements...)
+// This file depends on no other declaration of the package, so it stays
+// inside the set of files the stable contract type-checks on their own.
+
+// extensionElements returns a copy of the elements of a result of the family
+// that also lists each scenario element an extension element of that family
+// fills. An extension element the result also cites as missing, by its own
+// name or by the scenario element it fills, fills nothing.
+func extensionElements(family string, elements, missing []string) []string {
+	filled := append([]string(nil), elements...)
 	for _, extension := range outputExtensions {
-		if extensionCarried(result, extension) && !monitoringHas(elements, extension.fills) {
-			elements = append(elements, extension.fills)
+		if extensionCarried(family, elements, missing, extension) && !extensionListed(filled, extension.fills) {
+			filled = append(filled, extension.fills)
 		}
 	}
-	result.Elements = elements
-	return result
+	return filled
 }
 
-// extensionLoss names each scenario element of the entity that the result
+// extensionLosses names each scenario element of the entity that the result
 // does not fill with its extension element. It does not change which use
 // cases are announced: those still need every mandatory element.
-func extensionLoss(result LensResult) []string {
+func extensionLosses(family string, elements, missing []string) []string {
 	var loss []string
 	for _, extension := range outputExtensions {
-		if extension.named && extension.family == result.Family && !extensionCarried(result, extension) {
+		if extension.named && extension.family == family && !extensionCarried(family, elements, missing, extension) {
 			loss = append(loss, extension.fills)
 		}
 	}
 	return loss
 }
 
-func extensionCarried(result LensResult, extension outputExtension) bool {
-	return result.Family == extension.family &&
-		monitoringHas(result.Elements, extension.element) &&
-		!monitoringHas(result.MissingElements, extension.element) &&
-		!monitoringHas(result.MissingElements, extension.fills)
+func extensionCarried(family string, elements, missing []string, extension outputExtension) bool {
+	return family == extension.family &&
+		extensionListed(elements, extension.element) &&
+		!extensionListed(missing, extension.element) &&
+		!extensionListed(missing, extension.fills)
+}
+
+func extensionListed(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

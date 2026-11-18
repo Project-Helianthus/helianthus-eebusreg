@@ -207,6 +207,19 @@ func (b *OutputBinding) Apply(result LensResult) []string {
 	return announcementLoss(result)
 }
 
+// withExtensionElements returns a copy of the result whose elements also list
+// each scenario element an extension element of its family fills.
+func withExtensionElements(result LensResult) LensResult {
+	result.Elements = extensionElements(result.Family, result.Elements, result.MissingElements)
+	return result
+}
+
+// extensionLoss names each scenario element of the entity that the result
+// does not fill with its extension element.
+func extensionLoss(result LensResult) []string {
+	return extensionLosses(result.Family, result.Elements, result.MissingElements)
+}
+
 // MonitoringLoss returns what the last Apply of a resource identifier did not
 // publish for the use cases of its entity: each mandatory element or scenario
 // the lens result does not fill, string DC energy for a string and
