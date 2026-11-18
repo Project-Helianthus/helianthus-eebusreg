@@ -1,6 +1,7 @@
 package eebusfacade_test
 
 import (
+	"reflect"
 	"testing"
 
 	eebusruntime "github.com/Project-Helianthus/helianthus-eebusreg"
@@ -61,6 +62,56 @@ func TestOutputBindingOnRuntimeNode(t *testing.T) {
 	}
 	if binding.AdvertisementCount() != 1 || binding.ServiceCount() != 1 || binding.DeviceType() != "EnergyManagementSystem" {
 		t.Fatal("existing node changed")
+	}
+}
+
+func TestOutputBindingAddressAcrossRuntimeRestart(t *testing.T) {
+	// A runtime restart replaces the node. The binding kept across it, and a new
+	// binding on the same directory, put each resource at the same entity address
+	// although the lens results arrive in the other order.
+	directory := t.TempDir()
+	inverter := eebusruntime.LensResult{Family: "inverter", ResourceID: "north", LensAdmitted: true, RuntimeEnabled: true}
+	charger := eebusruntime.LensResult{Family: "charger", ResourceID: "south", LensAdmitted: true, RuntimeEnabled: true}
+	placed := func(service spineapi.DeviceLocalInterface) ([]spinemodel.AddressEntityType, []spinemodel.AddressEntityType) {
+		north := outputNodeEntity(service.Entities(), spinemodel.EntityTypeTypeInverter)
+		south := outputNodeEntity(service.Entities(), spinemodel.EntityTypeTypeEVSE)
+		if north == nil || south == nil {
+			t.Fatal("runtime node lacks the inverter or the charger")
+		}
+		return north.Address().Entity, south.Address().Entity
+	}
+	first := eebusfacade.PrepareOutputNodeRuntimeForTest(t)
+	binding, err := eebusruntime.NewOutputBinding(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range []eebusruntime.LensResult{inverter, charger} {
+		if loss := binding.Apply(result); len(loss) != 0 {
+			t.Fatalf("loss %v", loss)
+		}
+	}
+	north, south := placed(first.LocalDevice())
+	second := eebusfacade.PrepareOutputNodeRuntimeForTest(t)
+	for _, result := range []eebusruntime.LensResult{charger, inverter} {
+		if loss := binding.Apply(result); len(loss) != 0 {
+			t.Fatalf("loss on the restarted node %v", loss)
+		}
+	}
+	if gotNorth, gotSouth := placed(second.LocalDevice()); !reflect.DeepEqual(gotNorth, north) || !reflect.DeepEqual(gotSouth, south) {
+		t.Fatalf("kept binding moved entities: north %v to %v, south %v to %v", north, gotNorth, south, gotSouth)
+	}
+	third := eebusfacade.PrepareOutputNodeRuntimeForTest(t)
+	reopened, err := eebusruntime.NewOutputBinding(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range []eebusruntime.LensResult{charger, inverter} {
+		if loss := reopened.Apply(result); len(loss) != 0 {
+			t.Fatalf("loss on the reopened binding %v", loss)
+		}
+	}
+	if gotNorth, gotSouth := placed(third.LocalDevice()); !reflect.DeepEqual(gotNorth, north) || !reflect.DeepEqual(gotSouth, south) {
+		t.Fatalf("reopened binding moved entities: north %v to %v, south %v to %v", north, gotNorth, south, gotSouth)
 	}
 }
 

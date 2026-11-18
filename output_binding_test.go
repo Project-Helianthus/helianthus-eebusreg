@@ -527,6 +527,68 @@ func TestOutputBindingRequiresExistingNode(t *testing.T) {
 	}
 }
 
+func TestOutputBindingFollowsReplacedNode(t *testing.T) {
+	// A runtime restart replaces the node. A binding kept across it adds nothing
+	// while no node runs, and then adds the entity on the new node at its stored address.
+	first := newOutputBindingFakeNode()
+	var current shipNode = first
+	outputBindingOpenMu.Lock()
+	original := openShipNode
+	openShipNode = func() (shipNode, error) {
+		if current == nil {
+			return nil, errors.New("released")
+		}
+		return current, nil
+	}
+	binding, err := NewOutputBinding(t.TempDir())
+	openShipNode = original
+	outputBindingOpenMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loss := binding.Apply(outputBindingInverter("north")); len(loss) != 0 {
+		t.Fatalf("loss %v", loss)
+	}
+	address := binding.EntityAddress("north")
+	if address == "" || len(first.added) != 1 {
+		t.Fatalf("first node additions %v", first.added)
+	}
+	current = nil
+	if loss := binding.Apply(outputBindingInverter("north")); len(loss) != 1 || loss[0] != "existing_node" {
+		t.Fatalf("loss without a node %v", loss)
+	}
+	if binding.AdvertisementCount() != 0 || binding.EntityAddress("north") != "" {
+		t.Fatal("binding reports the released node")
+	}
+	second := newOutputBindingFakeNode()
+	current = second
+	if types := binding.EntityTypes(); len(types) != 1 || types[0] != "CEM" {
+		t.Fatalf("new node types before a lens result %v", types)
+	}
+	if loss := binding.Apply(outputBindingInverter("north")); len(loss) != 0 {
+		t.Fatalf("loss on the new node %v", loss)
+	}
+	if len(second.added) != 1 || second.added[0].address != address || binding.EntityAddress("north") != address {
+		t.Fatalf("new node additions %v, want address %q", second.added, address)
+	}
+	if len(first.added) != 1 {
+		t.Fatalf("released node gained entities %v", first.added)
+	}
+}
+
+func TestOutputBindingNilReceiver(t *testing.T) {
+	var binding *OutputBinding
+	if loss := binding.Apply(outputBindingInverter("north")); len(loss) != 1 || loss[0] != "existing_node" {
+		t.Fatalf("loss %v", loss)
+	}
+	if binding.EntityAddress("north") != "" || binding.ParentAddress("north") != "" {
+		t.Fatal("nil binding reported an address")
+	}
+	if addresses := binding.EntityAddresses(); len(addresses) != 1 || addresses[0] != cemAddress {
+		t.Fatalf("addresses %v", addresses)
+	}
+}
+
 func TestOutputBindingConcurrentReaders(t *testing.T) {
 	binding := newOutputBinding(t)
 	stop := make(chan struct{})

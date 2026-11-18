@@ -2,6 +2,7 @@ package eebusfacade
 
 import (
 	"net/netip"
+	"reflect"
 	"testing"
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusservicebridge"
@@ -69,6 +70,45 @@ func TestOutputNodeUsesRuntimeService(t *testing.T) {
 	releaseOutputService(service)
 	if _, err := OpenOutputNode(); err == nil {
 		t.Fatal("node opened after the runtime service was released")
+	}
+}
+
+func TestOutputNodeEntityAddressFollowsLetter(t *testing.T) {
+	// The SPINE entity address comes from the stored letter, not from the
+	// apply order, so a restart that applies in another order keeps it.
+	addresses := func(order []string) map[string][]spinemodel.AddressEntityType {
+		service, _ := newOutputNodeRuntime(t)
+		if err := service.Setup(); err != nil {
+			t.Fatal(err)
+		}
+		node, err := OpenOutputNode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, letter := range order {
+			if err := node.AddEntity("Inverter", letter, ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := node.AddEntity("PV String", "c", "b"); err != nil {
+			t.Fatal(err)
+		}
+		found := map[string][]spinemodel.AddressEntityType{}
+		for _, letter := range []string{"a", "b", "c"} {
+			found[letter] = append([]spinemodel.AddressEntityType(nil), node.byLetter[letter].Address().Entity...)
+		}
+		return found
+	}
+	first := addresses([]string{"a", "b"})
+	second := addresses([]string{"b", "a"})
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("entity addresses moved with apply order: %v then %v", first, second)
+	}
+	if reflect.DeepEqual(first["a"], first["b"]) {
+		t.Fatalf("two letters share an entity address %v", first)
+	}
+	if _, ok := letterEntityNumber("abcdefg"); ok {
+		t.Fatal("an overlong letter address received an entity number")
 	}
 }
 

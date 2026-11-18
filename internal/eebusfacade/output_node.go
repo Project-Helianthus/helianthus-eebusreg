@@ -174,7 +174,7 @@ func (n *OutputNode) AddEntity(kind, address, parent string) error {
 	if device == nil || !ok {
 		return errOutputNode
 	}
-	entityAddress, err := n.entityAddress(device, parent)
+	entityAddress, err := n.entityAddress(device, address, parent)
 	if err != nil {
 		return err
 	}
@@ -188,20 +188,54 @@ func (n *OutputNode) AddEntity(kind, address, parent string) error {
 	return nil
 }
 
-func (n *OutputNode) entityAddress(device spineapi.DeviceLocalInterface, parent string) ([]spinemodel.AddressEntityType, error) {
-	next := spinemodel.AddressEntityType(len(device.Entities()))
-	if parent == "" {
-		return []spinemodel.AddressEntityType{next}, nil
-	}
-	elder := n.byLetter[parent]
-	if elder == nil || elder.Address() == nil {
+// outputEntityBase is the first entity number an output entity may take. The
+// runtime composes the device information entity and the CEM entity below it.
+const outputEntityBase = 2
+
+// maxOutputLetters bounds a letter address so its entity number cannot overflow.
+const maxOutputLetters = 6
+
+// entityAddress derives the SPINE entity address from the stored letter address,
+// so a resource identifier keeps its entity address whatever the apply order.
+func (n *OutputNode) entityAddress(device spineapi.DeviceLocalInterface, address, parent string) ([]spinemodel.AddressEntityType, error) {
+	next, ok := letterEntityNumber(address)
+	if !ok {
 		return nil, errOutputNode
 	}
-	prefix := elder.Address().Entity
-	entityAddress := make([]spinemodel.AddressEntityType, len(prefix)+1)
-	copy(entityAddress, prefix)
-	entityAddress[len(prefix)] = next
+	var entityAddress []spinemodel.AddressEntityType
+	if parent == "" {
+		entityAddress = []spinemodel.AddressEntityType{next}
+	} else {
+		elder := n.byLetter[parent]
+		if elder == nil || elder.Address() == nil {
+			return nil, errOutputNode
+		}
+		prefix := elder.Address().Entity
+		entityAddress = make([]spinemodel.AddressEntityType, len(prefix)+1)
+		copy(entityAddress, prefix)
+		entityAddress[len(prefix)] = next
+	}
+	if device.Entity(entityAddress) != nil {
+		return nil, errOutputNode
+	}
 	return entityAddress, nil
+}
+
+// letterEntityNumber maps a letter address one to one onto an entity number at
+// or above outputEntityBase: a is the base, z the base plus 25, aa the next.
+func letterEntityNumber(address string) (spinemodel.AddressEntityType, bool) {
+	if address == "" || len(address) > maxOutputLetters {
+		return 0, false
+	}
+	value := 0
+	for index := 0; index < len(address); index++ {
+		letter := address[index]
+		if letter < 'a' || letter > 'z' {
+			return 0, false
+		}
+		value = value*26 + int(letter-'a') + 1
+	}
+	return spinemodel.AddressEntityType(outputEntityBase + value - 1), true
 }
 
 // NestedUnder reports whether the entity address is nested under the parent on the device.

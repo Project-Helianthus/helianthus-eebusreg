@@ -77,6 +77,7 @@ type OutputBinding struct {
 	byResource map[string]boundEntity
 	order      []string
 	node       shipNode
+	open       func() (shipNode, error)
 }
 
 type boundEntity struct {
@@ -123,7 +124,8 @@ func NewOutputBinding(directory string) (*OutputBinding, error) {
 	if err != nil {
 		return nil, err
 	}
-	node, err := openShipNode()
+	open := openShipNode
+	node, err := open()
 	if err != nil || node == nil {
 		return nil, errExistingNode
 	}
@@ -132,17 +134,45 @@ func NewOutputBinding(directory string) (*OutputBinding, error) {
 		addresses:  addresses,
 		byResource: map[string]boundEntity{},
 		node:       node,
+		open:       open,
 	}, nil
+}
+
+// liveNodeLocked resolves the node of the running runtime service on every
+// call. When the runtime replaced its service, the binding forgets the entities
+// it added on the old node, keeps the stored addresses, and adds each entity
+// again when a lens result names it. Without a running service it has no node.
+func (b *OutputBinding) liveNodeLocked() shipNode {
+	if b == nil || b.open == nil {
+		return nil
+	}
+	node, err := b.open()
+	if err != nil || node == nil {
+		node = nil
+	}
+	if node != b.node {
+		b.byResource = map[string]boundEntity{}
+		b.order = nil
+		b.node = node
+	}
+	return node
 }
 
 // Apply adds an Inverter, a PV String whose parent is that Inverter, or an EVSE
 // entity when the publication contract admits the lens result. A use-case text
 // that forbids device type EnergyManagementSystem adds nothing and names that prohibition.
 func (b *OutputBinding) Apply(result LensResult) []string {
+	if b == nil {
+		return applyLoss(errExistingNode)
+	}
 	outputBindingGate.Lock()
 	defer outputBindingGate.Unlock()
+	node := b.liveNodeLocked()
 	if !b.admitted(result) {
 		return announcementLoss(result)
+	}
+	if node == nil {
+		return applyLoss(errExistingNode)
 	}
 	if loss := b.prohibitedDeviceType(result); loss != nil {
 		return loss
@@ -162,46 +192,53 @@ func (b *OutputBinding) Apply(result LensResult) []string {
 func (b *OutputBinding) AdvertisementCount() int {
 	outputBindingGate.Lock()
 	defer outputBindingGate.Unlock()
-	if b == nil || b.node == nil {
+	node := b.liveNodeLocked()
+	if node == nil {
 		return 0
 	}
-	return b.node.AdvertisementCount()
+	return node.AdvertisementCount()
 }
 
 // ServiceCount is the service count of the existing node.
 func (b *OutputBinding) ServiceCount() int {
 	outputBindingGate.Lock()
 	defer outputBindingGate.Unlock()
-	if b == nil || b.node == nil {
+	node := b.liveNodeLocked()
+	if node == nil {
 		return 0
 	}
-	return b.node.ServiceCount()
+	return node.ServiceCount()
 }
 
 // DeviceType is the device type of the existing node.
 func (b *OutputBinding) DeviceType() string {
 	outputBindingGate.Lock()
 	defer outputBindingGate.Unlock()
-	if b == nil || b.node == nil {
+	node := b.liveNodeLocked()
+	if node == nil {
 		return ""
 	}
-	return b.node.DeviceType()
+	return node.DeviceType()
 }
 
 // EntityTypes lists the CEM entity and each admitted entity on the existing node.
 func (b *OutputBinding) EntityTypes() []string {
 	outputBindingGate.Lock()
 	defer outputBindingGate.Unlock()
-	if b == nil || b.node == nil {
+	node := b.liveNodeLocked()
+	if node == nil {
 		return nil
 	}
-	return b.node.EntityTypes()
+	return node.EntityTypes()
 }
 
 // EntityAddress returns the address stored for a resource identifier.
 func (b *OutputBinding) EntityAddress(resourceID string) string {
 	outputBindingGate.Lock()
 	defer outputBindingGate.Unlock()
+	if b.liveNodeLocked() == nil {
+		return ""
+	}
 	return b.byResource[resourceID].address
 }
 
@@ -209,6 +246,9 @@ func (b *OutputBinding) EntityAddress(resourceID string) string {
 func (b *OutputBinding) ParentAddress(resourceID string) string {
 	outputBindingGate.Lock()
 	defer outputBindingGate.Unlock()
+	if b.liveNodeLocked() == nil {
+		return ""
+	}
 	return b.byResource[resourceID].parent
 }
 
@@ -217,6 +257,9 @@ func (b *OutputBinding) EntityAddresses() []string {
 	outputBindingGate.Lock()
 	defer outputBindingGate.Unlock()
 	addresses := []string{cemAddress}
+	if b.liveNodeLocked() == nil {
+		return addresses
+	}
 	for _, id := range b.resourceOrder() {
 		addresses = append(addresses, b.byResource[id].address)
 	}
@@ -227,14 +270,15 @@ func (b *OutputBinding) EntityAddresses() []string {
 func (b *OutputBinding) ServerFeatures(resourceID string) []string {
 	outputBindingGate.Lock()
 	defer outputBindingGate.Unlock()
-	if b == nil || b.node == nil {
+	node := b.liveNodeLocked()
+	if node == nil {
 		return nil
 	}
 	address := b.byResource[resourceID].address
 	if address == "" {
 		return nil
 	}
-	return b.node.ServerFeatures(address)
+	return node.ServerFeatures(address)
 }
 
 func (b *OutputBinding) admitted(result LensResult) bool {
