@@ -2,6 +2,7 @@ package eebusfacade_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	eebusruntime "github.com/Project-Helianthus/helianthus-eebusreg"
@@ -113,6 +114,85 @@ func TestOutputBindingAddressAcrossRuntimeRestart(t *testing.T) {
 	if gotNorth, gotSouth := placed(third.LocalDevice()); !reflect.DeepEqual(gotNorth, north) || !reflect.DeepEqual(gotSouth, south) {
 		t.Fatalf("reopened binding moved entities: north %v to %v, south %v to %v", north, gotNorth, south, gotSouth)
 	}
+}
+
+func TestOutputBindingChargerRejectionOnRuntimeNode(t *testing.T) {
+	// Apply on the runtime node. The node rejects one server feature of a charger.
+	// The entity stays applied, only the use case or the operation that needs the
+	// rejected feature is withdrawn, and no feature of a withdrawn one stays.
+	// electrical connection without an operation: power monitoring is withdrawn and
+	// leaves no measurement. Commissioning keeps device diagnosis.
+	// electrical connection with the allocated current operation: power monitoring and the
+	// operation are withdrawn. Commissioning keeps device diagnosis.
+	// load control with the allocated current operation: only the operation is withdrawn.
+	// measurement with the allocated current operation: power monitoring is withdrawn, and
+	// the operation keeps electrical connection and load control.
+	current := []eebusruntime.LensOperation{{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true}}
+	measurement := spinemodel.FeatureTypeTypeMeasurement
+	connection := spinemodel.FeatureTypeTypeElectricalConnection
+	load := spinemodel.FeatureTypeTypeLoadControl
+	diagnosis := spinemodel.FeatureTypeTypeDeviceDiagnosis
+	cases := []struct {
+		name       string
+		reject     string
+		operations []eebusruntime.LensOperation
+		on, off    []spinemodel.FeatureTypeType
+	}{
+		{"connection", "electrical connection", nil, []spinemodel.FeatureTypeType{diagnosis}, []spinemodel.FeatureTypeType{measurement, connection, load}},
+		{"connection with current", "electrical connection", current, []spinemodel.FeatureTypeType{diagnosis}, []spinemodel.FeatureTypeType{measurement, connection, load}},
+		{"load control with current", "load control", current, []spinemodel.FeatureTypeType{diagnosis, measurement, connection}, []spinemodel.FeatureTypeType{load}},
+		{"measurement with current", "measurement", current, []spinemodel.FeatureTypeType{diagnosis, connection, load}, []spinemodel.FeatureTypeType{measurement}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			service := eebusfacade.PrepareOutputNodeRuntimeForTest(t)
+			binding, err := eebusruntime.NewOutputBinding(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			eebusfacade.RejectOutputServerFeatureForTest(t, tc.reject)
+			result := eebusruntime.LensResult{
+				Family: "charger", ResourceID: "bay", LensAdmitted: true, RuntimeEnabled: true,
+				Elements:   []string{"total active power", "operating state"},
+				Operations: tc.operations,
+			}
+			if loss := binding.Apply(result); len(loss) != 0 {
+				t.Fatalf("apply loss %v", loss)
+			}
+			evse := outputNodeEntity(service.LocalDevice().Entities(), spinemodel.EntityTypeTypeEVSE)
+			if evse == nil {
+				t.Fatal("runtime node has no EVSE entity")
+			}
+			for _, featureType := range tc.on {
+				if evse.FeatureOfTypeAndRole(featureType, spinemodel.RoleTypeServer) == nil {
+					t.Fatalf("EVSE entity has no %s server feature", featureType)
+				}
+			}
+			for _, featureType := range tc.off {
+				if evse.FeatureOfTypeAndRole(featureType, spinemodel.RoleTypeServer) != nil {
+					t.Fatalf("EVSE entity kept the %s server feature", featureType)
+				}
+			}
+			gaps := binding.MonitoringLoss("bay")
+			if !outputNodeListed(gaps, tc.reject) || !outputNodeListed(gaps, "device classification") {
+				t.Fatalf("monitoring loss %v", gaps)
+			}
+			for _, gap := range gaps {
+				if strings.HasPrefix(gap, "not removed") || gap == "existing node" {
+					t.Fatalf("monitoring loss %v", gaps)
+				}
+			}
+		})
+	}
+}
+
+func outputNodeListed(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func outputNodeEntity(entities []spineapi.EntityLocalInterface, entityType spinemodel.EntityTypeType) spineapi.EntityLocalInterface {

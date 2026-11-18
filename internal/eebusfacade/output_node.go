@@ -297,39 +297,64 @@ func (n *OutputNode) featureNames(address string, name func(spinemodel.FeatureTy
 // attachOutputServerFeature attaches the server helper for a feature type.
 var attachOutputServerFeature = attachServerFeature
 
-// AddServerFeature adds one named server feature on an added entity. The
-// feature is attached on a staged copy first and joins the entity only when
-// that attach succeeds, so a failed attach leaves the entity unchanged.
+// AddServerFeature adds one named server feature on an added entity. A failed
+// attach leaves the entity unchanged.
 func (n *OutputNode) AddServerFeature(address, name string) error {
+	_, err := n.AddServerFeatures(address, []string{name})
+	return err
+}
+
+// AddServerFeatures adds every named server feature on an added entity, or
+// none of them. Each new feature is attached on a staged copy first, and the
+// staged features join the entity only when every attach succeeds, so a
+// rejected feature leaves the entity as it was. It returns the name of the
+// feature the node rejected, or no name when the entity is not one it added.
+func (n *OutputNode) AddServerFeatures(address string, names []string) (string, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	entity := n.byLetter[address]
-	featureType, ok := serverFeatureType(name)
-	if entity == nil || !ok {
-		return errOutputNode
+	if entity == nil {
+		return "", errOutputNode
 	}
-	if entity.FeatureOfTypeAndRole(featureType, spinemodel.RoleTypeServer) != nil {
-		return attachOutputServerFeature(entity, featureType)
+	staged := stagedFeatureEntity{EntityLocalInterface: entity}
+	for _, name := range names {
+		featureType, ok := serverFeatureType(name)
+		if !ok {
+			return name, errOutputNode
+		}
+		if entity.FeatureOfTypeAndRole(featureType, spinemodel.RoleTypeServer) != nil {
+			if err := attachOutputServerFeature(entity, featureType); err != nil {
+				return name, err
+			}
+			continue
+		}
+		if staged.FeatureOfTypeAndRole(featureType, spinemodel.RoleTypeServer) == nil {
+			feature := spine.NewFeatureLocal(entity.NextFeatureId(), entity, featureType, spinemodel.RoleTypeServer)
+			feature.SetDescriptionString(string(featureType) + " Server")
+			staged.staged = append(staged.staged, feature)
+		}
+		if err := attachOutputServerFeature(staged, featureType); err != nil {
+			return name, err
+		}
 	}
-	staged := spine.NewFeatureLocal(entity.NextFeatureId(), entity, featureType, spinemodel.RoleTypeServer)
-	staged.SetDescriptionString(string(featureType) + " Server")
-	if err := attachOutputServerFeature(stagedFeatureEntity{EntityLocalInterface: entity, staged: staged}, featureType); err != nil {
-		return err
+	for _, feature := range staged.staged {
+		entity.AddFeature(feature)
 	}
-	entity.AddFeature(staged)
-	return nil
+	return "", nil
 }
 
-// stagedFeatureEntity shows one staged server feature to an attach before the
-// feature joins the entity.
+// stagedFeatureEntity shows the staged server features to an attach before
+// they join the entity.
 type stagedFeatureEntity struct {
 	spineapi.EntityLocalInterface
-	staged spineapi.FeatureLocalInterface
+	staged []spineapi.FeatureLocalInterface
 }
 
 func (e stagedFeatureEntity) FeatureOfTypeAndRole(featureType spinemodel.FeatureTypeType, role spinemodel.RoleType) spineapi.FeatureLocalInterface {
-	if e.staged.Type() == featureType && e.staged.Role() == role {
-		return e.staged
+	for _, feature := range e.staged {
+		if feature.Type() == featureType && feature.Role() == role {
+			return feature
+		}
 	}
 	return e.EntityLocalInterface.FeatureOfTypeAndRole(featureType, role)
 }
