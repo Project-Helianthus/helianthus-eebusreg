@@ -294,7 +294,12 @@ func (n *OutputNode) featureNames(address string, name func(spinemodel.FeatureTy
 	return names
 }
 
-// AddServerFeature adds one named server feature on an added entity.
+// attachOutputServerFeature attaches the server helper for a feature type.
+var attachOutputServerFeature = attachServerFeature
+
+// AddServerFeature adds one named server feature on an added entity. The
+// feature is attached on a staged copy first and joins the entity only when
+// that attach succeeds, so a failed attach leaves the entity unchanged.
 func (n *OutputNode) AddServerFeature(address, name string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -303,8 +308,30 @@ func (n *OutputNode) AddServerFeature(address, name string) error {
 	if entity == nil || !ok {
 		return errOutputNode
 	}
-	entity.GetOrAddFeature(featureType, spinemodel.RoleTypeServer)
-	return attachServerFeature(entity, featureType)
+	if entity.FeatureOfTypeAndRole(featureType, spinemodel.RoleTypeServer) != nil {
+		return attachOutputServerFeature(entity, featureType)
+	}
+	staged := spine.NewFeatureLocal(entity.NextFeatureId(), entity, featureType, spinemodel.RoleTypeServer)
+	staged.SetDescriptionString(string(featureType) + " Server")
+	if err := attachOutputServerFeature(stagedFeatureEntity{EntityLocalInterface: entity, staged: staged}, featureType); err != nil {
+		return err
+	}
+	entity.AddFeature(staged)
+	return nil
+}
+
+// stagedFeatureEntity shows one staged server feature to an attach before the
+// feature joins the entity.
+type stagedFeatureEntity struct {
+	spineapi.EntityLocalInterface
+	staged spineapi.FeatureLocalInterface
+}
+
+func (e stagedFeatureEntity) FeatureOfTypeAndRole(featureType spinemodel.FeatureTypeType, role spinemodel.RoleType) spineapi.FeatureLocalInterface {
+	if e.staged.Type() == featureType && e.staged.Role() == role {
+		return e.staged
+	}
+	return e.EntityLocalInterface.FeatureOfTypeAndRole(featureType, role)
 }
 
 func attachServerFeature(entity spineapi.EntityLocalInterface, featureType spinemodel.FeatureTypeType) error {

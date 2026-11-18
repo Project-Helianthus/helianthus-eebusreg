@@ -73,6 +73,47 @@ func TestOutputNodeUsesRuntimeService(t *testing.T) {
 	}
 }
 
+func TestOutputNodeFailedAttachLeavesNoFeature(t *testing.T) {
+	service, _ := newOutputNodeRuntime(t)
+	if err := service.Setup(); err != nil {
+		t.Fatal(err)
+	}
+	node, err := OpenOutputNode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.AddEntity("Inverter", "na", ""); err != nil {
+		t.Fatal(err)
+	}
+	original := attachOutputServerFeature
+	attachOutputServerFeature = func(spineapi.EntityLocalInterface, spinemodel.FeatureTypeType) error {
+		return errOutputNode
+	}
+	t.Cleanup(func() { attachOutputServerFeature = original })
+	if err := node.AddServerFeature("na", "measurement"); err == nil {
+		t.Fatal("a failed attach was reported as success")
+	}
+	if features := node.ObservedServerFeatures("na"); len(features) != 0 {
+		t.Fatalf("a failed attach left server features %v", features)
+	}
+	if features := node.ServerFeatures("na"); len(features) != 0 {
+		t.Fatalf("a failed attach is listed as %v", features)
+	}
+	attachOutputServerFeature = original
+	if err := node.AddServerFeature("na", "measurement"); err != nil {
+		t.Fatal(err)
+	}
+	if features := node.ServerFeatures("na"); len(features) != 1 || features[0] != "measurement" {
+		t.Fatalf("server features after a later attach %v", features)
+	}
+	if err := node.AddServerFeature("na", "measurement"); err != nil {
+		t.Fatal(err)
+	}
+	if features := node.ObservedServerFeatures("na"); len(features) != 1 {
+		t.Fatalf("a repeated attach duplicated the feature %v", features)
+	}
+}
+
 func TestOutputNodeEntityAddressFollowsLetter(t *testing.T) {
 	// The SPINE entity address comes from the stored letter, not from the
 	// apply order, so a restart that applies in another order keeps it.
