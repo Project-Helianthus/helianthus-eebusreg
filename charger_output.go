@@ -47,7 +47,8 @@ var chargerUseCaseFeatures = []struct {
 // admitted charger lens result. Monitoring of Power Consumption needs the total
 // active power, and phase values are never summed into it. EVSE Commissioning
 // and Configuration needs the operating state, and charger statuses never stand
-// in for it. Limitation of Power Consumption is never announced.
+// in for it. Limitation of Power Consumption is never announced, and a result
+// naming it carries the same loss as a peer write of an active-power limit.
 func monitorChargerLens(result LensResult) monitoringOutcome {
 	if !chargerAdmitted(result) {
 		return monitoringOutcome{}
@@ -70,6 +71,7 @@ func monitorChargerLens(result LensResult) monitoringOutcome {
 	outcome.Loss = append(outcome.Loss, "device classification")
 	if result.UseCase == useCaseConsumption {
 		outcome.Loss = append(outcome.Loss, "consumption_limit_not_applied")
+		outcome.Loss = append(outcome.Loss, chargerConsumptionLimitWrite(result).Loss...)
 	}
 	sort.Strings(outcome.Loss)
 	return outcome

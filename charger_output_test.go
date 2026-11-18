@@ -79,6 +79,9 @@ func TestChargerOutputConsumptionLimitWrite(t *testing.T) {
 			if monitoringListed(monitored.Announced, "Limitation of Power Consumption") || !monitoringListed(monitored.Loss, "consumption_limit_not_applied") {
 				t.Fatalf("monitoring announced %v loss %v", monitored.Announced, monitored.Loss)
 			}
+			if !monitoringListed(monitored.Loss, "missing operation: active power consumption limit") || !monitoringListed(monitored.Loss, "not called: evse.operation.set_allocated_current") {
+				t.Fatalf("monitoring loss omits the write gaps %v", monitored.Loss)
+			}
 			if len(monitored.Operations) != 0 {
 				t.Fatalf("monitoring operations %v", monitored.Operations)
 			}
