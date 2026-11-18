@@ -29,6 +29,10 @@ var (
 	errMergedResources          = errors.New("merged resources")
 )
 
+var syncBindingFile = func(file *os.File) error {
+	return file.Sync()
+}
+
 var knownUseCases = map[string]struct{}{
 	"Monitoring of Inverter":               {},
 	"Monitoring of PV String":              {},
@@ -102,11 +106,11 @@ func NewOutputBinding(directory string) (*OutputBinding, error) {
 // entity when the publication contract admits the lens result. A use-case text
 // that forbids device type EnergyManagementSystem adds nothing and names that prohibition.
 func (b *OutputBinding) Apply(result lensResult) []string {
-	if loss := prohibitedDeviceType(result); loss != nil {
-		return loss
-	}
 	if !b.admitted(result) {
 		return announcementLoss(result)
+	}
+	if loss := prohibitedDeviceType(result); loss != nil {
+		return loss
 	}
 	if err := b.ensureEntity(result); err != nil {
 		return applyLoss(err)
@@ -192,14 +196,67 @@ func (b *OutputBinding) stringParentAdmitted(result lensResult) bool {
 }
 
 func prohibitedDeviceType(result lensResult) []string {
-	text := result.UseCaseText
-	if result.Actor == "" || text == "" {
+	if result.Actor == "" || result.UseCaseText == "" {
 		return nil
 	}
-	if !strings.Contains(text, result.Actor) || !strings.Contains(text, "forbids") || !strings.Contains(text, deviceTypeName) {
+	if !textForbidsDeviceType(result.UseCaseText, result.Actor, deviceTypeName) {
 		return nil
 	}
 	return []string{"device_type_prohibition", deviceTypeName}
+}
+
+func textForbidsDeviceType(text, actor, deviceType string) bool {
+	for text != "" {
+		sentence := text
+		if cut := strings.IndexByte(text, '.'); cut >= 0 {
+			sentence = text[:cut]
+			text = text[cut+1:]
+		} else {
+			text = ""
+		}
+		if sentenceForbidsDeviceType(sentence, actor, deviceType) {
+			return true
+		}
+	}
+	return false
+}
+
+func sentenceForbidsDeviceType(sentence, actor, deviceType string) bool {
+	forbidAt := indexWord(sentence, "forbids")
+	actorAt := indexWord(sentence, actor)
+	if forbidAt < 0 || actorAt < 0 || actorAt > forbidAt {
+		return false
+	}
+	clause := sentence[forbidAt:]
+	if exceptAt := indexWord(clause, "except"); exceptAt >= 0 {
+		clause = clause[:exceptAt]
+	}
+	return indexWord(clause, deviceType) >= 0
+}
+
+func indexWord(text, word string) int {
+	if word == "" || len(word) > len(text) {
+		return -1
+	}
+	for start := 0; start <= len(text)-len(word); {
+		at := strings.Index(text[start:], word)
+		if at < 0 {
+			return -1
+		}
+		at += start
+		end := at + len(word)
+		before := at == 0 || !wordByte(text[at-1])
+		after := end == len(text) || !wordByte(text[end])
+		if before && after {
+			return at
+		}
+		start = at + 1
+	}
+	return -1
+}
+
+func wordByte(value byte) bool {
+	return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z')
 }
 
 func (b *OutputBinding) ensureEntity(result lensResult) error {
@@ -310,14 +367,39 @@ func letterAddress(value string) bool {
 }
 
 func (b *OutputBinding) persist() error {
+	directory, err := os.Open(b.directory)
+	if err != nil {
+		return errAddressStore
+	}
+	info, err := directory.Stat()
+	if err != nil || !info.IsDir() {
+		_ = directory.Close()
+		return errAddressStore
+	}
 	payload := renderAddresses(b.addresses)
 	path := filepath.Join(b.directory, addressFileName)
 	temporary := path + ".new"
-	if err := os.WriteFile(temporary, payload, 0o600); err != nil {
+	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		_ = directory.Close()
+		return errAddressStore
+	}
+	_, writeErr := file.Write(payload)
+	syncErr := syncBindingFile(file)
+	closeErr := file.Close()
+	if writeErr != nil || syncErr != nil || closeErr != nil {
+		_ = os.Remove(temporary)
+		_ = directory.Close()
 		return errAddressStore
 	}
 	if err := os.Rename(temporary, path); err != nil {
 		_ = os.Remove(temporary)
+		_ = directory.Close()
+		return errAddressStore
+	}
+	dirSyncErr := directory.Sync()
+	dirCloseErr := directory.Close()
+	if dirSyncErr != nil || dirCloseErr != nil {
 		return errAddressStore
 	}
 	return nil

@@ -1,6 +1,7 @@
 package eebusruntime
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -138,6 +139,9 @@ func TestOutputBindingDeviceTypeProhibition(t *testing.T) {
 	// requires the actor under test to be the one named.
 	// device type: text that forbids another type still adds the entity. The production gate
 	// requires the node device type to be the one named.
+	// exception: text that excepts this device type still adds the entity. The production gate
+	// refuses only the type named as forbidden.
+	// admission: a result the publication contract does not admit does not report the prohibition.
 	// A matching prohibition adds nothing and the loss names the prohibition.
 	binding := newOutputBinding(t)
 	refused := outputBindingInverter("north")
@@ -169,6 +173,31 @@ func TestOutputBindingDeviceTypeProhibition(t *testing.T) {
 	otherType.UseCaseText = "The actor Inverter forbids device type GridGuard"
 	if len(binding.Apply(otherType)) != 0 || binding.EntityAddress("roof") == "" {
 		t.Fatal("text forbidding another type was refused")
+	}
+
+	exempt := outputBindingInverter("exempt")
+	exempt.Actor = "Inverter"
+	exempt.UseCaseText = "The actor Inverter forbids every device type except EnergyManagementSystem"
+	if len(binding.Apply(exempt)) != 0 || binding.EntityAddress("exempt") == "" {
+		t.Fatal("exception was refused")
+	}
+	kept := outputBindingInverter("kept")
+	kept.Actor = "Inverter"
+	kept.UseCaseText = "The actor Inverter forbids device type EnergyManagementSystem except GridGuard"
+	loss = binding.Apply(kept)
+	if len(loss) != 2 || loss[0] != "device_type_prohibition" || loss[1] != "EnergyManagementSystem" {
+		t.Fatalf("loss %v", loss)
+	}
+	if binding.EntityAddress("kept") != "" {
+		t.Fatal("prohibition with an unrelated exception added an entity")
+	}
+	silent := outputBindingInverter("silent")
+	silent.LensAdmitted = false
+	silent.Actor = "Inverter"
+	silent.UseCaseText = "The actor Inverter forbids device type EnergyManagementSystem"
+	loss = binding.Apply(silent)
+	if len(loss) != 0 || binding.EntityAddress("silent") != "" {
+		t.Fatalf("non-admitted prohibition loss %v", loss)
 	}
 }
 
@@ -217,6 +246,30 @@ func TestOutputBindingAddressIdentity(t *testing.T) {
 	}
 	if _, err := NewOutputBinding(directory); err == nil {
 		t.Fatal("conflicting stored address admitted")
+	}
+}
+
+func TestOutputBindingAddressSync(t *testing.T) {
+	// The stored address is synced before its name is published.
+	// A failed sync removes the temporary file and does not rename it.
+	directory := t.TempDir()
+	binding := newOutputBindingAt(t, directory)
+	original := syncBindingFile
+	syncBindingFile = func(file *os.File) error {
+		if err := file.Sync(); err != nil {
+			return err
+		}
+		return errors.New("sync failed")
+	}
+	t.Cleanup(func() { syncBindingFile = original })
+	if err := binding.noteAddress("north", "aa"); err == nil {
+		t.Fatal("unsynced address was published")
+	}
+	if _, err := os.Stat(filepath.Join(directory, addressFileName)); !os.IsNotExist(err) {
+		t.Fatal("address file renamed before sync")
+	}
+	if _, err := os.Stat(filepath.Join(directory, addressFileName+".new")); !os.IsNotExist(err) {
+		t.Fatal("temporary address file left behind")
 	}
 }
 
