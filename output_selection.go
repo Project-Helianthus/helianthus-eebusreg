@@ -1,6 +1,14 @@
 package eebusruntime
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
+)
+
+// The selected results are applied on the facade node of the running runtime
+// service.
+var _ shipNode = (*eebusfacade.OutputNode)(nil)
 
 const (
 	actorEnergyGuard        = "Energy Guard"

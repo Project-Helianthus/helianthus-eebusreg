@@ -1,7 +1,10 @@
 package eebusruntime
 
 import (
+	"go/parser"
+	"go/token"
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -213,4 +216,22 @@ func TestOutputSelectionLeavesInputUntouched(t *testing.T) {
 			t.Fatalf("input changed: %#v", result)
 		}
 	}
+}
+
+// The selection uses LensResult and the binding helpers, which live in the
+// implementation files of the package. The public contract is type-checked
+// without the files that import the facade, so the selection must be one of
+// them or that check cannot resolve LensResult.
+func TestOutputSelectionIsImplementationFile(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "output_selection.go", nil, parser.ImportsOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range file.Imports {
+		if path, err := strconv.Unquote(spec.Path.Value); err == nil &&
+			path == "github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade" {
+			return
+		}
+	}
+	t.Fatal("output_selection.go does not import the facade, so the public contract type-check sees it without LensResult")
 }
