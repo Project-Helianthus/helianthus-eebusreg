@@ -181,6 +181,9 @@ func (b *OutputBinding) Apply(result LensResult) []string {
 		if err := b.bindFeatures(result); err != nil {
 			return applyLoss(err)
 		}
+		if outcome := b.serveInverterMonitoring(result); monitoringFeatureGap(outcome) {
+			return applyLoss(errExistingNode)
+		}
 	}
 	return announcementLoss(result)
 }
