@@ -179,6 +179,53 @@ func TestInverterMonitoringInverterGaps(t *testing.T) {
 	}
 }
 
+func TestInverterMonitoringGapsThroughApply(t *testing.T) {
+	// An admitted inverter that lacks device name, both failsafe elements and heartbeat is
+	// applied with an empty returned loss, and MonitoringLoss gives the caller each gap the
+	// monitor recorded: identification, device classification, failsafe and heartbeat.
+	// Once the inverter names those identification and failsafe elements, they leave the loss.
+	binding := newOutputBinding(t)
+	result := outputBindingInverter("north")
+	result.Elements = []string{
+		"device code", "serial number", "software revision", "hardware revision",
+		"vendor name", "brand name", "inverter grid code", "operating state", "energy",
+		"power factor", "power production nominal max", "apparent power",
+	}
+	if loss := binding.Apply(result); len(loss) != 0 {
+		t.Fatalf("apply loss %v", loss)
+	}
+	gaps := binding.MonitoringLoss("north")
+	for _, want := range []string{
+		"device name", "device classification", "failsafe production active power limit",
+		"failsafe duration minimum", "heartbeat",
+	} {
+		if !monitoringListed(gaps, want) {
+			t.Fatalf("monitoring loss omits %s: %v", want, gaps)
+		}
+	}
+	if monitoringListed(gaps, "device code") {
+		t.Fatalf("admitted element named %v", gaps)
+	}
+
+	result.Elements = append(result.Elements, "device name", "failsafe production active power limit", "failsafe duration minimum")
+	binding.Apply(result)
+	gaps = binding.MonitoringLoss("north")
+	for _, gone := range []string{"device name", "failsafe production active power limit", "failsafe duration minimum"} {
+		if monitoringListed(gaps, gone) {
+			t.Fatalf("%s still named %v", gone, gaps)
+		}
+	}
+	if !monitoringListed(gaps, "heartbeat") {
+		t.Fatalf("heartbeat %v", gaps)
+	}
+
+	result.LensAdmitted = false
+	binding.Apply(result)
+	if gaps := binding.MonitoringLoss("north"); len(gaps) != 0 {
+		t.Fatalf("unadmitted apply kept %v", gaps)
+	}
+}
+
 func TestInverterMonitoringPowerDetails(t *testing.T) {
 	// Scenario power details are filled by apparent power or reactive power.
 	// neither: both names are the loss. The gate requires one of them.

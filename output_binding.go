@@ -77,6 +77,7 @@ type OutputBinding struct {
 	byResource map[string]boundEntity
 	order      []string
 	node       shipNode
+	gaps       map[string][]string
 }
 
 type boundEntity struct {
@@ -132,6 +133,7 @@ func NewOutputBinding(directory string) (*OutputBinding, error) {
 		addresses:  addresses,
 		byResource: map[string]boundEntity{},
 		node:       node,
+		gaps:       map[string][]string{},
 	}, nil
 }
 
@@ -150,6 +152,7 @@ func (b *OutputBinding) liveNodeLocked() shipNode {
 	if node != b.node {
 		b.byResource = map[string]boundEntity{}
 		b.order = nil
+		b.gaps = map[string][]string{}
 		b.node = node
 	}
 	return node
@@ -158,6 +161,8 @@ func (b *OutputBinding) liveNodeLocked() shipNode {
 // Apply adds an Inverter, a PV String whose parent is that Inverter, or an EVSE
 // entity when the publication contract admits the lens result. A use-case text
 // that forbids device type EnergyManagementSystem adds nothing and names that prohibition.
+// Apply also serves the use cases of the entity, and MonitoringLoss returns
+// what that serving did not publish.
 func (b *OutputBinding) Apply(result LensResult) []string {
 	if b == nil {
 		return applyLoss(errExistingNode)
@@ -165,6 +170,7 @@ func (b *OutputBinding) Apply(result LensResult) []string {
 	outputBindingGate.Lock()
 	defer outputBindingGate.Unlock()
 	node := b.liveNodeLocked()
+	delete(b.gaps, result.ResourceID)
 	if !b.admitted(result) {
 		return announcementLoss(result)
 	}
@@ -181,11 +187,47 @@ func (b *OutputBinding) Apply(result LensResult) []string {
 		if err := b.bindFeatures(result); err != nil {
 			return applyLoss(err)
 		}
-		if outcome := b.serveInverterMonitoring(result); monitoringFeatureGap(outcome) {
+		if result.Family == "charger" {
+			// A rejected charger feature withdraws only its use case, so the
+			// entity stays applied and MonitoringLoss names that feature.
+			b.recordGaps(result.ResourceID, b.serveChargerOutput(result).Loss)
+			return announcementLoss(result)
+		}
+		outcome := b.serveInverterMonitoring(result)
+		b.recordGaps(result.ResourceID, outcome.Loss)
+		if monitoringFeatureGap(outcome) {
 			return applyLoss(errExistingNode)
 		}
 	}
 	return announcementLoss(result)
+}
+
+// MonitoringLoss returns what the last Apply of a resource identifier did not
+// publish for the use cases of its entity: each mandatory element or scenario
+// the lens result does not fill, each server feature the node rejected, and,
+// for a charger, the device classification gap and the loss of an active-power
+// consumption-limit write. It is empty when that Apply published everything,
+// was not admitted, or stopped before serving the entity.
+func (b *OutputBinding) MonitoringLoss(resourceID string) []string {
+	if b == nil {
+		return nil
+	}
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	if b.liveNodeLocked() == nil {
+		return nil
+	}
+	return append([]string(nil), b.gaps[resourceID]...)
+}
+
+func (b *OutputBinding) recordGaps(resourceID string, loss []string) {
+	if len(loss) == 0 {
+		return
+	}
+	if b.gaps == nil {
+		b.gaps = map[string][]string{}
+	}
+	b.gaps[resourceID] = append([]string(nil), loss...)
 }
 
 // AdvertisementCount is the advertisement count of the existing node.

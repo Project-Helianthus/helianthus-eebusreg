@@ -34,12 +34,13 @@ func TestOutputBindingSurfaceIsClosed(t *testing.T) {
 		"func OutputBinding.EntityAddress":      "func (*OutputBinding) EntityAddress(string) string",
 		"func OutputBinding.EntityAddresses":    "func (*OutputBinding) EntityAddresses() []string",
 		"func OutputBinding.EntityTypes":        "func (*OutputBinding) EntityTypes() []string",
+		"func OutputBinding.MonitoringLoss":     "func (*OutputBinding) MonitoringLoss(string) []string",
 		"func OutputBinding.ParentAddress":      "func (*OutputBinding) ParentAddress(string) string",
 		"func OutputBinding.ServerFeatures":     "func (*OutputBinding) ServerFeatures(string) []string",
 		"func OutputBinding.ServiceCount":       "func (*OutputBinding) ServiceCount() int",
 		"type LensOperation":                    "type LensOperation struct{ Name string; Unit string; OwnCapability bool; Converted bool }",
 		"type LensResult":                       "type LensResult struct{ Family string; ResourceID string; ParentResourceID string; LensAdmitted bool; RuntimeEnabled bool; InputDimension bool; ContainsCited bool; Basis string; Elements []string; Operations []LensOperation; UseCase string; Actor string; UseCaseText string; DeviceActor string; MissingElements []string; Overlapping bool }",
-		"type OutputBinding":                    "type OutputBinding struct{ directory string; addresses map[string]string; byResource map[string]boundEntity; order []string; node shipNode }",
+		"type OutputBinding":                    "type OutputBinding struct{ directory string; addresses map[string]string; byResource map[string]boundEntity; order []string; node shipNode; gaps map[string][]string }",
 	}
 	got := map[string]string{}
 	for _, symbol := range root.Symbols {
