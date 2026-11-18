@@ -44,6 +44,7 @@ type shipNode interface {
 	AddEntity(kind, address, parent string) error
 	ServerFeatures(address string) []string
 	AddServerFeature(address, name string) error
+	AddServerFeatures(address string, names []string) (string, error)
 }
 
 // openShipNode attaches to the node of the running runtime service. It never
@@ -184,16 +185,20 @@ func (b *OutputBinding) Apply(result LensResult) []string {
 		return applyLoss(err)
 	}
 	if !result.Overlapping {
+		served := withExtensionElements(result)
+		if result.Family == "charger" {
+			// A rejected charger feature withdraws only the use case or the
+			// operation that needs it, so the entity stays applied and
+			// MonitoringLoss names that feature.
+			b.recordGaps(result.ResourceID, b.serveChargerOutput(served).Loss)
+			return announcementLoss(result)
+		}
 		if err := b.bindFeatures(result); err != nil {
 			return applyLoss(err)
 		}
-		if result.Family == "charger" {
-			// A rejected charger feature withdraws only its use case, so the
-			// entity stays applied and MonitoringLoss names that feature.
-			b.recordGaps(result.ResourceID, b.serveChargerOutput(result).Loss)
-			return announcementLoss(result)
-		}
-		outcome := b.serveInverterMonitoring(result)
+		outcome := b.serveInverterMonitoring(served)
+		outcome.Loss = append(outcome.Loss, extensionLoss(result)...)
+		sort.Strings(outcome.Loss)
 		b.recordGaps(result.ResourceID, outcome.Loss)
 		if monitoringFeatureGap(outcome) {
 			return applyLoss(errExistingNode)
@@ -202,12 +207,27 @@ func (b *OutputBinding) Apply(result LensResult) []string {
 	return announcementLoss(result)
 }
 
+// withExtensionElements returns a copy of the result whose elements also list
+// each scenario element an extension element of its family fills.
+func withExtensionElements(result LensResult) LensResult {
+	result.Elements = extensionElements(result.Family, result.Elements, result.MissingElements)
+	return result
+}
+
+// extensionLoss names each scenario element of the entity that the result
+// does not fill with its extension element.
+func extensionLoss(result LensResult) []string {
+	return extensionLosses(result.Family, result.Elements, result.MissingElements)
+}
+
 // MonitoringLoss returns what the last Apply of a resource identifier did not
 // publish for the use cases of its entity: each mandatory element or scenario
-// the lens result does not fill, each server feature the node rejected, and,
-// for a charger, the device classification gap and the loss of an active-power
-// consumption-limit write. It is empty when that Apply published everything,
-// was not admitted, or stopped before serving the entity.
+// the lens result does not fill, string DC energy for a string and
+// line-to-line voltage for an inverter when the result does not carry them,
+// each server feature the node rejected, and, for a charger, the device
+// classification gap and the loss of an active-power consumption-limit write.
+// It is empty when that Apply published everything, was not admitted, or
+// stopped before serving the entity.
 func (b *OutputBinding) MonitoringLoss(resourceID string) []string {
 	if b == nil {
 		return nil

@@ -114,6 +114,54 @@ func TestOutputNodeFailedAttachLeavesNoFeature(t *testing.T) {
 	}
 }
 
+func TestOutputNodeAddsAllFeaturesOrNone(t *testing.T) {
+	// The node accepts measurement and rejects electrical connection. The batch names the
+	// rejected feature and leaves the entity without measurement. A later batch the node
+	// accepts adds both, and asking again for a present feature adds no duplicate.
+	service, _ := newOutputNodeRuntime(t)
+	if err := service.Setup(); err != nil {
+		t.Fatal(err)
+	}
+	node, err := OpenOutputNode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.AddEntity("EVSE", "na", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.AddServerFeatures("nb", []string{"measurement"}); err == nil {
+		t.Fatal("a batch on an entity the node did not add was accepted")
+	}
+	original := attachOutputServerFeature
+	RejectOutputServerFeatureForTest(t, "electrical connection")
+	rejected, err := node.AddServerFeatures("na", []string{"measurement", "electrical connection"})
+	if err == nil || rejected != "electrical connection" {
+		t.Fatalf("rejected %q err %v", rejected, err)
+	}
+	if features := node.ObservedServerFeatures("na"); len(features) != 0 {
+		t.Fatalf("a rejected batch left server features %v", features)
+	}
+	if rejected, err := node.AddServerFeatures("na", []string{"device diagnosis", "unknown"}); err == nil || rejected != "unknown" {
+		t.Fatalf("unknown feature rejected %q err %v", rejected, err)
+	}
+	if features := node.ObservedServerFeatures("na"); len(features) != 0 {
+		t.Fatalf("a batch with an unknown feature left server features %v", features)
+	}
+	attachOutputServerFeature = original
+	if _, err := node.AddServerFeatures("na", []string{"measurement", "electrical connection"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.AddServerFeatures("na", []string{"measurement", "load control"}); err != nil {
+		t.Fatal(err)
+	}
+	if features := node.ServerFeatures("na"); !reflect.DeepEqual(features, []string{"electrical connection", "load control", "measurement"}) {
+		t.Fatalf("server features %v", features)
+	}
+	if features := node.ObservedServerFeatures("na"); len(features) != 3 {
+		t.Fatalf("a repeated feature was duplicated %v", features)
+	}
+}
+
 func TestOutputNodeEntityAddressFollowsLetter(t *testing.T) {
 	// The SPINE entity address comes from the stored letter, not from the
 	// apply order, so a restart that applies in another order keeps it.
@@ -151,6 +199,24 @@ func TestOutputNodeEntityAddressFollowsLetter(t *testing.T) {
 	if _, ok := letterEntityNumber("abcdefg"); ok {
 		t.Fatal("an overlong letter address received an entity number")
 	}
+}
+
+// RejectOutputServerFeatureForTest makes the runtime node refuse to attach one
+// named server feature until the test ends, for the external binding test.
+func RejectOutputServerFeatureForTest(t *testing.T, name string) {
+	t.Helper()
+	featureType, ok := serverFeatureType(name)
+	if !ok {
+		t.Fatalf("unknown server feature %q", name)
+	}
+	original := attachOutputServerFeature
+	attachOutputServerFeature = func(entity spineapi.EntityLocalInterface, attached spinemodel.FeatureTypeType) error {
+		if attached == featureType {
+			return errOutputNode
+		}
+		return original(entity, attached)
+	}
+	t.Cleanup(func() { attachOutputServerFeature = original })
 }
 
 // PrepareOutputNodeRuntimeForTest prepares the runtime service without

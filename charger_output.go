@@ -18,15 +18,7 @@ const (
 	chargerLossEV            = "EV"
 	chargerLossPowerLimit    = "missing operation: active power consumption limit"
 	chargerLossCurrentCall   = "not called: " + operationAllocatedCurrent
-	chargerLossKept          = "not removed: "
 )
-
-// serverFeatureRemover is a node that can take back a server feature it
-// added. The binding uses it to withdraw a use case whose later feature the
-// node rejected. A node without it keeps that feature, and the loss names it.
-type serverFeatureRemover interface {
-	RemoveServerFeature(address, name string) error
-}
 
 // chargerEVUseCases are use cases whose actor is the EV. The EVSE entity of
 // this node never takes that actor, so a lens result naming one announces nothing.
@@ -40,9 +32,8 @@ var chargerEVUseCases = map[string]struct{}{
 }
 
 // chargerUseCaseFeatures lists, per announced use case, the server features
-// the EVSE entity needs to fill its mandatory scenario. When the node rejects
-// one of them, the features this use case already added are taken back, so a
-// withdrawn use case leaves nothing of its own on the entity.
+// the EVSE entity needs to fill its mandatory scenario. The node adds all of
+// them or none, so a withdrawn use case leaves nothing of its own on the entity.
 var chargerUseCaseFeatures = []struct {
 	useCase  string
 	features []string
@@ -94,13 +85,15 @@ func chargerConsumptionLimitWrite(LensResult) monitoringOutcome {
 }
 
 // serveChargerOutput attaches the server features of each announced use case
-// on the EVSE entity the binding added for the lens result. The monitored unit
-// is that entity and never the CEM entity. A feature the node rejects withdraws
-// only the use case that needs it, and the features that use case already
-// added are taken back. The caller holds outputBindingGate.
+// on the EVSE entity the binding added for the lens result, then the features
+// of each admitted charger operation. The monitored unit is that entity and
+// never the CEM entity. A feature the node rejects withdraws only the use case
+// or the operation that needs it, and MonitoringLoss names that feature. The
+// caller holds outputBindingGate.
 func (b *OutputBinding) serveChargerOutput(result LensResult) monitoringOutcome {
 	outcome := monitorChargerLens(result)
-	if b == nil || len(outcome.Announced) == 0 {
+	operations := chargerOperationFeatures(result)
+	if b == nil || (len(outcome.Announced) == 0 && len(operations) == 0) {
 		return outcome
 	}
 	entity, ok := b.byResource[result.ResourceID]
@@ -112,44 +105,56 @@ func (b *OutputBinding) serveChargerOutput(result LensResult) monitoringOutcome 
 		if !monitoringHas(outcome.Announced, entry.useCase) {
 			continue
 		}
-		if loss := b.attachUseCase(entity.address, entry.features); len(loss) > 0 {
-			outcome.Loss = append(outcome.Loss, loss...)
+		if rejected, ok := b.attachAll(entity.address, entry.features); !ok {
+			outcome.Loss = chargerNameLoss(outcome.Loss, rejected)
 			continue
 		}
 		announced = append(announced, entry.useCase)
+	}
+	for _, features := range operations {
+		if rejected, ok := b.attachAll(entity.address, features); !ok {
+			outcome.Loss = chargerNameLoss(outcome.Loss, rejected)
+		}
 	}
 	outcome.Announced = announced
 	sort.Strings(outcome.Loss)
 	return outcome
 }
 
-// attachUseCase adds the server features of one use case on the entity. When
-// the node rejects one, it takes back each feature this call added, leaves any
-// feature the entity already had, and returns the rejected feature together
-// with every added feature the node could not take back.
-func (b *OutputBinding) attachUseCase(address string, features []string) []string {
-	present := b.node.ServerFeatures(address)
-	var added []string
-	for _, feature := range features {
-		if err := b.node.AddServerFeature(address, feature); err != nil {
-			return append([]string{feature}, b.takeBack(address, added)...)
-		}
-		if !monitoringHas(present, feature) {
-			added = append(added, feature)
-		}
+// attachAll asks the node for every feature at once, so a rejected feature
+// leaves none of them on the entity. It returns the rejected feature, or the
+// existing-node loss when the node names none.
+func (b *OutputBinding) attachAll(address string, features []string) (string, bool) {
+	rejected, err := b.node.AddServerFeatures(address, features)
+	if err == nil {
+		return "", true
 	}
-	return nil
+	if rejected == "" {
+		rejected = "existing node"
+	}
+	return rejected, false
 }
 
-func (b *OutputBinding) takeBack(address string, added []string) []string {
-	remover, _ := b.node.(serverFeatureRemover)
-	var kept []string
-	for _, feature := range added {
-		if remover == nil || remover.RemoveServerFeature(address, feature) != nil {
-			kept = append(kept, chargerLossKept+feature)
+func chargerNameLoss(loss []string, name string) []string {
+	if monitoringHas(loss, name) {
+		return loss
+	}
+	return append(loss, name)
+}
+
+// chargerOperationFeatures lists, per admitted charger operation, the server
+// features that operation binds on the EVSE entity.
+func chargerOperationFeatures(result LensResult) [][]string {
+	if !chargerAdmitted(result) {
+		return nil
+	}
+	var features [][]string
+	for _, operation := range result.Operations {
+		if bound := featuresForOperation(result.Family, operation); len(bound) > 0 {
+			features = append(features, bound)
 		}
 	}
-	return kept
+	return features
 }
 
 func chargerAdmitted(result LensResult) bool {

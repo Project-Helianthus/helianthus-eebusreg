@@ -690,20 +690,17 @@ func (n *outputBindingFakeNode) AddServerFeature(address, name string) error {
 	return nil
 }
 
-// RemoveServerFeature takes back a server feature, as a node that supports
-// withdrawing a use case does.
-func (n *outputBindingFakeNode) RemoveServerFeature(address, name string) error {
-	if !outputBindingHasType(n.features[address], name) {
-		return errors.New("missing feature")
+// AddServerFeatures adds every named feature or, when the entity is missing, none.
+func (n *outputBindingFakeNode) AddServerFeatures(address string, names []string) (string, error) {
+	if n.find(address) == nil {
+		return "", errors.New("missing entity")
 	}
-	var kept []string
-	for _, feature := range n.features[address] {
-		if feature != name {
-			kept = append(kept, feature)
+	for _, name := range names {
+		if err := n.AddServerFeature(address, name); err != nil {
+			return name, err
 		}
 	}
-	n.features[address] = kept
-	return nil
+	return "", nil
 }
 
 func (n *outputBindingFakeNode) find(address string) *outputBindingFakeEntity {

@@ -364,6 +364,13 @@ func (n *chargerOutputRejectNode) AddServerFeature(address, name string) error {
 	return n.outputBindingFakeNode.AddServerFeature(address, name)
 }
 
+func (n *chargerOutputRejectNode) AddServerFeatures(address string, names []string) (string, error) {
+	if monitoringListed(names, n.reject) {
+		return n.reject, errExistingNode
+	}
+	return n.outputBindingFakeNode.AddServerFeatures(address, names)
+}
+
 func chargerOutputServe(binding *OutputBinding, result LensResult) monitoringOutcome {
 	outputBindingGate.Lock()
 	defer outputBindingGate.Unlock()
@@ -382,10 +389,10 @@ func chargerOutputLens(resourceID string) LensResult {
 	}
 }
 
-func TestChargerOutputRejectedConnectionTakesBackMeasurement(t *testing.T) {
-	// The node accepts measurement and rejects electrical connection. Power monitoring is
-	// withdrawn, the measurement it added is taken back, and the EVSE entity keeps only
-	// the commissioning feature.
+func TestChargerOutputRejectedConnectionLeavesNoMeasurement(t *testing.T) {
+	// The node rejects electrical connection. Power monitoring asks for measurement
+	// and electrical connection at once, so it is withdrawn without adding measurement,
+	// and the EVSE entity keeps only the commissioning feature.
 	node := &chargerOutputRejectNode{outputBindingFakeNode: newOutputBindingFakeNode(), reject: "electrical connection"}
 	useOutputBindingNode(t, func() (shipNode, error) { return node, nil })
 	binding, err := NewOutputBinding(t.TempDir())
@@ -403,37 +410,49 @@ func TestChargerOutputRejectedConnectionTakesBackMeasurement(t *testing.T) {
 		t.Fatalf("commissioning features %v", features)
 	}
 	gaps := binding.MonitoringLoss("bay")
-	if !monitoringListed(gaps, "electrical connection") || monitoringListed(gaps, "not removed: measurement") {
+	if !monitoringListed(gaps, "electrical connection") || monitoringListed(gaps, "measurement") {
 		t.Fatalf("monitoring loss %v", gaps)
 	}
 }
 
-func TestChargerOutputKeptFeatureNamed(t *testing.T) {
-	// A node that cannot take a feature back keeps the measurement of the withdrawn use case.
-	// MonitoringLoss names that kept feature, so the caller learns the entity still serves it.
-	inner := newOutputBindingFakeNode()
-	node := &chargerOutputFixedNode{shipNode: inner, reject: "electrical connection"}
-	useOutputBindingNode(t, func() (shipNode, error) { return node, nil })
-	binding, err := NewOutputBinding(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
+func TestChargerOutputRejectedOperationFeature(t *testing.T) {
+	// A charger that carries the admitted allocated current operation. The node rejects one
+	// feature that operation binds. Apply keeps the entity applied and commissioning served.
+	// load control: only the operation needs it. Both use cases stay served and the loss names it.
+	// electrical connection: power monitoring and the operation need it. Both are withdrawn,
+	// and neither measurement nor load control lands on the entity.
+	cases := map[string]struct{ on, off []string }{
+		"load control":          {[]string{"device diagnosis", "measurement", "electrical connection"}, []string{"load control"}},
+		"electrical connection": {[]string{"device diagnosis"}, []string{"measurement", "electrical connection", "load control"}},
 	}
-	binding.Apply(chargerOutputLens("bay"))
-	gaps := binding.MonitoringLoss("bay")
-	if !monitoringListed(gaps, "electrical connection") || !monitoringListed(gaps, "not removed: measurement") {
-		t.Fatalf("monitoring loss %v", gaps)
+	for feature, want := range cases {
+		t.Run(feature, func(t *testing.T) {
+			node := &chargerOutputRejectNode{outputBindingFakeNode: newOutputBindingFakeNode(), reject: feature}
+			useOutputBindingNode(t, func() (shipNode, error) { return node, nil })
+			binding, err := NewOutputBinding(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := chargerOutputLens("bay")
+			result.Operations = []LensOperation{{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true}}
+			if loss := binding.Apply(result); len(loss) != 0 {
+				t.Fatalf("apply loss %v", loss)
+			}
+			features := binding.ServerFeatures("bay")
+			for _, name := range want.on {
+				if !outputBindingHasType(features, name) {
+					t.Fatalf("%s missing in %v", name, features)
+				}
+			}
+			for _, name := range want.off {
+				if outputBindingHasType(features, name) {
+					t.Fatalf("%s left in %v", name, features)
+				}
+			}
+			gaps := binding.MonitoringLoss("bay")
+			if !monitoringListed(gaps, feature) || !monitoringListed(gaps, "device classification") {
+				t.Fatalf("monitoring loss %v", gaps)
+			}
+		})
 	}
-}
-
-// chargerOutputFixedNode rejects one feature and cannot take a feature back.
-type chargerOutputFixedNode struct {
-	shipNode
-	reject string
-}
-
-func (n *chargerOutputFixedNode) AddServerFeature(address, name string) error {
-	if name == n.reject {
-		return errExistingNode
-	}
-	return n.shipNode.AddServerFeature(address, name)
 }
