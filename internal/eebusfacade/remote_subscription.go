@@ -51,10 +51,13 @@ type remoteSubscriptionState struct {
 	notified map[string]remoteNotifiedData
 	queue    []remoteSubscriptionAction
 	pending  map[remoteSubscriptionRequest]*remoteSubscriptionEntry
-	refused  map[remoteSubscriptionRequest]struct{}
-	sent     map[string]*remoteSubscriptionSent
-	results  spineapi.NodeManagementInterface
-	trusted  func(string) bool
+	// unsubscribing holds the unsubscribe requests whose result has not arrived; a refusal sends
+	// the unsubscribe again at the next run.
+	unsubscribing map[remoteSubscriptionRequest]*remoteSubscriptionEntry
+	refused       map[remoteSubscriptionRequest]struct{}
+	sent          map[string]*remoteSubscriptionSent
+	results       spineapi.NodeManagementInterface
+	trusted       func(string) bool
 }
 
 // remoteSubscriptionSent tracks, per subscribed feature and connection, the message counters of the
@@ -80,6 +83,7 @@ func (state *remoteSubscriptionState) initLocked() {
 		state.active = make(map[string]*remoteSubscriptionEntry)
 		state.notified = make(map[string]remoteNotifiedData)
 		state.pending = make(map[remoteSubscriptionRequest]*remoteSubscriptionEntry)
+		state.unsubscribing = make(map[remoteSubscriptionRequest]*remoteSubscriptionEntry)
 		state.refused = make(map[remoteSubscriptionRequest]struct{})
 		state.sent = make(map[string]*remoteSubscriptionSent)
 	}
@@ -224,6 +228,12 @@ func (bridge *rawFeatureRuntimeBridge) forgetRemoteSubscriptions(ski string, dev
 			delete(bridge.remoteSubscriptions.sent, key)
 		}
 	}
+	for request, entry := range bridge.remoteSubscriptions.unsubscribing {
+		if entry.lease.ski == ski &&
+			(isNilRawRuntimeValue(device) || sameRawRuntimeValue(entry.lease.remote, device)) {
+			delete(bridge.remoteSubscriptions.unsubscribing, request)
+		}
+	}
 }
 
 func rawLeaseFeatures(lease *rawRemoteLease) []spineapi.FeatureRemoteInterface {
@@ -295,6 +305,11 @@ func (bridge *rawFeatureRuntimeBridge) planRemoteSubscriptionsLocked(
 			delete(state.sent, key)
 		}
 	}
+	for request, entry := range state.unsubscribing {
+		if entry.lease.ski == lease.ski && entry.lease != lease {
+			delete(state.unsubscribing, request)
+		}
+	}
 	keys := make([]string, 0, len(wanted))
 	for key := range wanted {
 		if _, exists := state.active[key]; !exists {
@@ -324,6 +339,11 @@ func (bridge *rawFeatureRuntimeBridge) dropRemoteSubscriptionsLocked(lease *rawR
 	for key, sent := range bridge.remoteSubscriptions.sent {
 		if sent.lease == lease {
 			delete(bridge.remoteSubscriptions.sent, key)
+		}
+	}
+	for request, entry := range bridge.remoteSubscriptions.unsubscribing {
+		if entry.lease == lease {
+			delete(bridge.remoteSubscriptions.unsubscribing, request)
 		}
 	}
 }
@@ -441,8 +461,9 @@ func (bridge *rawFeatureRuntimeBridge) prepareRemoteSubscriptionClients(actions 
 	}
 }
 
-// noteRemoteUnsubscribeLocked records an unsubscribe request. One that left the host cancels any
-// earlier subscribe request still unanswered; a replay of an unanswered unsubscribe sent nothing.
+// noteRemoteUnsubscribeLocked records an unsubscribe request and keeps it until its result arrives.
+// One that left the host cancels any earlier subscribe request still unanswered; a replay of an
+// unanswered unsubscribe sent nothing. A refusal that already arrived sends it again at the next run.
 func (bridge *rawFeatureRuntimeBridge) noteRemoteUnsubscribeLocked(
 	entry *remoteSubscriptionEntry,
 	counter *spinemodel.MsgCounterType,
@@ -450,18 +471,44 @@ func (bridge *rawFeatureRuntimeBridge) noteRemoteUnsubscribeLocked(
 	if counter == nil || entry.lease.retired {
 		return
 	}
-	sent := bridge.remoteSubscriptions.sentLocked(entry)
-	if sameRemoteSubscriptionCounter(sent.unsubscribe, counter) {
+	state := &bridge.remoteSubscriptions
+	sent := state.sentLocked(entry)
+	if !sameRemoteSubscriptionCounter(sent.unsubscribe, counter) {
+		value := *counter
+		sent.unsubscribe = &value
+		sent.subscribed = false
+	}
+	if entry.address.Device == nil {
 		return
 	}
-	value := *counter
-	sent.unsubscribe = &value
-	sent.subscribed = false
+	request := remoteSubscriptionRequest{device: *entry.address.Device, counter: *counter}
+	if _, refused := state.refused[request]; refused {
+		delete(state.refused, request)
+		state.queue = append(state.queue, remoteSubscriptionAction{entry: entry})
+		return
+	}
+	state.unsubscribing[request] = entry
+}
+
+// noteRemoteSubscribeLocked records a subscribe request that returned a message counter, unless it
+// only replayed the last one.
+func (state *remoteSubscriptionState) noteRemoteSubscribeLocked(
+	entry *remoteSubscriptionEntry,
+	counter *spinemodel.MsgCounterType,
+) {
+	sent := state.sentLocked(entry)
+	if !sameRemoteSubscriptionCounter(sent.subscribe, counter) {
+		value := *counter
+		sent.subscribe = &value
+		sent.subscribed = true
+	}
 }
 
 // registerRemoteSubscriptionLocked keeps a sent request until its result arrives. A request that
 // could not be sent, whose refusal already arrived, or that only replayed an unanswered request an
-// unsubscribe has since cancelled, leaves the feature eligible for the next discovery refresh.
+// unsubscribe has since cancelled, leaves the feature eligible for the next discovery refresh. A
+// request whose feature stopped being active while it was sent is still recorded for its connection,
+// so the unsubscribe that follows cancels it and a later replay of it is not taken as live.
 func (bridge *rawFeatureRuntimeBridge) registerRemoteSubscriptionLocked(
 	entry *remoteSubscriptionEntry,
 	counter *spinemodel.MsgCounterType,
@@ -469,6 +516,10 @@ func (bridge *rawFeatureRuntimeBridge) registerRemoteSubscriptionLocked(
 ) {
 	state := &bridge.remoteSubscriptions
 	if state.active[entry.key] != entry {
+		if err == nil && counter != nil && !entry.lease.retired &&
+			bridge.leasesBySKI[entry.lease.ski] == entry.lease {
+			state.noteRemoteSubscribeLocked(entry, counter)
+		}
 		return
 	}
 	if err != nil {
@@ -478,17 +529,11 @@ func (bridge *rawFeatureRuntimeBridge) registerRemoteSubscriptionLocked(
 	if counter == nil || entry.address.Device == nil {
 		return
 	}
-	sent := state.sentLocked(entry)
-	if sameRemoteSubscriptionCounter(sent.subscribe, counter) {
-		if !sent.subscribed {
-			bridge.dropRemoteSubscriptionLocked(entry, false)
-			return
-		}
-	} else {
-		value := *counter
-		sent.subscribe = &value
-		sent.subscribed = true
+	if sent := state.sentLocked(entry); sameRemoteSubscriptionCounter(sent.subscribe, counter) && !sent.subscribed {
+		bridge.dropRemoteSubscriptionLocked(entry, false)
+		return
 	}
+	state.noteRemoteSubscribeLocked(entry, counter)
 	request := remoteSubscriptionRequest{device: *entry.address.Device, counter: *counter}
 	if _, refused := state.refused[request]; refused {
 		delete(state.refused, request)
@@ -499,7 +544,9 @@ func (bridge *rawFeatureRuntimeBridge) registerRemoteSubscriptionLocked(
 }
 
 // recordRemoteSubscriptionResult receives the responder's result for a subscription request. A
-// refusal removes the subscription so the next discovery refresh requests it again.
+// refused subscribe removes the subscription so the next discovery refresh requests it again; a
+// refused unsubscribe is sent again at the next run until the responder accepts it or the
+// connection is gone.
 func (bridge *rawFeatureRuntimeBridge) recordRemoteSubscriptionResult(message spineapi.ResponseMessage) {
 	if isNilRawRuntimeValue(message.DeviceRemote) || message.DeviceRemote.Address() == nil {
 		return
@@ -519,6 +566,13 @@ func (bridge *rawFeatureRuntimeBridge) recordRemoteSubscriptionResult(message sp
 		delete(state.pending, request)
 		if refused {
 			bridge.dropRemoteSubscriptionLocked(entry, false)
+		}
+		return
+	}
+	if entry, found := state.unsubscribing[request]; found {
+		delete(state.unsubscribing, request)
+		if refused {
+			state.queue = append(state.queue, remoteSubscriptionAction{entry: entry})
 		}
 		return
 	}
@@ -657,15 +711,34 @@ func (bridge *rawFeatureRuntimeBridge) recordRemoteNotify(
 		current.Operations()[function] == nil {
 		return
 	}
-	inventory, err := bridge.inventoryForFeatureLocked(lease, current)
-	if err != nil {
-		return
-	}
 	var failure *eebusraw.ErrorV1
 	value, err := remoteNotifiedValue(current, function)
 	if err != nil {
 		value = eebusraw.TypedValueV1{}
 		failure = remoteNotifiedDecodeError()
+	}
+	inventory, err := bridge.inventoryForFeatureLocked(lease, current)
+	if err != nil {
+		// The feature cannot be represented in the inventory, so the notification is kept as a
+		// failure under the feature's own address rather than read as missing.
+		locator, complete := remoteNotifiedLocator(lease, current)
+		if !complete {
+			return
+		}
+		inventory = eebusraw.FeaturesGetDataV1{
+			Feature: locator,
+			Runtime: eebusraw.RuntimeBindingV1{
+				RuntimeEpoch:         lease.runtimeEpoch,
+				ConnectionGeneration: uint64(lease.generation),
+			},
+		}
+		value = eebusraw.TypedValueV1{}
+		failure = eebusraw.NewErrorV1(
+			eebusraw.ErrorCodeV1DecodeError,
+			"notified raw feature could not be represented in the feature inventory",
+			false,
+			eebusraw.SourceLayerV1Decode,
+		)
 	}
 	locator := inventory.Feature
 	target := eebusraw.FeatureTargetV1{
@@ -687,6 +760,31 @@ func (bridge *rawFeatureRuntimeBridge) recordRemoteNotify(
 		failure:    failure,
 		notifiedAt: bridge.timestamp(),
 	}
+}
+
+// remoteNotifiedLocator identifies a subscribed feature on its lease. A feature whose address is
+// incomplete has no locator.
+func remoteNotifiedLocator(
+	lease *rawRemoteLease,
+	feature spineapi.FeatureRemoteInterface,
+) (eebusraw.FeatureLocatorV1, bool) {
+	address := feature.Address()
+	if address == nil || address.Device == nil || address.Feature == nil || len(address.Entity) == 0 {
+		return eebusraw.FeatureLocatorV1{}, false
+	}
+	entity := make([]uint64, len(address.Entity))
+	for index, part := range address.Entity {
+		entity[index] = uint64(part)
+	}
+	return eebusraw.FeatureLocatorV1{
+		RemoteSKI:      lease.ski,
+		SHIPID:         lease.shipID,
+		DeviceAddress:  string(*address.Device),
+		EntityAddress:  entity,
+		FeatureAddress: uint64(*address.Feature),
+		FeatureType:    string(feature.Type()),
+		FeatureRole:    eebusraw.FeatureRoleV1(feature.Role()),
+	}, true
 }
 
 // remoteNotifiedDecodeError answers a read whose last notification arrived but could not be

@@ -62,6 +62,9 @@ type remoteSubscriptionSender struct {
 	// arrived, by destination. A repeated request then returns that counter and sends nothing, as
 	// the SPINE sender does.
 	unanswered map[string]spinemodel.MsgCounterType
+	// withdrawWhileSent, when set, withdraws every active subscription of that runtime while the next
+	// subscribe request is being sent, as a trust withdrawal on another goroutine does.
+	withdrawWhileSent *rawFeatureRuntimeBridge
 }
 
 func (sender *remoteSubscriptionSender) Subscribe(
@@ -69,6 +72,17 @@ func (sender *remoteSubscriptionSender) Subscribe(
 	destination *spinemodel.FeatureAddressType,
 	serverType spinemodel.FeatureTypeType,
 ) (*spinemodel.MsgCounterType, error) {
+	sender.mu.Lock()
+	bridge := sender.withdrawWhileSent
+	sender.withdrawWhileSent = nil
+	sender.mu.Unlock()
+	if bridge != nil {
+		bridge.mu.Lock()
+		for _, entry := range bridge.remoteSubscriptions.active {
+			bridge.dropRemoteSubscriptionLocked(entry, true)
+		}
+		bridge.mu.Unlock()
+	}
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
 	if sender.failures[serverType] > 0 {
@@ -127,7 +141,9 @@ func (sender *remoteSubscriptionSender) Unsubscribe(
 	sender.unsubscribed = append(sender.unsubscribed, remoteSubscriptionCall{
 		source: source.String(), destination: destination.String(),
 	})
-	counter := spinemodel.MsgCounterType(len(sender.unsubscribed))
+	// The SPINE sender numbers every request from one sequence, so an unsubscribe never shares a
+	// counter with a subscribe request.
+	counter := spinemodel.MsgCounterType(500 + len(sender.unsubscribed))
 	return &counter, nil
 }
 
@@ -690,6 +706,48 @@ func TestRemoteSubscriptionRefusedResultIsRetriedOnNextDiscovery(t *testing.T) {
 	if subscribed, _ := fixture.sender.calls(); len(subscribed) != 2 || fixture.activeSubscriptions() != 1 {
 		t.Fatalf("accepted subscription was requested again: %+v", subscribed)
 	}
+
+	// A refused unsubscribe is sent again until the responder accepts it, also when the refusal
+	// arrives before the unsubscribe is registered.
+	refusal, accepted := spinemodel.ErrorNumberTypeGeneralError, spinemodel.ErrorNumberTypeNoError
+	fixture.remote.hideFeature(11)
+	for round, step := range []struct {
+		early   bool
+		answer  *spinemodel.ErrorNumberType
+		counter spinemodel.MsgCounterType
+		sent    int
+	}{
+		{answer: &refusal, counter: 501, sent: 1},
+		{answer: &accepted, counter: 502, sent: 2},
+		{sent: 2},
+		{early: true, answer: &refusal, counter: 503},
+		{sent: 3},
+		{sent: 4},
+	} {
+		if step.early {
+			fixture.remote.mu.Lock()
+			delete(fixture.remote.hiddenFeatures, 11)
+			fixture.remote.mu.Unlock()
+		}
+		if step.sent > 0 || step.early {
+			if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, unsubscribed := fixture.sender.calls(); step.sent > 0 && len(unsubscribed) != step.sent {
+			t.Fatalf("round %d: unsubscriptions = %+v, want %d", round, unsubscribed, step.sent)
+		}
+		if step.answer != nil {
+			fixture.bridge.recordRemoteSubscriptionResult(spineapi.ResponseMessage{
+				MsgCounterReference: step.counter,
+				Data:                &spinemodel.ResultDataType{ErrorNumber: step.answer},
+				DeviceRemote:        fixture.remote,
+			})
+		}
+		if step.early {
+			fixture.remote.hideFeature(11)
+		}
+	}
 }
 
 func TestRemoteSubscriptionRefusalBeforeRegistrationIsRetried(t *testing.T) {
@@ -796,6 +854,23 @@ func TestRemoteSubscriptionUndecodableNotifyIsReportedAsDecodeError(t *testing.T
 	_, terminal := backend.FeatureNotifiedDataGet(context.Background(), remoteSubscriptionAuthorization(), target)
 	if terminal == nil || terminal.Code != eebusraw.ErrorCodeV1DecodeError {
 		t.Fatalf("read of an undecodable notification = %+v, want decode_error", terminal)
+	}
+
+	// A notify from a subscribed feature the inventory cannot represent is a stored failure too.
+	fixture = newRemoteSubscriptionFixture(t, strings.Repeat("e", 40), remoteSubscriptionMeasurementSpec())
+	description := spinemodel.DescriptionType(strings.Repeat("d", 4097))
+	fixture.feature(11).SetDescription(&description)
+	handler = newRemoteSubscriptionHandler(t, fixture, remoteSubscriptionTrustAll)
+	backend = &serviceBackend{rawFeatures: fixture.bridge, handler: handler}
+	fixture.admit(t, 4)
+	handler.HandleEvent(remoteSubscriptionNotify(
+		t, fixture, fixture.feature(11), spinemodel.FunctionTypeMeasurementListData,
+		remoteSubscriptionMeasurementData(215),
+	))
+	target = fixture.target(11, spinemodel.FeatureTypeTypeMeasurement, spinemodel.FunctionTypeMeasurementListData)
+	_, terminal = backend.FeatureNotifiedDataGet(context.Background(), remoteSubscriptionAuthorization(), target)
+	if terminal == nil || terminal.Code != eebusraw.ErrorCodeV1DecodeError {
+		t.Fatalf("read of a notification outside the inventory = %+v, want decode_error", terminal)
 	}
 }
 
@@ -1195,6 +1270,34 @@ func TestRemoteSubscriptionReplayedRequestFollowsTheLastRequestSent(t *testing.T
 	if len(subscribed) != 1 || len(unsubscribed) != 0 || fixture.activeSubscriptions() != 1 {
 		t.Fatalf("subscriptions = %+v, unsubscriptions = %+v, active %d; want the first request to stand",
 			subscribed, unsubscribed, fixture.activeSubscriptions())
+	}
+
+	// Trust is withdrawn while the first request is being sent. The request left the host, so the
+	// unsubscribe that follows cancels it, and the sender's later replay of it is not live.
+	fixture = newRemoteSubscriptionFixture(t, strings.Repeat("b", 40), remoteSubscriptionMeasurementSpec())
+	fixture.sender.unanswered = make(map[string]spinemodel.MsgCounterType)
+	fixture.sender.withdrawWhileSent = fixture.bridge
+	fixture.admit(t, 4)
+	fixture.bridge.runRemoteSubscriptionActions()
+	subscribed, unsubscribed = fixture.sender.calls()
+	if len(subscribed) != 1 || len(unsubscribed) != 1 || unsubscribed[0].destination != measurement {
+		t.Fatalf("subscriptions = %+v, unsubscriptions = %+v, want one of each", subscribed, unsubscribed)
+	}
+	for round := 0; round < 2; round++ {
+		if round == 1 {
+			fixture.sender.mu.Lock()
+			delete(fixture.sender.unanswered, measurement)
+			fixture.sender.mu.Unlock()
+			fixture.deliverResult(t, 1, spinemodel.ErrorNumberTypeNoError)
+		}
+		if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+			t.Fatal(err)
+		}
+		subscribed, _ = fixture.sender.calls()
+		if len(subscribed) != round+1 || fixture.activeSubscriptions() != round {
+			t.Fatalf("round %d: subscriptions = %+v (active %d); a replay the unsubscribe cancelled is not live",
+				round, subscribed, fixture.activeSubscriptions())
+		}
 	}
 }
 
