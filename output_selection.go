@@ -3,15 +3,14 @@ package eebusruntime
 import "strings"
 
 const (
-	actorEnergyGuard         = "Energy Guard"
-	useCaseProduction        = "Limitation of Power Production"
-	trustStateTrusted        = "trusted"
-	elementFailsafeLimit     = "failsafe production active power limit"
-	elementFailsafeDuration  = "failsafe duration minimum"
-	selectionFamilyInverter  = "inverter"
-	selectionFamilyPVString  = "pv string"
-	selectionFamilyCharger   = "charger"
-	selectionOperationAbsent = ""
+	actorEnergyGuard        = "Energy Guard"
+	useCaseProduction       = "Limitation of Power Production"
+	trustStateTrusted       = "trusted"
+	elementFailsafeLimit    = "failsafe production active power limit"
+	elementFailsafeDuration = "failsafe duration minimum"
+	selectionFamilyInverter = "inverter"
+	selectionFamilyPVString = "pv string"
+	selectionFamilyCharger  = "charger"
 )
 
 // outputSelection is what the node publishes for one set of lens results:
@@ -117,10 +116,13 @@ func selectionMarkConflicts(results []LensResult) {
 	}
 }
 
+// selectionOperations lists the operations of the result that pass the
+// existing write admission for its family, so a rejected name or unit never
+// counts as a write.
 func selectionOperations(result LensResult) []string {
 	var names []string
 	for _, operation := range result.Operations {
-		if operation.OwnCapability && !operation.Converted && operation.Name != selectionOperationAbsent && !monitoringHas(names, operation.Name) {
+		if featuresForOperation(result.Family, operation) != nil && !monitoringHas(names, operation.Name) {
 			names = append(names, operation.Name)
 		}
 	}

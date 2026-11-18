@@ -122,6 +122,37 @@ func TestOutputSelectionRepeatedOperationIsConflict(t *testing.T) {
 	}
 }
 
+func TestOutputSelectionConflictNeedsAdmittedWrite(t *testing.T) {
+	wrongUnit := outputSelectionProduction("inverter-1")
+	wrongUnit.Operations = []LensOperation{{Name: operationProductionLimit, Unit: "A", OwnCapability: true}}
+	selection := selectOutputs(true, []LensResult{outputSelectionProduction("inverter-1"), wrongUnit}, nil, nil)
+	for _, result := range selection.Results {
+		if result.Overlapping {
+			t.Fatalf("%s overlaps with a write the admission rejects", result.ResourceID)
+		}
+	}
+	if got, want := selection.EnergyGuard, []string{useCaseProduction}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("energy guard = %v, want %v", got, want)
+	}
+	rejected := outputSelectionCharger("charger-1")
+	rejected.Operations = []LensOperation{
+		{Name: operationActivePower, Unit: "W", OwnCapability: true},
+		{Name: operationAllocatedCurrent, Unit: "W", OwnCapability: true},
+	}
+	for _, result := range selectOutputs(true, []LensResult{rejected, rejected}, nil, nil).Results {
+		if result.Overlapping {
+			t.Fatalf("%s overlaps on charger writes the admission rejects", result.ResourceID)
+		}
+	}
+	admitted := outputSelectionCharger("charger-1")
+	admitted.Operations = []LensOperation{{Name: operationAllocatedCurrent, Unit: "A", OwnCapability: true}}
+	for _, result := range selectOutputs(true, []LensResult{admitted, admitted}, nil, nil).Results {
+		if !result.Overlapping {
+			t.Fatalf("%s does not overlap on a repeated admitted charger write", result.ResourceID)
+		}
+	}
+}
+
 func TestOutputSelectionLocalEnergyGuardOnlyWithoutTrustedRemote(t *testing.T) {
 	production := []LensResult{outputSelectionProduction("inverter-1")}
 	want := []string{"Limitation of Power Production"}
