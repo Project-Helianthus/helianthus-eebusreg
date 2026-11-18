@@ -3,6 +3,7 @@ package eebusfacade
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -25,6 +26,10 @@ type remoteSubscriptionCall struct {
 	serverType  spinemodel.FeatureTypeType
 }
 
+// remoteSubscriptionRequestCounter hands out a new message counter for every request, as the SPINE sender
+// does for a request it actually sends.
+var remoteSubscriptionRequestCounter atomic.Uint64
+
 // The raw feature fixtures admit readable Measurement server features, which now sends a
 // subscription request through the synthetic round-tripper.
 func (sender *issue83RoundTripper) Subscribe(
@@ -32,7 +37,7 @@ func (sender *issue83RoundTripper) Subscribe(
 	*spinemodel.FeatureAddressType,
 	spinemodel.FeatureTypeType,
 ) (*spinemodel.MsgCounterType, error) {
-	counter := spinemodel.MsgCounterType(1)
+	counter := spinemodel.MsgCounterType(remoteSubscriptionRequestCounter.Add(1))
 	return &counter, nil
 }
 
@@ -40,7 +45,7 @@ func (sender *issue83RoundTripper) Unsubscribe(
 	*spinemodel.FeatureAddressType,
 	*spinemodel.FeatureAddressType,
 ) (*spinemodel.MsgCounterType, error) {
-	counter := spinemodel.MsgCounterType(1)
+	counter := spinemodel.MsgCounterType(remoteSubscriptionRequestCounter.Add(1))
 	return &counter, nil
 }
 
@@ -53,6 +58,10 @@ type remoteSubscriptionSender struct {
 	sequence     []string
 	// unsubscribeFailures counts the next unsubscribe requests that fail to send.
 	unsubscribeFailures int
+	// unanswered, when set, holds the counter of each subscribe request whose result has not
+	// arrived, by destination. A repeated request then returns that counter and sends nothing, as
+	// the SPINE sender does.
+	unanswered map[string]spinemodel.MsgCounterType
 }
 
 func (sender *remoteSubscriptionSender) Subscribe(
@@ -66,11 +75,17 @@ func (sender *remoteSubscriptionSender) Subscribe(
 		sender.failures[serverType]--
 		return nil, errRemoteSubscriptionTestFailure
 	}
+	if replayed, found := sender.unanswered[destination.String()]; found {
+		return &replayed, nil
+	}
 	sender.subscribed = append(sender.subscribed, remoteSubscriptionCall{
 		source: source.String(), destination: destination.String(), serverType: serverType,
 	})
 	sender.sequence = append(sender.sequence, "subscribe "+source.String())
 	counter := spinemodel.MsgCounterType(len(sender.subscribed))
+	if sender.unanswered != nil {
+		sender.unanswered[destination.String()] = counter
+	}
 	return &counter, nil
 }
 
@@ -123,11 +138,7 @@ func (sender *remoteSubscriptionSender) calls() ([]remoteSubscriptionCall, []rem
 		append([]remoteSubscriptionCall(nil), sender.unsubscribed...)
 }
 
-type remoteSubscriptionTestError string
-
-func (failure remoteSubscriptionTestError) Error() string { return string(failure) }
-
-const errRemoteSubscriptionTestFailure = remoteSubscriptionTestError("subscription refused")
+var errRemoteSubscriptionTestFailure = errors.New("subscription refused")
 
 type remoteSubscriptionFeatureSpec struct {
 	address     uint
@@ -210,7 +221,19 @@ func newRemoteSubscriptionFixture(
 		base, spinemodel.EntityTypeTypeHeatPumpAppliance, []spinemodel.AddressEntityType{1},
 	)
 	for _, spec := range specs {
-		entity.AddFeature(remoteSubscriptionFeature(entity, spec))
+		feature := spine.NewFeatureRemote(spec.address, entity, spec.featureType, spec.role)
+		function := spec.function
+		operations := &spinemodel.PossibleOperationsType{}
+		if spec.readable {
+			operations.Read = &spinemodel.PossibleOperationsReadType{}
+		} else {
+			operations.Write = &spinemodel.PossibleOperationsWriteType{}
+		}
+		feature.SetOperations([]spinemodel.FunctionPropertyType{{
+			Function:           &function,
+			PossibleOperations: operations,
+		}})
+		entity.AddFeature(feature)
 	}
 	base.AddEntity(entity)
 	remote := &issue83MutableRemote{DeviceRemoteInterface: base, sender: sender}
@@ -226,25 +249,6 @@ func newRemoteSubscriptionFixture(
 		bridge: bridge, local: local, remote: remote, base: base, entity: entity, sender: sender,
 		remoteSKI: remoteSKI, shipID: "synthetic-ship-id", address: address, clock: clock,
 	}
-}
-
-func remoteSubscriptionFeature(
-	entity *spine.EntityRemote,
-	spec remoteSubscriptionFeatureSpec,
-) *spine.FeatureRemote {
-	feature := spine.NewFeatureRemote(spec.address, entity, spec.featureType, spec.role)
-	function := spec.function
-	operations := &spinemodel.PossibleOperationsType{}
-	if spec.readable {
-		operations.Read = &spinemodel.PossibleOperationsReadType{}
-	} else {
-		operations.Write = &spinemodel.PossibleOperationsWriteType{}
-	}
-	feature.SetOperations([]spinemodel.FunctionPropertyType{{
-		Function:           &function,
-		PossibleOperations: operations,
-	}})
-	return feature
 }
 
 func (fixture *remoteSubscriptionFixture) admit(t *testing.T, generation uint64) {
@@ -627,12 +631,6 @@ func (fixture *remoteSubscriptionFixture) activeSubscriptions() int {
 	return len(fixture.bridge.remoteSubscriptions.active)
 }
 
-func (fixture *remoteSubscriptionFixture) pendingResults() int {
-	fixture.bridge.mu.Lock()
-	defer fixture.bridge.mu.Unlock()
-	return len(fixture.bridge.remoteSubscriptions.pending)
-}
-
 func remoteSubscriptionEventually(t *testing.T, what string, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -682,7 +680,9 @@ func TestRemoteSubscriptionRefusedResultIsRetriedOnNextDiscovery(t *testing.T) {
 
 	fixture.deliverResult(t, 2, spinemodel.ErrorNumberTypeNoError)
 	remoteSubscriptionEventually(t, "the accepted result is consumed", func() bool {
-		return fixture.pendingResults() == 0
+		fixture.bridge.mu.Lock()
+		defer fixture.bridge.mu.Unlock()
+		return len(fixture.bridge.remoteSubscriptions.pending) == 0
 	})
 	if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
 		t.Fatal(err)
@@ -1130,5 +1130,149 @@ func TestRemoteSubscriptionEpochChangeIsReportedAsMismatch(t *testing.T) {
 		context.Background(), remoteSubscriptionAuthorization(), missing,
 	); terminal == nil || terminal.Code != eebusraw.ErrorCodeV1NotFound {
 		t.Fatalf("read of a never-notified function = %+v, want not_found", terminal)
+	}
+}
+
+func TestRemoteSubscriptionReplayedRequestFollowsTheLastRequestSent(t *testing.T) {
+	// The feature returns after an unsubscribe left the host, before the first request was
+	// answered: the sender only replays that request, which the responder handles before the
+	// unsubscribe sent after it.
+	fixture := newRemoteSubscriptionFixture(t, strings.Repeat("7", 40), remoteSubscriptionMeasurementSpec())
+	fixture.sender.unanswered = make(map[string]spinemodel.MsgCounterType)
+	fixture.admit(t, 4)
+	measurement := fixture.feature(11).Address().String()
+	fixture.remote.hideFeature(11)
+	if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+		t.Fatal(err)
+	}
+	if subscribed, unsubscribed := fixture.sender.calls(); len(subscribed) != 1 || len(unsubscribed) != 1 {
+		t.Fatalf("subscriptions = %+v, unsubscriptions = %+v, want one of each", subscribed, unsubscribed)
+	}
+	fixture.remote.mu.Lock()
+	delete(fixture.remote.hiddenFeatures, 11)
+	fixture.remote.mu.Unlock()
+	if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+		t.Fatal(err)
+	}
+	if subscribed, _ := fixture.sender.calls(); len(subscribed) != 1 {
+		t.Fatalf("replayed request was sent: %+v", subscribed)
+	}
+	if active := fixture.activeSubscriptions(); active != 0 {
+		t.Fatalf("a replayed request the unsubscribe cancelled counts as %d subscriptions", active)
+	}
+	fixture.sender.mu.Lock()
+	delete(fixture.sender.unanswered, measurement)
+	fixture.sender.mu.Unlock()
+	fixture.deliverResult(t, 1, spinemodel.ErrorNumberTypeNoError)
+	if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+		t.Fatal(err)
+	}
+	subscribed, _ := fixture.sender.calls()
+	if len(subscribed) != 2 || subscribed[1].destination != measurement || fixture.activeSubscriptions() != 1 {
+		t.Fatalf("subscriptions after the first result = %+v (active %d), want a new request",
+			subscribed, fixture.activeSubscriptions())
+	}
+
+	// The unsubscribe fails to send and the feature returns before it is retried, so the responder
+	// never sees it and the replayed request stands without another one.
+	fixture = newRemoteSubscriptionFixture(t, strings.Repeat("9", 40), remoteSubscriptionMeasurementSpec())
+	fixture.sender.unanswered = make(map[string]spinemodel.MsgCounterType)
+	fixture.sender.unsubscribeFailures = 1
+	fixture.admit(t, 4)
+	fixture.remote.hideFeature(11)
+	if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+		t.Fatal(err)
+	}
+	fixture.remote.mu.Lock()
+	delete(fixture.remote.hiddenFeatures, 11)
+	fixture.remote.mu.Unlock()
+	for round := 0; round < 2; round++ {
+		if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+			t.Fatal(err)
+		}
+	}
+	subscribed, unsubscribed := fixture.sender.calls()
+	if len(subscribed) != 1 || len(unsubscribed) != 0 || fixture.activeSubscriptions() != 1 {
+		t.Fatalf("subscriptions = %+v, unsubscriptions = %+v, active %d; want the first request to stand",
+			subscribed, unsubscribed, fixture.activeSubscriptions())
+	}
+}
+
+// remoteSubscriptionPartialNotifies applies partial notifies to measurement 3 in place, with the
+// values from first on, then closes done when it is set.
+func remoteSubscriptionPartialNotifies(
+	t *testing.T,
+	feature *spine.FeatureRemote,
+	first int64,
+	rounds int,
+	done chan<- struct{},
+) {
+	measurementID := spinemodel.MeasurementIdType(3)
+	for round := 0; round < rounds; round++ {
+		number := spinemodel.NumberType(first + int64(round))
+		filter := spinemodel.NewFilterTypePartial()
+		filter.MeasurementListDataSelectors = &spinemodel.MeasurementListDataSelectorsType{MeasurementId: &measurementID}
+		if _, failure := feature.UpdateData(true, spinemodel.FunctionTypeMeasurementListData,
+			&spinemodel.MeasurementListDataType{MeasurementData: []spinemodel.MeasurementDataType{{
+				MeasurementId: &measurementID,
+				Value:         &spinemodel.ScaledNumberType{Number: &number},
+			}}}, filter, nil); failure != nil {
+			t.Errorf("partial UpdateData() = %v", failure)
+		}
+	}
+	if done != nil {
+		close(done)
+	}
+}
+
+func TestRemoteSubscriptionNotifiedDataIsAStableSnapshot(t *testing.T) {
+	fixture := newRemoteSubscriptionFixture(t, strings.Repeat("ef", 20), remoteSubscriptionMeasurementSpec())
+	handler := newRemoteSubscriptionHandler(t, fixture, remoteSubscriptionTrustAll)
+	backend := &serviceBackend{rawFeatures: fixture.bridge, handler: handler}
+	feature := fixture.feature(11)
+	function := spinemodel.FunctionTypeMeasurementListData
+	pair := remoteSubscriptionMeasurementData(215)
+	fourth := spinemodel.MeasurementIdType(4)
+	other := spinemodel.NumberType(300)
+	pair.MeasurementData = append(pair.MeasurementData, spinemodel.MeasurementDataType{
+		MeasurementId: &fourth, Value: &spinemodel.ScaledNumberType{Number: &other},
+	})
+	payload := remoteSubscriptionNotify(t, fixture, feature, function, pair)
+
+	snapshot, ok := remoteNotifiedSnapshot(feature, function).(*spinemodel.MeasurementListDataType)
+	if !ok || len(snapshot.MeasurementData) != 2 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	remoteSubscriptionPartialNotifies(t, feature, 999, 1, nil)
+	stored := feature.DataCopy(function).(*spinemodel.MeasurementListDataType)
+	if got := *stored.MeasurementData[0].Value.Number; got != 999 {
+		t.Fatalf("stored measurement after the partial notify = %v, want 999", got)
+	}
+	if first, second := *snapshot.MeasurementData[0].Value.Number, *snapshot.MeasurementData[1].Value.Number; first != 215 || second != 300 {
+		t.Fatalf("snapshot measurements changed to %v and %v by a later notify, want 215 and 300", first, second)
+	}
+
+	// Notifies are encoded on the event goroutine while the next datagram updates the same data.
+	fixture.admit(t, 4)
+	const rounds = 200
+	updated := make(chan struct{})
+	go remoteSubscriptionPartialNotifies(t, feature, 1000, rounds, updated)
+	for round := 0; round < rounds; round++ {
+		handler.HandleEvent(payload)
+	}
+	<-updated
+	handler.HandleEvent(payload)
+	observation, terminal := backend.FeatureNotifiedDataGet(context.Background(), remoteSubscriptionAuthorization(),
+		fixture.target(11, spinemodel.FeatureTypeTypeMeasurement, function))
+	if terminal != nil {
+		t.Fatalf("read error = %+v", terminal)
+	}
+	list, ok := observation.Value.Value().(map[string]any)["measurementData"].([]any)
+	if !ok || len(list) != 2 {
+		t.Fatalf("notified data = %#v", observation.Value.Value())
+	}
+	first := list[0].(map[string]any)["value"].(map[string]any)["number"]
+	if got := remoteSubscriptionNumber(t, first); got != 1000+rounds-1 {
+		t.Fatalf("notified measurement = %v, want the last partial notify %d", got, 1000+rounds-1)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -51,8 +52,20 @@ type remoteSubscriptionState struct {
 	queue    []remoteSubscriptionAction
 	pending  map[remoteSubscriptionRequest]*remoteSubscriptionEntry
 	refused  map[remoteSubscriptionRequest]struct{}
+	sent     map[string]*remoteSubscriptionSent
 	results  spineapi.NodeManagementInterface
 	trusted  func(string) bool
+}
+
+// remoteSubscriptionSent tracks, per subscribed feature and connection, the message counters of the
+// last subscribe and unsubscribe requests and whether the last request that actually left the host
+// was a subscribe. The SPINE sender answers a request that repeats an unanswered one with the earlier
+// counter and sends nothing, so a returned counter equal to the last one marks such a replay.
+type remoteSubscriptionSent struct {
+	lease       *rawRemoteLease
+	subscribe   *spinemodel.MsgCounterType
+	unsubscribe *spinemodel.MsgCounterType
+	subscribed  bool
 }
 
 // remoteSubscriptionRequest identifies one subscription request by the responder device and the
@@ -68,7 +81,24 @@ func (state *remoteSubscriptionState) initLocked() {
 		state.notified = make(map[string]remoteNotifiedData)
 		state.pending = make(map[remoteSubscriptionRequest]*remoteSubscriptionEntry)
 		state.refused = make(map[remoteSubscriptionRequest]struct{})
+		state.sent = make(map[string]*remoteSubscriptionSent)
 	}
+}
+
+// sentLocked returns the request record of an entry's feature on the entry's connection, starting a
+// new one when the connection changed.
+func (state *remoteSubscriptionState) sentLocked(entry *remoteSubscriptionEntry) *remoteSubscriptionSent {
+	state.initLocked()
+	sent := state.sent[entry.key]
+	if sent == nil || sent.lease != entry.lease {
+		sent = &remoteSubscriptionSent{lease: entry.lease}
+		state.sent[entry.key] = sent
+	}
+	return sent
+}
+
+func sameRemoteSubscriptionCounter(last, counter *spinemodel.MsgCounterType) bool {
+	return last != nil && counter != nil && *last == *counter
 }
 
 type remoteSubscriptionEntry struct {
@@ -188,6 +218,12 @@ func (bridge *rawFeatureRuntimeBridge) forgetRemoteSubscriptions(ski string, dev
 			bridge.dropRemoteSubscriptionLocked(entry, false)
 		}
 	}
+	for key, sent := range bridge.remoteSubscriptions.sent {
+		if sent.lease.ski == ski &&
+			(isNilRawRuntimeValue(device) || sameRawRuntimeValue(sent.lease.remote, device)) {
+			delete(bridge.remoteSubscriptions.sent, key)
+		}
+	}
 }
 
 func rawLeaseFeatures(lease *rawRemoteLease) []spineapi.FeatureRemoteInterface {
@@ -254,6 +290,11 @@ func (bridge *rawFeatureRuntimeBridge) planRemoteSubscriptionsLocked(
 			bridge.dropRemoteSubscriptionLocked(entry, entry.lease == lease)
 		}
 	}
+	for key, sent := range state.sent {
+		if sent.lease.ski == lease.ski && sent.lease != lease {
+			delete(state.sent, key)
+		}
+	}
 	keys := make([]string, 0, len(wanted))
 	for key := range wanted {
 		if _, exists := state.active[key]; !exists {
@@ -278,6 +319,11 @@ func (bridge *rawFeatureRuntimeBridge) dropRemoteSubscriptionsLocked(lease *rawR
 	for _, entry := range bridge.remoteSubscriptions.active {
 		if entry.lease == lease {
 			bridge.dropRemoteSubscriptionLocked(entry, false)
+		}
+	}
+	for key, sent := range bridge.remoteSubscriptions.sent {
+		if sent.lease == lease {
+			delete(bridge.remoteSubscriptions.sent, key)
 		}
 	}
 }
@@ -321,9 +367,17 @@ func (bridge *rawFeatureRuntimeBridge) runRemoteSubscriptionActions() {
 			bridge.mu.Lock()
 			due := bridge.remoteUnsubscribeDueLocked(action.entry)
 			bridge.mu.Unlock()
-			if due && !unsubscribeRemoteFeature(bridge.local, action.entry) {
-				retry = append(retry, action)
+			if !due {
+				continue
 			}
+			counter, done := unsubscribeRemoteFeature(bridge.local, action.entry)
+			if !done {
+				retry = append(retry, action)
+				continue
+			}
+			bridge.mu.Lock()
+			bridge.noteRemoteUnsubscribeLocked(action.entry, counter)
+			bridge.mu.Unlock()
 			continue
 		}
 		bridge.mu.Lock()
@@ -387,9 +441,27 @@ func (bridge *rawFeatureRuntimeBridge) prepareRemoteSubscriptionClients(actions 
 	}
 }
 
+// noteRemoteUnsubscribeLocked records an unsubscribe request. One that left the host cancels any
+// earlier subscribe request still unanswered; a replay of an unanswered unsubscribe sent nothing.
+func (bridge *rawFeatureRuntimeBridge) noteRemoteUnsubscribeLocked(
+	entry *remoteSubscriptionEntry,
+	counter *spinemodel.MsgCounterType,
+) {
+	if counter == nil || entry.lease.retired {
+		return
+	}
+	sent := bridge.remoteSubscriptions.sentLocked(entry)
+	if sameRemoteSubscriptionCounter(sent.unsubscribe, counter) {
+		return
+	}
+	value := *counter
+	sent.unsubscribe = &value
+	sent.subscribed = false
+}
+
 // registerRemoteSubscriptionLocked keeps a sent request until its result arrives. A request that
-// could not be sent, or whose refusal already arrived, leaves the feature eligible for the next
-// discovery refresh.
+// could not be sent, whose refusal already arrived, or that only replayed an unanswered request an
+// unsubscribe has since cancelled, leaves the feature eligible for the next discovery refresh.
 func (bridge *rawFeatureRuntimeBridge) registerRemoteSubscriptionLocked(
 	entry *remoteSubscriptionEntry,
 	counter *spinemodel.MsgCounterType,
@@ -405,6 +477,17 @@ func (bridge *rawFeatureRuntimeBridge) registerRemoteSubscriptionLocked(
 	}
 	if counter == nil || entry.address.Device == nil {
 		return
+	}
+	sent := state.sentLocked(entry)
+	if sameRemoteSubscriptionCounter(sent.subscribe, counter) {
+		if !sent.subscribed {
+			bridge.dropRemoteSubscriptionLocked(entry, false)
+			return
+		}
+	} else {
+		value := *counter
+		sent.subscribe = &value
+		sent.subscribed = true
 	}
 	request := remoteSubscriptionRequest{device: *entry.address.Device, counter: *counter}
 	if _, refused := state.refused[request]; refused {
@@ -539,15 +622,19 @@ func subscribeRemoteFeature(
 }
 
 // unsubscribeRemoteFeature reports whether the responder needs no further request: the unsubscribe
-// was sent, or no local client exists, so no subscription was ever requested from one.
-func unsubscribeRemoteFeature(local spineapi.DeviceLocalInterface, entry *remoteSubscriptionEntry) bool {
+// was sent, with its message counter, or no local client exists, so no subscription was ever
+// requested from one.
+func unsubscribeRemoteFeature(
+	local spineapi.DeviceLocalInterface,
+	entry *remoteSubscriptionEntry,
+) (*spinemodel.MsgCounterType, bool) {
 	client, _ := remoteSubscriptionClient(local, entry.featureType, false)
 	if client == nil {
-		return true
+		return nil, true
 	}
 	address := cloneRawFeatureAddress(entry.address)
-	_, failure := client.RemoveRemoteSubscription(&address)
-	return failure == nil
+	counter, failure := client.RemoveRemoteSubscription(&address)
+	return counter, failure == nil
 }
 
 func (bridge *rawFeatureRuntimeBridge) recordRemoteNotify(
@@ -575,7 +662,7 @@ func (bridge *rawFeatureRuntimeBridge) recordRemoteNotify(
 		return
 	}
 	var failure *eebusraw.ErrorV1
-	value, err := remoteNotifiedValue(current.DataCopy(function))
+	value, err := remoteNotifiedValue(current, function)
 	if err != nil {
 		value = eebusraw.TypedValueV1{}
 		failure = remoteNotifiedDecodeError()
@@ -613,7 +700,20 @@ func remoteNotifiedDecodeError() *eebusraw.ErrorV1 {
 	)
 }
 
-func remoteNotifiedValue(data any) (eebusraw.TypedValueV1, error) {
+var errRemoteNotifiedEncode = errors.New("notified raw feature data could not be encoded")
+
+// remoteNotifiedValue encodes a stable copy of one function's current data. A failure while
+// copying or encoding is returned as an error so the SPINE event handler keeps running.
+func remoteNotifiedValue(
+	feature spineapi.FeatureRemoteInterface,
+	function spinemodel.FunctionType,
+) (value eebusraw.TypedValueV1, err error) {
+	defer func() {
+		if recover() != nil {
+			value, err = eebusraw.TypedValueV1{}, errRemoteNotifiedEncode
+		}
+	}()
+	data := remoteNotifiedSnapshot(feature, function)
 	if isNilRawRuntimeValue(data) {
 		return eebusraw.TypedValueV1{}, errRawTypedEmpty
 	}
@@ -622,6 +722,41 @@ func remoteNotifiedValue(data any) (eebusraw.TypedValueV1, error) {
 		return eebusraw.TypedValueV1{}, err
 	}
 	return eebusraw.DecodeTypedValueV1(encoded)
+}
+
+// remoteNotifiedSnapshot returns one function's current data in memory no later notify writes.
+// The feature's data copy shares its item list with the stored data, and a partial notify rewrites
+// stored items in place. For a list function the items are therefore copied by a merge that is not
+// persisted: spine-go builds it into a new list, ordered by item key, while it holds the function's
+// lock. Any other function is only ever replaced whole, so its data copy is already stable.
+func remoteNotifiedSnapshot(feature spineapi.FeatureRemoteInterface, function spinemodel.FunctionType) any {
+	data := feature.DataCopy(function)
+	if isNilRawRuntimeValue(data) {
+		return nil
+	}
+	if _, list := data.(spinemodel.Updater); !list {
+		return data
+	}
+	copied := reflect.ValueOf(data)
+	if copied.Kind() != reflect.Pointer || copied.Elem().Kind() != reflect.Struct {
+		return nil
+	}
+	merged, failure := feature.UpdateData(false, function, reflect.New(copied.Type().Elem()).Interface(), nil, nil)
+	if failure != nil || merged == nil {
+		return nil
+	}
+	items := reflect.ValueOf(merged)
+	if items.Kind() != reflect.Slice {
+		return nil
+	}
+	document := copied.Elem()
+	for index := 0; index < document.NumField(); index++ {
+		if field := document.Field(index); field.Type() == items.Type() && field.CanSet() {
+			field.Set(items)
+			return data
+		}
+	}
+	return nil
 }
 
 func (bridge *rawFeatureRuntimeBridge) featureNotifiedDataGet(
