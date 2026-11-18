@@ -64,6 +64,7 @@ func (handler *runtimeServiceHandler) waitForSPINEEvents() {
 }
 
 func (handler *runtimeServiceHandler) HandleEvent(payload spineapi.EventPayload) {
+	handler.routeRemoteNotify(payload)
 	if !runtimeTopologyEvent(payload) {
 		return
 	}

@@ -119,7 +119,7 @@
       "path": "internal/eebusfacade/raw_feature_runtime.go",
       "symbol": "<file>",
       "metric": "file_lines",
-      "value": 1479
+      "value": 1473
     },
     {
       "path": "internal/eebusmutation/coordinator.go",
