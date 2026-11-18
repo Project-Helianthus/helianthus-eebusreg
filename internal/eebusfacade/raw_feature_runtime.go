@@ -260,6 +260,7 @@ type rawFeatureRuntimeBridge struct {
 	inventory           map[string]eebusraw.FeaturesGetDataV1
 	mutationLabProfiles []eebusmutation.LabProfile
 	nextDispatch        uint64
+	remoteSubscriptions remoteSubscriptionState
 }
 
 var _ executor.ExactRemoteRuntime = (*rawFeatureRuntimeBridge)(nil)
@@ -324,6 +325,7 @@ func (bridge *rawFeatureRuntimeBridge) admitRemote(
 		return err
 	}
 
+	defer bridge.runRemoteSubscriptionActions()
 	bridge.mu.Lock()
 	defer bridge.mu.Unlock()
 	pending := bridge.pendingGeneration[lease.ski]
@@ -401,6 +403,7 @@ func (bridge *rawFeatureRuntimeBridge) refreshRemote(
 	if err != nil {
 		return err
 	}
+	defer bridge.runRemoteSubscriptionActions()
 	bridge.mu.Lock()
 	defer bridge.mu.Unlock()
 	lease := bridge.leasesBySKI[refreshed.ski]
@@ -505,6 +508,7 @@ func (bridge *rawFeatureRuntimeBridge) retireLeaseLocked(
 	for _, cancel := range lease.inFlight {
 		cancel()
 	}
+	bridge.dropRemoteSubscriptionsLocked(lease)
 	if !cacheInventory {
 		bridge.removeRemoteInventoryLocked(lease.ski)
 		return
@@ -926,24 +930,14 @@ func (bridge *rawFeatureRuntimeBridge) currentRuntimeEpoch() uint64 {
 
 func (bridge *rawFeatureRuntimeBridge) captureRemoteInventoryLocked(lease *rawRemoteLease) {
 	bridge.removeRemoteInventoryLocked(lease.ski)
-	for _, entity := range lease.remote.Entities() {
-		if isNilRawRuntimeValue(entity) {
-			continue
-		}
-		for _, feature := range entity.Features() {
-			if isNilRawRuntimeValue(feature) || feature.Address() == nil {
-				continue
-			}
-			current := lease.remote.FeatureByAddress(feature.Address())
-			if isNilRawRuntimeValue(current) {
-				continue
-			}
-			data, err := bridge.inventoryForFeatureLocked(lease, current)
-			if err == nil {
-				bridge.inventory[rawFeatureLocatorKey(data.Feature)] = data
-			}
+	features := rawLeaseFeatures(lease)
+	for _, feature := range features {
+		data, err := bridge.inventoryForFeatureLocked(lease, feature)
+		if err == nil {
+			bridge.inventory[rawFeatureLocatorKey(data.Feature)] = data
 		}
 	}
+	bridge.planRemoteSubscriptionsLocked(lease, features)
 }
 
 func (bridge *rawFeatureRuntimeBridge) removeRemoteInventoryLocked(ski string) {
