@@ -102,6 +102,34 @@ func TestInverterMonitoringStringServed(t *testing.T) {
 	}
 }
 
+func TestInverterMonitoringStringFieldExclusion(t *testing.T) {
+	// Exclusion fields are the cited measurements and the missing element.
+	// cited measurements: power, current and voltage are all listed. The gate still applies the exclusion.
+	// missing element: the excluded measurement is not admitted. The gate names it and attaches neither server feature.
+	for _, excluded := range []string{"string dc power", "string dc current", "string dc voltage"} {
+		t.Run(excluded, func(t *testing.T) {
+			result := monitoringString("span")
+			result.Elements = []string{"string dc power", "string dc current", "string dc voltage"}
+			result.MissingElements = []string{excluded}
+			outcome := monitorInverterLens(result)
+			if monitoringListed(outcome.Announced, "Monitoring of PV String") || !monitoringListed(outcome.Loss, excluded) {
+				t.Fatalf("announced %v loss %v", outcome.Announced, outcome.Loss)
+			}
+			binding := newOutputBinding(t)
+			if len(binding.Apply(outputBindingInverter("north"))) != 0 {
+				t.Fatal("inverter")
+			}
+			if !monitoringListed(binding.Apply(result), excluded) {
+				t.Fatal("apply loss")
+			}
+			features := binding.ServerFeatures("span")
+			if outputBindingHasType(features, "measurement") || outputBindingHasType(features, "electrical connection") {
+				t.Fatalf("features %v", features)
+			}
+		})
+	}
+}
+
 func TestInverterMonitoringFeatureReject(t *testing.T) {
 	// A cited string whose server feature cannot be attached is not applied.
 	// The production gate returns the existing-node loss and leaves that feature off.

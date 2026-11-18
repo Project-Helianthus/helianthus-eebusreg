@@ -87,9 +87,10 @@ func monitorStringLens(result LensResult) monitoringOutcome {
 	if !result.ContainsCited || result.ParentResourceID == "" {
 		return monitoringOutcome{Loss: []string{"string resource"}}
 	}
+	admitted := monitoringAdmittedElements(result)
 	var loss []string
 	for _, element := range []string{"string dc power", "string dc current", "string dc voltage"} {
-		if !monitoringHas(result.Elements, element) {
+		if !monitoringHas(admitted, element) {
 			loss = append(loss, element)
 		}
 	}
@@ -148,6 +149,17 @@ func monitoringBoundNode(node shipNode) shipNode {
 		return node
 	}
 	return node
+}
+
+// monitoringAdmittedElements keeps elements the lens lists and drops an element the same result also names as missing.
+func monitoringAdmittedElements(result LensResult) []string {
+	admitted := make([]string, 0, len(result.Elements))
+	for _, element := range result.Elements {
+		if !monitoringHas(result.MissingElements, element) {
+			admitted = append(admitted, element)
+		}
+	}
+	return admitted
 }
 
 func monitoringHas(values []string, want string) bool {
