@@ -119,8 +119,8 @@ func TestIssue77DependencyClosureDoesNotReachSemanticOrEBusRegistries(t *testing
 	for _, forbidden := range []string{
 		"Project-Helianthus/helianthus-ebusreg",
 		"Project-Helianthus/helianthus-modbusreg",
-		"Project-Helianthus/helianthus-ebusgateway/registry",
-		"Project-Helianthus/helianthus-ebusgateway/semantic",
+		"Project-Helianthus/helianthus-gateway/registry",
+		"Project-Helianthus/helianthus-gateway/semantic",
 	} {
 		if strings.Contains(string(output), forbidden) {
 			t.Errorf("raw eeBUS dependency closure reached forbidden registry %q", forbidden)
