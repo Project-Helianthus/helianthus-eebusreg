@@ -3,6 +3,7 @@ on:
   pull_request:
   push:
 permissions:
+  actions: read
   contents: read
 jobs:
   size-ratchet:
@@ -14,7 +15,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Read additive routing result
+        id: route
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/preflight/routing.py read-result --head "${{ github.event.pull_request.head.sha }}" --base "${{ github.event.pull_request.base.sha }}"
       - name: Test size ratchet
+        if: github.event_name != 'pull_request' || steps.route.outputs.suppress != 'true'
         run: python3 -m unittest discover -s scripts/tests -p test_size_ratchet.py -v
       - name: Check measured debt
+        if: github.event_name != 'pull_request' || steps.route.outputs.suppress != 'true'
         run: python3 scripts/check_size_ratchet.py

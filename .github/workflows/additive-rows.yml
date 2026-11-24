@@ -1,0 +1,59 @@
+name: Additive rows
+
+on:
+  pull_request:
+
+jobs:
+  additive-rows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Select manifest and route
+        id: route
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/preflight/routing.py prepare --result "$RUNNER_TEMP/routing-result.json" --tool "$RUNNER_TEMP/docs-semantic" --donor "$RUNNER_TEMP/donor"
+      - name: Upload additive routing result
+        uses: actions/upload-artifact@v4
+        with:
+          name: additive-routing-result
+          path: ${{ runner.temp }}/routing-result.json
+          if-no-files-found: error
+      - name: Selected manifest failed validation
+        if: steps.route.outputs.fail == 'true'
+        run: exit 1
+      - name: Package tests
+        if: steps.route.outputs.run_package_tests == 'true' && steps.route.outputs.packages != ''
+        run: GOWORK=off GOTOOLCHAIN=local go test -race -count=1 ${{ steps.route.outputs.packages }}
+      - name: Row comparison
+        if: steps.route.outputs.run_compare == 'true'
+        run: python3 "${{ steps.route.outputs.tool }}/acceptance/tools/manifest/main.py" compare --manifest "${{ steps.route.outputs.manifest }}" --destination "${{ github.workspace }}"
+      - name: Install pinned golangci-lint
+        if: steps.route.outputs.run_preflight == 'true'
+        run: |
+          GOBIN="$RUNNER_TEMP/golangci-bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
+          echo "$RUNNER_TEMP/golangci-bin" >> "$GITHUB_PATH"
+      - name: Preflight
+        if: steps.route.outputs.run_preflight == 'true'
+        run: python3 scripts/preflight/preflight.py --manifest "${{ steps.route.outputs.manifest }}" --donor "${{ steps.route.outputs.donor }}"
+      - name: Size ratchet
+        if: steps.route.outputs.run_preflight == 'true'
+        run: python3 scripts/check_size_ratchet.py
+      - name: Behavior names
+        if: steps.route.outputs.run_preflight == 'true'
+        run: python3 scripts/check_behavior_names.py --check
+      - name: Lint baseline
+        if: steps.route.outputs.run_preflight == 'true'
+        run: python3 scripts/check_go_lint_baseline.py --check
+      - name: Export boundary
+        if: steps.route.outputs.run_preflight == 'true'
+        run: GOWORK=off GOTOOLCHAIN=local go run ./internal/apiboundary
+      - name: Export inventory verifier
+        if: steps.route.outputs.run_preflight == 'true'
+        run: GOWORK=off GOTOOLCHAIN=local go test -count=1 ./internal/apiboundary -run '^TestExportInventoryDrift$'

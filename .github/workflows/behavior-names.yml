@@ -3,6 +3,10 @@ on:
   pull_request:
   push:
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   behavior-names:
     runs-on: ubuntu-latest
@@ -11,5 +15,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: python3 -m unittest discover -s scripts/tests -p test_behavior_name_gate.py -v
-      - run: python3 scripts/check_behavior_names.py --check
+      - name: Read additive routing result
+        id: route
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/preflight/routing.py read-result --head "${{ github.event.pull_request.head.sha }}" --base "${{ github.event.pull_request.base.sha }}"
+      - if: github.event_name != 'pull_request' || steps.route.outputs.suppress != 'true'
+        run: python3 -m unittest discover -s scripts/tests -p test_behavior_name_gate.py -v
+      - if: github.event_name != 'pull_request' || steps.route.outputs.suppress != 'true'
+        run: python3 scripts/check_behavior_names.py --check

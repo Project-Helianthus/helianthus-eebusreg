@@ -23,7 +23,27 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - run: HELIANTHUS_EEBUSREG_MAX_GO_VERSION=1.22 GOTOOLCHAIN=local ./scripts/ci_local.sh
+      - name: Read additive routing result
+        id: route
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/preflight/routing.py read-result --head "${{ github.event.pull_request.head.sha }}" --base "${{ github.event.pull_request.base.sha }}" --write "$RUNNER_TEMP/routing-result.json"
+      - if: github.event_name != 'pull_request' || steps.route.outputs.suppress != 'true'
+        run: HELIANTHUS_EEBUSREG_MAX_GO_VERSION=1.22 GOTOOLCHAIN=local ./scripts/ci_local.sh
+      - name: Checkout docs-semantic tool
+        if: github.event_name != 'pull_request' || steps.route.outputs.suppress != 'true'
+        run: python3 scripts/preflight/routing.py checkout-tool --dest "$RUNNER_TEMP/docs-semantic" --result "$RUNNER_TEMP/routing-result.json" --head "${{ github.event.pull_request.head.sha }}" --base "${{ github.event.pull_request.base.sha }}"
+      - name: Install pinned golangci-lint
+        if: github.event_name != 'pull_request' || steps.route.outputs.suppress != 'true'
+        run: |
+          GOBIN="$RUNNER_TEMP/golangci-bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
+          echo "$RUNNER_TEMP/golangci-bin" >> "$GITHUB_PATH"
+      - name: Preflight self-test
+        if: github.event_name != 'pull_request' || steps.route.outputs.suppress != 'true'
+        env:
+          DOCS_SEMANTIC_CHECKOUT: ${{ runner.temp }}/docs-semantic
+        run: python3 -m unittest discover -s scripts/preflight -p 'test_*.py'
       - name: Generate API boundary manifest
         run: GOWORK=off GOTOOLCHAIN=local go run ./internal/apiboundary -manifest "$RUNNER_TEMP/helianthus-eebusreg-api-boundary.json"
       - name: Upload API boundary manifest
@@ -42,7 +62,14 @@ jobs:
         with:
           clean: true
           persist-credentials: false
+      - name: Read additive routing result
+        id: route
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/preflight/routing.py read-result --head "${{ github.event.pull_request.head.sha }}" --base "${{ github.event.pull_request.base.sha }}"
       - name: Run toolchain proof in build container
+        if: github.event_name != 'pull_request' || steps.route.outputs.suppress != 'true'
         run: |
           set -euo pipefail
           docker run --rm \
