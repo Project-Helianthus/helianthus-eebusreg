@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -43,24 +44,124 @@ MEAS = {
 }
 EXEMPLAR_PATH = "driver/examples/peer/measurement_rows.go"
 ORIGINALS = {}
+SCRATCH = None
+ORIGINAL_DRIVER = None
+INITIAL_DEBRIS = ()
+SUITE_OWNS_DRIVER = False
+DOC_EXTENSIONS = {
+    ".adoc", ".asciidoc", ".markdown", ".md", ".mdown", ".mkd", ".rst", ".txt",
+}
+DOC_NAMES = {
+    "api", "architecture", "changelog", "contributing", "design", "governance",
+    "protocol", "readme", "roadmap", "security", "support",
+}
+
+
+def inside_checkout(path):
+    candidate = Path(path).resolve()
+    try:
+        candidate.relative_to(REPO.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def boundary_documentation(path):
+    base = path.name.lower()
+    extension = Path(base).suffix.lower()
+    if extension in DOC_EXTENSIONS:
+        return True
+    return extension == "" and base in DOC_NAMES
+
+
+def checkout_debris():
+    root = REPO / ".tmp"
+    if not root.exists():
+        return []
+    found = []
+    for path in root.rglob("*"):
+        if path.is_file() and (path.suffix == ".go" or boundary_documentation(path)):
+            found.append(path.relative_to(REPO).as_posix())
+    return sorted(found)
+
+
+def remove_tree(path):
+    def onerror(function, target, _exc_info):
+        os.chmod(target, 0o700)
+        function(target)
+
+    shutil.rmtree(path, onerror=onerror)
+
+
+def scratch_dir(*parts):
+    if SCRATCH is None:
+        raise AssertionError("suite scratch is not ready")
+    path = SCRATCH.joinpath(*parts)
+    if inside_checkout(path):
+        raise AssertionError("scratch path is inside the checkout: " + str(path))
+    return path
+
+
+def fresh_dir(*parts):
+    path = scratch_dir(*parts)
+    if path.exists():
+        shutil.move(
+            str(path),
+            str(path.parent / (path.name + "-old-" + str(len(list(path.parent.iterdir()))))),
+        )
+    path.mkdir(parents=True)
+    return path
 
 
 def setUpModule():
-    scratch = REPO / ".tmp"
-    scratch.mkdir(parents=True, exist_ok=True)
-    (scratch / "gocache").mkdir(exist_ok=True)
-    (scratch / "lint").mkdir(exist_ok=True)
-    os.environ["TMPDIR"] = str(scratch)
-    os.environ["GOCACHE"] = str(scratch / "gocache")
-    os.environ["GOLANGCI_LINT_CACHE"] = str(scratch / "lint")
+    global SCRATCH, ORIGINAL_DRIVER, INITIAL_DEBRIS, SUITE_OWNS_DRIVER
+    # Tool caches write README and trim.txt. Those names fail the API boundary
+    # walk when they sit anywhere under the checkout, including .tmp.
+    INITIAL_DEBRIS = tuple(checkout_debris())
+    SCRATCH = Path(tempfile.mkdtemp(prefix="eebusreg-preflight-"))
+    (SCRATCH / "gocache").mkdir()
+    (SCRATCH / "lint").mkdir()
+    os.environ["TMPDIR"] = str(SCRATCH)
+    os.environ["GOCACHE"] = str(SCRATCH / "gocache")
+    os.environ["GOLANGCI_LINT_CACHE"] = str(SCRATCH / "lint")
     os.environ["GOWORK"] = "off"
     os.environ["GOFLAGS"] = "-mod=mod"
     os.environ["GOTOOLCHAIN"] = "local"
     os.environ["GOPROXY"] = "off"
     os.environ["GOSUMDB"] = "off"
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+    driver = REPO / "driver"
+    if driver.exists():
+        ORIGINAL_DRIVER = scratch_dir("original-driver")
+        shutil.move(str(driver), str(ORIGINAL_DRIVER))
+    SUITE_OWNS_DRIVER = True
     for name in BASELINES:
         ORIGINALS[name] = (REPO / name).read_bytes()
+
+
+def tearDownModule():
+    global ORIGINAL_DRIVER
+    if SUITE_OWNS_DRIVER:
+        leftover = REPO / "driver"
+        if ORIGINAL_DRIVER is not None:
+            if leftover.exists():
+                remove_tree(leftover)
+            if ORIGINAL_DRIVER.exists():
+                shutil.move(str(ORIGINAL_DRIVER), str(leftover))
+            ORIGINAL_DRIVER = None
+        elif leftover.exists():
+            remove_tree(leftover)
+    created = [item for item in checkout_debris() if item not in INITIAL_DEBRIS]
+    for relative in created:
+        path = REPO / relative
+        if path.is_file():
+            path.unlink()
+    if SCRATCH is not None and SCRATCH.exists():
+        remove_tree(SCRATCH)
+    if created:
+        raise AssertionError(
+            "checkout scratch left documentation or Go files: " + ", ".join(created)
+        )
 
 
 def tool_root():
@@ -107,7 +208,7 @@ def move_driver():
     path = REPO / "driver"
     if not path.exists():
         return
-    sink = REPO / ".tmp" / "preflight-created"
+    sink = scratch_dir("preflight-created")
     sink.mkdir(parents=True, exist_ok=True)
     shutil.move(str(path), str(sink / ("driver-" + str(len(list(sink.iterdir()))))))
 
@@ -191,6 +292,45 @@ def pull(number, head_ref, head_repo, base_ref, base_repo):
         "head": {"ref": head_ref, "repo": None if head_repo is None else {"id": head_repo}},
         "base": {"ref": base_ref, "repo": None if base_repo is None else {"id": base_repo}},
     }
+
+
+class ScratchLocationTest(unittest.TestCase):
+    def test_build_cache_documentation_stays_outside_the_checkout(self):
+        for name in ("TMPDIR", "GOCACHE", "GOLANGCI_LINT_CACHE"):
+            self.assertFalse(inside_checkout(os.environ[name]), name)
+        before = set(checkout_debris())
+        source = scratch_dir("cacheprobe.go")
+        source.write_text("package main\nfunc main() {}\n", encoding="utf-8")
+        binary = scratch_dir("cacheprobe")
+        completed = subprocess.run(
+            ["go", "build", "-o", str(binary), source.name],
+            cwd=str(SCRATCH),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, detail(completed))
+        cache = Path(os.environ["GOCACHE"])
+        self.assertTrue((cache / "README").is_file())
+        self.assertTrue((cache / "trim.txt").is_file())
+        self.assertFalse(inside_checkout(cache / "README"))
+        self.assertFalse(inside_checkout(cache / "trim.txt"))
+        watched = (
+            ".tmp/gocache/README",
+            ".tmp/gocache/trim.txt",
+            ".tmp/lint/README",
+            ".tmp/lint/trim.txt",
+            ".tmp/github-output-read.txt",
+            ".tmp/recorded-tool/other-tool/marker.txt",
+            ".tmp/recorded-tool/source/marker.txt",
+            ".tmp/recorded-tool/tool/marker.txt",
+        )
+        appeared = [
+            relative for relative in watched
+            if relative not in before and (REPO / relative).exists()
+        ]
+        self.assertEqual(appeared, [])
+        self.assertEqual([item for item in checkout_debris() if item not in before], [])
 
 
 class RoutingTest(BaselineCase):
@@ -340,7 +480,7 @@ class RoutingTest(BaselineCase):
         env = os.environ.copy()
         env.pop("GITHUB_TOKEN", None)
         env["GITHUB_REPOSITORY"] = "Project-Helianthus/helianthus-eebusreg"
-        output = REPO / ".tmp" / "github-output-read.txt"
+        output = scratch_dir("github-output-read.txt")
         env["GITHUB_OUTPUT"] = str(output)
         completed = subprocess.run(
             [
@@ -360,10 +500,7 @@ class RoutingTest(BaselineCase):
         self.assertIn("suppress=false", output.read_text(encoding="utf-8"))
 
     def test_recorded_tool_sha_is_the_checkout_and_a_mismatch_is_not(self):
-        work = REPO / ".tmp" / "recorded-tool"
-        if work.exists():
-            shutil.move(str(work), str(work.parent / ("recorded-tool-old-" + str(len(list(work.parent.iterdir()))))))
-        work.mkdir(parents=True)
+        work = fresh_dir("recorded-tool")
         source = work / "source"
         source.mkdir()
         git(source, "init", "-b", "main")
@@ -709,10 +846,7 @@ class ClosureTest(BaselineCase):
     @classmethod
     def setUpClass(cls):
         source = tool_root()
-        root = REPO / ".tmp" / "preflight-fixture" / "donor"
-        if root.exists():
-            shutil.move(str(root.parent), str(root.parent.parent / ("preflight-fixture-old-" + str(len(list(root.parent.parent.iterdir()))))))
-        root.mkdir(parents=True)
+        root = fresh_dir("preflight-fixture", "donor")
         cls.fixture = ToolFixture(root, source)
         peer = cls.fixture.base(
             "peer-batch",
@@ -933,9 +1067,7 @@ class ClosureTest(BaselineCase):
 class ShallowTest(BaselineCase):
     def test_exemplar_in_another_repository_needs_the_fetch(self):
         source = tool_root()
-        work = REPO / ".tmp" / "shallow-exemplar"
-        if work.exists():
-            shutil.move(str(work), str(work.parent / ("shallow-exemplar-old-" + str(len(list(work.parent.iterdir()))))))
+        work = fresh_dir("shallow-exemplar")
         donor = work / "donor"
         donor.mkdir(parents=True)
         closed = source / "acceptance" / "tools" / "manifest" / "testdata" / "donor" / "closed" / "moved.go"
@@ -1062,9 +1194,7 @@ class ShallowTest(BaselineCase):
 
     def test_reference_newer_than_the_tool_head_needs_the_fetch(self):
         source = tool_root()
-        work = REPO / ".tmp" / "shallow-reference"
-        if work.exists():
-            shutil.move(str(work), str(work.parent / ("shallow-reference-old-" + str(len(list(work.parent.iterdir()))))))
+        work = fresh_dir("shallow-reference")
         full = work / "full"
         full.mkdir(parents=True)
         tool = full / "acceptance" / "tools" / "manifest"
