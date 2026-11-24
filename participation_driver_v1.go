@@ -239,25 +239,22 @@ func (contribution ParticipationContributionV1) Validate() error {
 		if len(observation.Losses) > 256 {
 			return errors.New("participation loss limit exceeded")
 		}
-		unknownLoss := false
 		for _, loss := range observation.Losses {
 			if len(loss.NativePath) > 256 || !participationPathV1.MatchString(loss.NativePath) {
 				return errors.New("participation native loss path is invalid")
 			}
 			switch loss.Code {
-			case ParticipationLossCodeV1Omitted, ParticipationLossCodeV1Transformed:
-			case ParticipationLossCodeV1Unknown:
-				unknownLoss = true
+			case ParticipationLossCodeV1Omitted, ParticipationLossCodeV1Transformed, ParticipationLossCodeV1Unknown:
 			default:
 				return errors.New("participation loss code is invalid")
 			}
 		}
 		if observation.State == ParticipationStateV1Active {
-			if len(observation.Granted) == 0 || !isApplied || !applied.Enabled || contribution.ListenerState != ParticipationStateV1Active || !observation.PeerOnline || !observation.Trusted || observation.Compatibility != ParticipationCompatibilityV1Compatible || observation.Admission != ParticipationAdmissionV1Promoted || !observation.Negotiated {
+			if len(observation.Granted) == 0 || !isApplied || !applied.Enabled || contribution.ListenerState != ParticipationStateV1Active || !observation.PeerOnline || !observation.Trusted || observation.Compatibility != ParticipationCompatibilityV1Compatible || (observation.Admission != ParticipationAdmissionV1Promoted && observation.Admission != ParticipationAdmissionV1Qualified) || !observation.Negotiated {
 				return errors.New("participation active state lacks established operation")
 			}
-			if !nativePresent || observation.Provenance.Native.DataHash == "" || observation.Provenance.TransportVersion == nil || observation.Provenance.DataModelVersion == nil || observation.Losses == nil || unknownLoss {
-				return errors.New("participation active state lacks native provenance or explicit loss assessment")
+			if !nativePresent || observation.Provenance.Native.DataHash == "" || observation.Provenance.TransportVersion == nil || observation.Provenance.DataModelVersion == nil {
+				return errors.New("participation active state lacks native provenance")
 			}
 		}
 	}
@@ -266,9 +263,10 @@ func (contribution ParticipationContributionV1) Validate() error {
 
 // ValidateParticipationControlV1 reports whether bindingID is eligible for control: the
 // contribution is valid, the saved configuration is enabled and grants control on that binding,
-// its observation is active with a control grant, and every reported loss is control-safe. It is
-// a pure eligibility check, not authorization or dispatch; a saved removal, revocation or disable
-// therefore rejects control even while the older binding is still observed as active.
+// and its observation is active with a control grant. Projection loss, including a loss with
+// ControlSafe false, does not condition eligibility. It is a pure eligibility check, not
+// authorization or dispatch; a saved removal, revocation or disable therefore rejects control
+// even while the older binding is still observed as active.
 func ValidateParticipationControlV1(contribution ParticipationContributionV1, bindingID string) error {
 	if err := contribution.Validate(); err != nil {
 		return err
@@ -288,11 +286,6 @@ func ValidateParticipationControlV1(contribution ParticipationContributionV1, bi
 	}
 	for _, observation := range contribution.Bindings {
 		if observation.ID == bindingID && observation.State == ParticipationStateV1Active && slices.Contains(observation.Granted, ParticipationPermissionV1Control) {
-			for _, loss := range observation.Losses {
-				if !loss.ControlSafe {
-					return errors.New("participation control loss is not qualified")
-				}
-			}
 			return nil
 		}
 	}

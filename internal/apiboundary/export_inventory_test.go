@@ -4,6 +4,7 @@ import (
 	"flag"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"maps"
 	"os"
 	"path"
@@ -30,20 +31,6 @@ var updateExportInventories = flag.Bool(
 	"rewrite testdata/exports goldens from the exports the API boundary gate observes",
 )
 
-var exportInventoryPackages = map[string]string{
-	"evidence.txt":                        "eebusevidence",
-	"lifecycle_native_runtime_second.txt": ".",
-	"lifecycle_operator_admin_first.txt":  ".",
-	"lifecycle_runtime.txt":               ".",
-	"native_runtime_second.txt":           ".",
-	"operator_admin_runtime.txt":          ".",
-	"participation.txt":                   ".",
-	"participation_operator.txt":          ".",
-	"raw.txt":                             "eebusraw",
-	"raw_feature.txt":                     "eebusraw",
-	"raw_mutation.txt":                    "eebusraw",
-}
-
 func TestExportInventoryDrift(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -57,6 +44,9 @@ func TestExportInventoryDrift(t *testing.T) {
 	covered := make(map[string]map[manifestExport]struct{})
 	for _, name := range exportInventoryNames {
 		directory := exportInventoryPackages[name]
+		if isDriverDirectory(directory) {
+			continue
+		}
 		inventory, err := readExportInventory(name)
 		if err != nil {
 			t.Fatal(err)
@@ -79,6 +69,9 @@ func TestExportInventoryDrift(t *testing.T) {
 		if unlisted := exportDifference(exports, covered[directory]); len(unlisted) > 0 {
 			t.Errorf("%s exports are missing from every frozen inventory: %s", directory, strings.Join(unlisted, ", "))
 		}
+	}
+	for _, violation := range observeDriverDriftViolations(t, root) {
+		t.Error(violation)
 	}
 }
 
@@ -254,17 +247,6 @@ func observePublicPackageExports(t *testing.T, root, directory string) map[manif
 	return exports
 }
 
-func exportDifference(left, right map[manifestExport]struct{}) []string {
-	var difference []string
-	for exported := range left {
-		if _, ok := right[exported]; !ok {
-			difference = append(difference, exported.Kind+" "+exported.Name)
-		}
-	}
-	sort.Strings(difference)
-	return difference
-}
-
 func retainObservedExports(inventory, observed map[manifestExport]struct{}) map[manifestExport]struct{} {
 	retained := make(map[manifestExport]struct{}, len(inventory))
 	for exported := range inventory {
@@ -293,4 +275,44 @@ func writeExportInventory(t *testing.T, name string, inventory map[manifestExpor
 	if err := os.WriteFile(target, []byte(renderExportInventory(inventory)), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func observeDriverDriftViolations(t *testing.T, root string) []string {
+	t.Helper()
+	violations, err := driverInventoryDrift(observeDriverExports(t, root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return violations
+}
+
+func observeDriverExports(t *testing.T, root string) map[string]map[manifestExport]struct{} {
+	t.Helper()
+	observed := make(map[string]map[manifestExport]struct{})
+	err := filepath.WalkDir(filepath.Join(root, "driver"), func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		directory := filepath.ToSlash(rel)
+		if observed[directory] == nil {
+			observed[directory] = make(map[manifestExport]struct{})
+		}
+		collectExports(file, observed[directory])
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return observed
 }

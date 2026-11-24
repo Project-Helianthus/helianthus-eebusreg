@@ -11,14 +11,24 @@ credential, pairing material, private capture, or sibling checkout.
 
 ## Ownership Boundaries
 
-The three public package boundaries are:
+The public package boundaries are:
 
 - `eebusruntime` at the module root: runtime lifecycle, native snapshots,
   pairing observations, and the bounded operator-facing contract;
 - [`eebusraw`](./eebusraw): eeBUS-native identity, feature, value, failure, and
-  mutation data contracts; and
+  mutation data contracts;
 - [`eebusevidence`](./eebusevidence): evidence references and deterministic
-  evidence envelopes.
+  evidence envelopes; and
+- public `driver/` packages (a directory `driver` or below, named by its last
+  path segment): eeBUS drivers that implement the SemReg driver contract. A
+  `driver/` package may import `semreg/v1`, `semreg/v1/driver`,
+  `semreg/v1/roweval`, `semreg/v1/catalog`, `semreg/v1/operation` and
+  `semreg/v1/graph` (exact leaves, no broader `semreg/v1` prefix), its pinned
+  SHIP/SPINE stack, and `internal/eebusfacade` while no internal type appears in
+  an exported declaration. It imports no SemReg host or runtime package and no
+  gateway or consumer module. A driver instance comes only from its constructor,
+  so several instances run side by side with no process-global instance. Trust
+  changes only through SHIP pairing.
 
 The surrounding repositories keep separate responsibilities:
 
@@ -48,19 +58,22 @@ links can move and do not establish current release or qualification status.
 | Implemented | Public runtime v1 and native runtime v2 contracts, raw/evidence packages, bounded lifecycle handling, API-boundary gates, and deterministic native snapshot behavior are present. |
 | Published module | The newest tag at the inspected baseline is [`v0.1.35`](https://github.com/Project-Helianthus/helianthus-eebusreg/tree/v0.1.35). It predates the native runtime v2 development baseline, so a tag or downstream module pin must not be treated as current `main`. |
 | Offline-tested | Repository CI, API-surface gates, deterministic fixtures, fake peers, and replay-based interoperability checks exercise the code without a device. The clean-checkout commands below are the reproduction path. |
-| Candidate or unresolved | The [native runtime v2 documentation](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/api/_candidate/msp-138-native-runtime-exposure-v1.md) is explicitly a candidate. Exact current SHIP, SPINE, and use-case revisions remain unresolved in the public source ledger, so normative mapping and conformance claims remain open. |
-| Hardware-test-ready | No public record at this baseline establishes a complete exact-device procedure, integrated candidate, prerequisites, and acceptance evidence. The public G17/G19 design remains pending live validation. |
-| Physically verified | **Unknown.** Offline tests, a discovered peer, a successful build, or an implementation dependency do not establish device qualification or physical verification. |
+| Declared from the recorded revisions | Implemented use cases are declared from the SHIP, SPINE and use-case revisions that the [eeBUS normative source ledger](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/protocols/eebus-normative-source-ledger.md) records (SHIP 1.0.1 is the declared SHIP revision; SHIP 1.1.0, SHIP Pairing Service 1.0.0, SPINE 1.3.0 and the listed use-case families are recorded there). Downstream pages map from these declared revisions. This is not a certification or conformance claim. |
+| Candidate | The [native runtime v2 documentation](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/api/_candidate/msp-138-native-runtime-exposure-v1.md) is explicitly a candidate. |
+| Hardware-test-ready (recorded level) | No public record at this baseline establishes a complete exact-device procedure, integrated candidate, prerequisites, and acceptance evidence. The public G17/G19 design remains pending live validation. This level is recorded beside the declared support and conditions neither definition, implementation, mapping, publication nor promotion. |
+| Physically verified (recorded level) | **Unknown.** Offline tests, a discovered peer, a successful build, or an implementation dependency do not establish device qualification or physical verification. An on-device observation is recorded as this level and conditions neither definition, implementation, mapping, publication nor promotion. |
 
 Implemented, published, offline-tested, hardware-test-ready, and physically
-verified are independent states. None implies certification, conformance,
-packaging, installation, or exact-device support.
+verified are recorded levels, and the declared-revision row states the support
+that mapping uses. None of them implies certification, conformance, packaging,
+installation, or exact-device support; such a claim is made only by the
+operator.
 
 ## Public Source And Documentation Boundary
 
 Use these public documentation branch references (their contents can change):
 
-- [eeBUS normative source ledger](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/protocols/eebus-normative-source-ledger.md): exact current SHIP, SPINE, and use-case revisions are unresolved; dependency declarations are not normative-source evidence.
+- [eeBUS normative source ledger](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/protocols/eebus-normative-source-ledger.md): the SHIP, SPINE and use-case revisions recorded there declare the mappings; dependency declarations are not normative-source evidence.
 - [SHIP/SPINE overview and pending G17/G19 gates](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/protocols/ship-spine-overview.md): public derived architecture and the pending live boundary.
 - [stable eeBUS runtime v1 reference](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/api/eebusruntime-v1/reference.md): the published v1 API record.
 - [native runtime v2 candidate](https://github.com/Project-Helianthus/helianthus-docs-eebus/blob/main/api/_candidate/msp-138-native-runtime-exposure-v1.md): direction and publication boundary, explicitly not a stable normative record.
@@ -187,13 +200,15 @@ assumed to be one transaction: interrupted application is reconciled explicitly.
 | `configured` | Desired binding is saved; operation has not been established (including disabled or restart-pending configuration). |
 | `offline` | The bound participant is unavailable; saved identity, capability, permission and last evidence remain visible with age. |
 | `incompatible` | Native capability/version/direction compatibility is negatively established; control is unavailable. |
-| `active` | The observation references an enabled applied revision; listener/peer are available, peer is trusted, capabilities are compatible, selected state is promoted and native negotiation is established. Saved changes can remain pending or failed. |
+| `active` | The observation references an enabled applied revision; listener/peer are available, peer is trusted, capabilities are compatible, the selection is declared from the recorded revision and bound at runtime (admission `qualified` or `promoted`), and native negotiation is established. Saved changes can remain pending or failed. A projection loss is reported with its value and blocks neither active state nor control. |
 | `error` | Listener, persistence, authorization, negotiation or recovery failed; the safe failure category and control outcome are visible. |
 
 Compatibility is explicitly `unknown`, `compatible` or `incompatible`; admission
 is `unknown`, `candidate`, `qualified`, `promoted` or `unsupported`. The driver
 reports the producer's current admission for the observation revision's selection,
-rather than elevating a candidate because it was selected in the UI. False/unknown trust,
+rather than elevating a candidate because it was selected in the UI. `qualified` and
+`promoted` both mean the selection is declared from the recorded revision and bound at
+runtime; a hardware test is recorded beside either and never changes it. False/unknown trust,
 availability or negotiation never establishes active operation. Inspection uses
 current capture time plus retained native evidence; a partial read failure must
 preserve each valid field and mark affected observations unavailable/stale.
@@ -209,10 +224,12 @@ permission. Saved removal, revocation or disable therefore rejects control even
 while the older listener/binding can truthfully remain observed as active.
 `ValidateParticipationControlV1` is a pure eligibility check, not authorization
 or dispatch. The actual native control owner must also require authenticated
-operator authority, action-time confirmation for the exact target/direction/
-operation, current promotion and compatibility, a fresh non-expired observation,
-and its existing mutation/read-token/connection-generation preconditions. A
-stale snapshot or a saved control permission alone never suffices. Incoming
+operator authority, current promotion and compatibility, a fresh non-expired
+observation, saved control eligibility, and its existing mutation/read-token/
+connection-generation preconditions. It does not require action-time confirmation
+for the exact target/direction/operation of a paired production write such as the
+LPC limit; a write by an agent or a test on a real installation still needs the
+operator's word. A stale snapshot or a saved control permission alone never suffices. Incoming
 peer control is subject to the same explicit target policy. No new generic
 control endpoint or executable command is defined here. A retained control outcome
 is historical, not a current grant. Accepted control means peer acceptance only,
@@ -227,9 +244,10 @@ snapshots and the existing protected admin views retain full native detail under
 their own authorization/redaction boundary. A non-null `Losses` array is the
 producer's explicit semantic projection assessment: empty means assessed with no
 reported loss, while null means unassessed. Each loss has a native observation
-path and `omitted`, `transformed` or `unknown` code. Unassessed/unknown loss blocks
-active state; any known loss whose `ControlSafe` qualification is false blocks
-control eligibility. `ControlSafe` must come from the owning qualification,
+path and `omitted`, `transformed` or `unknown` code. An unassessed, unknown or
+absent loss report is kept with its value and blocks neither the active state nor
+control eligibility; a loss whose `ControlSafe` is false is reported and does not
+condition control eligibility. `ControlSafe` comes from the owning qualification,
 never a Portal checkbox. Version labels, references and fixture values are not
 normative specification or device compatibility evidence.
 
@@ -353,9 +371,11 @@ GOWORK=off GOTOOLCHAIN=local go test -race ./internal/eebusinteropsmoke -count=1
 
 Expected result: the package reports `ok`. This is an offline interoperability
 contract, not a normative eeBUS conformance or certification suite. No
-normative conformance command is declared at this baseline because the exact
-current source revisions remain unresolved. G17/G19 live evidence, device
-access, pairing, deployment, and writes are outside these commands.
+normative conformance command is declared here. A conformance command would need,
+beyond the revisions recorded in the source ledger, a conformance suite and its
+pass criteria for the declared use cases; mapping does not wait for one. G17/G19
+live evidence, device access, pairing, deployment, and writes are outside these
+commands.
 
 ## Contributing
 
