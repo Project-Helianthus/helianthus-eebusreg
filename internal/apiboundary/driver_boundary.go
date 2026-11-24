@@ -101,12 +101,16 @@ func driverSemanticInputSelectors(file *ast.File, directory string, declaration 
 	return selectors
 }
 
+// driverGlobalInstanceViolations reports package-level variables that hold a
+// process-global driver instance. A driver instance is a locally declared type
+// that a constructor (a function named New or new followed by an upper-case
+// letter) returns, or the result of a constructor imported from a non-standard
+// library package. Plain values such as pairing requests, selectors and errors
+// are not instances.
 func driverGlobalInstanceViolations(root string, fset *token.FileSet, inventory *packageInventory) []string {
 	instanceTypes := make(map[string]bool)
-	for name := range inventory.types {
-		instanceTypes[name] = true
-	}
 	constructors := make(map[string][]ast.Expr)
+	errorTypes := make(map[string]struct{})
 	for _, file := range inventory.files {
 		for _, declaration := range file.Decls {
 			function, ok := declaration.(*ast.FuncDecl)
@@ -114,17 +118,29 @@ func driverGlobalInstanceViolations(root string, fset *token.FileSet, inventory 
 				continue
 			}
 			if function.Recv != nil && len(function.Recv.List) > 0 && function.Name.Name == "Error" {
-				delete(instanceTypes, receiverName(function.Recv.List[0].Type))
+				errorTypes[receiverName(function.Recv.List[0].Type)] = struct{}{}
 			}
 			if function.Recv == nil && function.Type.Results != nil {
 				for _, result := range function.Type.Results.List {
 					constructors[function.Name.Name] = append(constructors[function.Name.Name], result.Type)
+					if !isDriverConstructorName(function.Name.Name) {
+						continue
+					}
+					if name := driverLocalTypeName(result.Type); name != "" {
+						if _, declared := inventory.types[name]; declared {
+							instanceTypes[name] = true
+						}
+					}
 				}
 			}
 		}
 	}
+	for name := range errorTypes {
+		delete(instanceTypes, name)
+	}
 	var violations []string
 	for _, file := range inventory.files {
+		imports := driverImportedPackages(file)
 		for _, declaration := range file.Decls {
 			gen, ok := declaration.(*ast.GenDecl)
 			if !ok || gen.Tok != token.VAR {
@@ -137,11 +153,11 @@ func driverGlobalInstanceViolations(root string, fset *token.FileSet, inventory 
 				}
 				instance := ""
 				if value.Type != nil {
-					instance = driverInstanceTypeName(value.Type, instanceTypes, constructors)
+					instance = driverInstanceTypeName(value.Type, instanceTypes, constructors, imports)
 				}
 				for _, expression := range value.Values {
 					if instance == "" {
-						instance = driverInstanceTypeName(expression, instanceTypes, constructors)
+						instance = driverInstanceTypeName(expression, instanceTypes, constructors, imports)
 					}
 				}
 				if instance == "" {
@@ -159,40 +175,113 @@ func driverGlobalInstanceViolations(root string, fset *token.FileSet, inventory 
 	return violations
 }
 
-func driverInstanceTypeName(expression ast.Expr, instanceTypes map[string]bool, constructors map[string][]ast.Expr) string {
+func isDriverConstructorName(name string) bool {
+	rest := ""
+	switch {
+	case strings.HasPrefix(name, "New"):
+		rest = strings.TrimPrefix(name, "New")
+	case strings.HasPrefix(name, "new"):
+		rest = strings.TrimPrefix(name, "new")
+	default:
+		return false
+	}
+	return rest == "" || (rest[0] >= 'A' && rest[0] <= 'Z')
+}
+
+func driverLocalTypeName(expression ast.Expr) string {
+	switch typed := expression.(type) {
+	case *ast.Ident:
+		return typed.Name
+	case *ast.StarExpr:
+		return driverLocalTypeName(typed.X)
+	case *ast.ParenExpr:
+		return driverLocalTypeName(typed.X)
+	}
+	return ""
+}
+
+// driverImportedPackages maps the file-local package name of every import to
+// its import path.
+func driverImportedPackages(file *ast.File) map[string]string {
+	imports := make(map[string]string)
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		name := filepath.Base(importPath)
+		if isMajorVersionSegment(name) {
+			name = filepath.Base(filepath.Dir(importPath))
+		}
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		imports[name] = importPath
+	}
+	return imports
+}
+
+func isMajorVersionSegment(segment string) bool {
+	if len(segment) < 2 || segment[0] != 'v' {
+		return false
+	}
+	for _, character := range segment[1:] {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func driverInstanceTypeName(expression ast.Expr, instanceTypes map[string]bool, constructors map[string][]ast.Expr, imports map[string]string) string {
 	switch typed := expression.(type) {
 	case *ast.Ident:
 		if instanceTypes[typed.Name] {
 			return typed.Name
 		}
 	case *ast.ParenExpr:
-		return driverInstanceTypeName(typed.X, instanceTypes, constructors)
+		return driverInstanceTypeName(typed.X, instanceTypes, constructors, imports)
 	case *ast.ArrayType:
 		// Slices and arrays held at package level are collections of instances.
-		return driverInstanceTypeName(typed.Elt, instanceTypes, constructors)
+		return driverInstanceTypeName(typed.Elt, instanceTypes, constructors, imports)
 	case *ast.MapType:
-		return driverInstanceTypeName(typed.Value, instanceTypes, constructors)
+		return driverInstanceTypeName(typed.Value, instanceTypes, constructors, imports)
 	case *ast.StarExpr:
-		return driverInstanceTypeName(typed.X, instanceTypes, constructors)
+		return driverInstanceTypeName(typed.X, instanceTypes, constructors, imports)
 	case *ast.UnaryExpr:
 		if typed.Op == token.AND {
-			return driverInstanceTypeName(typed.X, instanceTypes, constructors)
+			return driverInstanceTypeName(typed.X, instanceTypes, constructors, imports)
 		}
 	case *ast.CompositeLit:
-		return driverInstanceTypeName(typed.Type, instanceTypes, constructors)
+		return driverInstanceTypeName(typed.Type, instanceTypes, constructors, imports)
 	case *ast.CallExpr:
+		if selector, ok := typed.Fun.(*ast.SelectorExpr); ok {
+			// An imported constructor result is an instance of the imported
+			// package; the standard library is not a driver instance source.
+			if qualifier, ok := selector.X.(*ast.Ident); ok && isDriverConstructorName(selector.Sel.Name) && selector.Sel.Name != "New" && strings.HasPrefix(selector.Sel.Name, "New") {
+				if importPath, imported := imports[qualifier.Name]; imported && isNonStandardImport(importPath) {
+					return selector.Sel.Name
+				}
+			}
+			return ""
+		}
 		identifier, ok := typed.Fun.(*ast.Ident)
 		if !ok {
 			return ""
 		}
 		if (identifier.Name == "new" || identifier.Name == "make") && len(typed.Args) >= 1 {
-			return driverInstanceTypeName(typed.Args[0], instanceTypes, constructors)
+			return driverInstanceTypeName(typed.Args[0], instanceTypes, constructors, imports)
 		}
 		for _, result := range constructors[identifier.Name] {
-			if name := driverInstanceTypeName(result, instanceTypes, constructors); name != "" {
+			if name := driverInstanceTypeName(result, instanceTypes, constructors, imports); name != "" {
 				return name
 			}
 		}
 	}
 	return ""
+}
+
+func isNonStandardImport(importPath string) bool {
+	first, _, _ := strings.Cut(importPath, "/")
+	return strings.Contains(first, ".")
 }

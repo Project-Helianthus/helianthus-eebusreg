@@ -127,8 +127,8 @@ func TestDriverPackageStartOutputMaySignSemanticInputOnlyFromDriverContract(t *t
 }
 
 func TestDriverPackageRejectsPackageVariableInstance(t *testing.T) {
-	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nvar Default = &Sample{}\n"), "instance")
-	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nvar primary Sample\n"), "instance")
+	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nfunc NewSample() *Sample { return &Sample{} }\n\nvar Default = &Sample{}\n"), "instance")
+	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nfunc NewSample() *Sample { return &Sample{} }\n\nvar primary Sample\n"), "instance")
 	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nfunc NewSample() *Sample { return &Sample{} }\n\nvar Primary = NewSample()\n"), "instance")
 }
 
@@ -175,13 +175,25 @@ func initDriverGitRepository(t *testing.T, root string) {
 }
 
 func TestDriverPackageRejectsPackageCollectionOfInstances(t *testing.T) {
-	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nvar fleet []*Sample\n"), "instance")
-	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nvar fleet = []*Sample{{}}\n"), "instance")
-	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nvar fleet = make([]*Sample, 0)\n"), "instance")
-	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nvar byName map[string]*Sample\n"), "instance")
-	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nvar pair [2]Sample\n"), "instance")
+	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nfunc NewSample() *Sample { return &Sample{} }\n\nvar fleet []*Sample\n"), "instance")
+	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nfunc NewSample() *Sample { return &Sample{} }\n\nvar fleet = []*Sample{{}}\n"), "instance")
+	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nfunc NewSample() *Sample { return &Sample{} }\n\nvar fleet = make([]*Sample, 0)\n"), "instance")
+	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nfunc NewSample() *Sample { return &Sample{} }\n\nvar byName map[string]*Sample\n"), "instance")
+	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nfunc NewSample() *Sample { return &Sample{} }\n\nvar pair [2]Sample\n"), "instance")
 }
 
 func TestDriverPackageAcceptsExportedNonInstanceCollections(t *testing.T) {
 	requireDriverAccepted(t, driverSampleSource([]string{"errors"}, "var ErrAll = []error{errors.New(\"closed\")}\n\nvar Names []string\n"))
+}
+
+func TestDriverPackageAcceptsExportedPlainValueVariables(t *testing.T) {
+	requireDriverAccepted(t, driverSampleSource(nil, "type OpenPairingWindowRequestV1 struct{}\n\nvar Ready OpenPairingWindowRequestV1\n\nvar selectors []OpenPairingWindowRequestV1\n\nvar byName = map[string]OpenPairingWindowRequestV1{}\n"))
+	requireDriverAccepted(t, driverSampleSource(nil, "type PeerSelector struct{ Name string }\n\nvar Any = PeerSelector{}\n\nvar Many = [2]*PeerSelector{}\n"))
+	requireDriverAccepted(t, driverSampleSource([]string{"errors"}, "type Sample struct{}\n\nfunc NewSample() *Sample { return &Sample{} }\n\ntype closedError struct{}\n\nfunc (closedError) Error() string { return \"closed\" }\n\nfunc newClosed() closedError { return closedError{} }\n\nvar ErrClosed error = newClosed()\n\nvar ErrOther = errors.New(\"other\")\n"))
+}
+
+func TestDriverPackageRejectsPackageInstanceFromImportedConstructor(t *testing.T) {
+	requireDriverRejected(t, driverSampleSource([]string{"github.com/enbility/eebus-go/service"}, "var Primary = service.NewService(nil, nil, nil)\n"), "instance")
+	requireDriverRejected(t, driverSampleSource([]string{"github.com/enbility/eebus-go/service"}, "var fleet = []any{service.NewService(nil, nil, nil)}\n\nvar Second = service.NewService(nil, nil, nil)\n"), "Second")
+	requireDriverAccepted(t, driverSampleSource([]string{"bytes", "errors"}, "var Buffer = bytes.NewBuffer(nil)\n\nvar ErrX = errors.New(\"x\")\n"))
 }
