@@ -19,12 +19,12 @@ func gateScriptEnbilitySection(t *testing.T) string {
 	lines := strings.Split(string(data), "\n")
 	helperStart, blockStart, blockEnd := -1, -1, -1
 	for index, line := range lines {
-		switch {
-		case line == "git_grep_checked() {":
+		switch line {
+		case "git_grep_checked() {":
 			helperStart = index
-		case line == `echo "==> enbility import boundary"`:
+		case `echo "==> enbility import boundary"`:
 			blockStart = index
-		case line == `echo "==> public API AST boundary"`:
+		case `echo "==> public API AST boundary"`:
 			blockEnd = index
 		}
 	}
