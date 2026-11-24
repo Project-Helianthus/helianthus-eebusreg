@@ -173,3 +173,15 @@ func initDriverGitRepository(t *testing.T, root string) {
 		}
 	}
 }
+
+func TestDriverPackageRejectsPackageCollectionOfInstances(t *testing.T) {
+	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nvar fleet []*Sample\n"), "instance")
+	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nvar fleet = []*Sample{{}}\n"), "instance")
+	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nvar fleet = make([]*Sample, 0)\n"), "instance")
+	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nvar byName map[string]*Sample\n"), "instance")
+	requireDriverRejected(t, driverSampleSource(nil, "type Sample struct{}\n\nvar pair [2]Sample\n"), "instance")
+}
+
+func TestDriverPackageAcceptsExportedNonInstanceCollections(t *testing.T) {
+	requireDriverAccepted(t, driverSampleSource([]string{"errors"}, "var ErrAll = []error{errors.New(\"closed\")}\n\nvar Names []string\n"))
+}

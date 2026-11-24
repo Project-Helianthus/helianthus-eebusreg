@@ -165,6 +165,13 @@ func driverInstanceTypeName(expression ast.Expr, instanceTypes map[string]bool, 
 		if instanceTypes[typed.Name] {
 			return typed.Name
 		}
+	case *ast.ParenExpr:
+		return driverInstanceTypeName(typed.X, instanceTypes, constructors)
+	case *ast.ArrayType:
+		// Slices and arrays held at package level are collections of instances.
+		return driverInstanceTypeName(typed.Elt, instanceTypes, constructors)
+	case *ast.MapType:
+		return driverInstanceTypeName(typed.Value, instanceTypes, constructors)
 	case *ast.StarExpr:
 		return driverInstanceTypeName(typed.X, instanceTypes, constructors)
 	case *ast.UnaryExpr:
@@ -178,7 +185,7 @@ func driverInstanceTypeName(expression ast.Expr, instanceTypes map[string]bool, 
 		if !ok {
 			return ""
 		}
-		if identifier.Name == "new" && len(typed.Args) == 1 {
+		if (identifier.Name == "new" || identifier.Name == "make") && len(typed.Args) >= 1 {
 			return driverInstanceTypeName(typed.Args[0], instanceTypes, constructors)
 		}
 		for _, result := range constructors[identifier.Name] {
