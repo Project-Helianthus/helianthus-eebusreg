@@ -8,7 +8,14 @@ It also owns the eeBUS participation and device-binding contract consumed by
 Gateway. Universal semantics, consumer interpretation, Gateway policy and
 bindings for other output protocols remain with their respective owners.
 
-Public packages are limited to `eebusruntime`, `eebusraw`, and `eebusevidence`.
+Public packages are `eebusruntime`, `eebusraw`, and `eebusevidence`, and public
+`driver/` packages (a directory `driver` or below, named by its last path segment).
+A `driver/` package may import only the SemReg contract leaves `semreg/v1`,
+`semreg/v1/driver`, `semreg/v1/roweval`, `semreg/v1/catalog`,
+`semreg/v1/operation` and `semreg/v1/graph`, its pinned SHIP/SPINE stack, and
+`internal/eebusfacade` while no internal type appears in an exported declaration.
+It imports no SemReg host or runtime package. Trust changes only through SHIP
+pairing, and a driver instance comes only from its constructor.
 Keep SHIP/SPINE and vendor-specific types behind repository-local boundaries;
 do not export them into protocol-neutral layers. Preserve raw evidence and make
 candidate, qualified, promoted, unsupported, and unknown states explicit.

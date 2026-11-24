@@ -38,7 +38,8 @@ if [ -n "$replace_matches" ]; then
 fi
 
 echo "==> public package boundary"
-bad_packages="$(go list -f '{{.Name}} {{.ImportPath}}' ./... | awk '$2 !~ /\/internal(\/|$)/ && $1 !~ /^(eebusruntime|eebusraw|eebusevidence)$/ {print}')"
+module_path="$(go list -m)"
+bad_packages="$(go list -f '{{.Name}} {{.ImportPath}}' ./... | awk -v driver="$module_path/driver" '$2 !~ /\/internal(\/|$)/ && $1 !~ /^(eebusruntime|eebusraw|eebusevidence)$/ && $2 != driver && index($2, driver "/") != 1 {print}')"
 if [ -n "$bad_packages" ]; then
   echo "Unexpected public package names:"
   echo "$bad_packages"
@@ -46,8 +47,11 @@ if [ -n "$bad_packages" ]; then
 fi
 
 echo "==> enbility import boundary"
-if git_grep_checked -n 'github.com/enbility' -- '*.go' ':!internal/**'; then
-  echo "Direct enbility imports are allowed only under internal/."
+enbility_imports="$(git grep -n 'github.com/enbility' -- '*.go' ':!internal/**' || [ $? -eq 1 ])"
+enbility_rejected="$(printf '%s\n' "$enbility_imports" | grep -Ev '^driver/.*:[0-9]+:[[:space:]]*((import|_|\.|[A-Za-z][A-Za-z0-9_]*)[[:space:]]+)?"github\.com/enbility/(eebus-go|ship-go|spine-go)(/[^"]*)?"[[:space:]]*$' || [ $? -eq 1 ])"
+if [ -n "$enbility_rejected" ]; then
+  printf '%s\n' "$enbility_rejected"
+  echo "Direct enbility imports are allowed only under internal/, and the pinned eeBUS stack under driver/."
   exit 1
 fi
 

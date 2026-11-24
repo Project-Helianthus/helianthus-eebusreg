@@ -65,7 +65,6 @@ func TestParticipationContractNegativeCompatibilityAndAuthorization(t *testing.T
 		{"unknown native version", func(s *ParticipationContributionV1) { s.Bindings[0].Provenance.DataModelVersion = nil }},
 		{"missing evidence hash", func(s *ParticipationContributionV1) { s.Bindings[0].Provenance.Native.DataHash = "" }},
 		{"missing evidence", func(s *ParticipationContributionV1) { s.Bindings[0].Provenance.Native = nil }},
-		{"unknown loss", func(s *ParticipationContributionV1) { s.Bindings[0].Losses = nil }},
 		{"extra grant", func(s *ParticipationContributionV1) {
 			s.Configuration.Bindings[0].Permissions = []ParticipationPermissionV1{ParticipationPermissionV1Observe}
 		}},
@@ -90,6 +89,14 @@ func TestParticipationContractNegativeCompatibilityAndAuthorization(t *testing.T
 	if err := ValidateParticipationControlV1(s, s.Bindings[0].ID); err != nil {
 		t.Fatal(err)
 	}
+	s.Bindings[0].Losses = nil
+	if err := s.Validate(); err != nil {
+		t.Fatalf("active observation with unassessed losses was rejected: %v", err)
+	}
+	if err := ValidateParticipationControlV1(s, s.Bindings[0].ID); err != nil {
+		t.Fatalf("unassessed losses blocked control: %v", err)
+	}
+	s = participationFixture()
 	s.Configuration.Bindings[0].Permissions = []ParticipationPermissionV1{ParticipationPermissionV1Observe}
 	applied := participationCopyConfiguration(s.Configuration)
 	s.AppliedConfiguration = &applied
@@ -249,7 +256,7 @@ func TestParticipationContractRejectsMalformedConfigurationWithoutLeakingValues(
 }
 
 func TestParticipationContractLossAndAdmissionFailClosed(t *testing.T) {
-	for _, admission := range []ParticipationAdmissionV1{ParticipationAdmissionV1Unknown, ParticipationAdmissionV1Candidate, ParticipationAdmissionV1Qualified, ParticipationAdmissionV1Unsupported, "future"} {
+	for _, admission := range []ParticipationAdmissionV1{ParticipationAdmissionV1Unknown, ParticipationAdmissionV1Candidate, ParticipationAdmissionV1Unsupported, "future"} {
 		s := participationFixture()
 		s.Bindings[0].Admission = admission
 		if s.Validate() == nil {
@@ -257,6 +264,11 @@ func TestParticipationContractLossAndAdmissionFailClosed(t *testing.T) {
 		}
 	}
 	s := participationFixture()
+	s.Bindings[0].Admission = ParticipationAdmissionV1Qualified
+	if err := s.Validate(); err != nil {
+		t.Fatalf("active qualified admission was rejected: %v", err)
+	}
+	s = participationFixture()
 	s.Bindings[0].Compatibility = ParticipationCompatibilityV1Unknown
 	if s.Validate() == nil {
 		t.Fatal("unknown compatibility is active")
@@ -266,16 +278,16 @@ func TestParticipationContractLossAndAdmissionFailClosed(t *testing.T) {
 	if err := s.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if ValidateParticipationControlV1(s, s.Bindings[0].ID) == nil {
-		t.Fatal("unqualified projection loss permits control")
+	if err := ValidateParticipationControlV1(s, s.Bindings[0].ID); err != nil {
+		t.Fatalf("unqualified projection loss blocked control: %v", err)
 	}
 	s.Bindings[0].Losses[0].ControlSafe = true
 	if err := ValidateParticipationControlV1(s, s.Bindings[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	s.Bindings[0].Losses[0].Code = ParticipationLossCodeV1Unknown
-	if s.Validate() == nil {
-		t.Fatal("unknown loss permits active mapping")
+	if err := s.Validate(); err != nil {
+		t.Fatalf("unknown loss blocked active mapping: %v", err)
 	}
 }
 

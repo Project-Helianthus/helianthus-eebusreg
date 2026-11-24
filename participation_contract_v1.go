@@ -108,9 +108,10 @@ const (
 	// ParticipationCompatibilityV1Incompatible and is invalid as a listener state.
 	ParticipationStateV1Incompatible ParticipationStateV1 = "incompatible"
 	// ParticipationStateV1Active means operation is established: an enabled applied revision, an
-	// active listener, an online trusted peer, a compatible and promoted selection, native
-	// negotiation, at least one grant, a hashed native envelope with both versions, and an
-	// explicit loss assessment without unknown losses.
+	// active listener, an online trusted peer, a compatible selection that is declared from the
+	// recorded revision and bound at runtime (admission qualified or promoted), native negotiation,
+	// at least one grant and a hashed native envelope with both versions. A projection loss is
+	// reported with its value and blocks neither the active state nor control eligibility.
 	ParticipationStateV1Active ParticipationStateV1 = "active"
 	// ParticipationStateV1Error means a failure occurred; it is the only state whose Failure is
 	// not ParticipationFailureV1None.
@@ -177,8 +178,8 @@ type ParticipationContributionV1 struct {
 // saved-only binding cannot be negotiated, granted or active. Granted is the natively negotiated
 // subset of the binding's permissions, and Admission is the producer's current admission for the
 // selection, not the operator's choice. A non-nil Losses, at most 256 entries, is the producer's
-// explicit assessment and empty means no loss; nil means unassessed, which blocks the active
-// state. ParticipationStateV1 lists what each State requires.
+// explicit assessment and empty means no loss; nil means unassessed. Unassessed losses are
+// reported as such and do not block the active state. ParticipationStateV1 lists what each State requires.
 type ParticipationBindingObservationV1 struct {
 	ID                    string                        `json:"id"`
 	ConfigurationRevision uint64                        `json:"configuration_revision"`
@@ -208,8 +209,8 @@ type ParticipationProvenanceV1 struct {
 
 // ParticipationLossV1 is one projection loss the semantic producer reports for the native
 // observation at NativePath, a path of slash-led segments of letters, digits, _ or - of at most
-// 256 bytes. ControlSafe comes from the owning qualification; any loss with ControlSafe false
-// blocks control eligibility.
+// 256 bytes. ControlSafe comes from the owning qualification and is reported with the loss; it does not
+// condition control eligibility.
 type ParticipationLossV1 struct {
 	NativePath  string                  `json:"native_path"`
 	Code        ParticipationLossCodeV1 `json:"code"`
@@ -225,7 +226,8 @@ const (
 	// ParticipationLossCodeV1Transformed means the projection represents the native data in a
 	// changed form.
 	ParticipationLossCodeV1Transformed ParticipationLossCodeV1 = "transformed"
-	// ParticipationLossCodeV1Unknown means the loss is not classified; it blocks the active state.
+	// ParticipationLossCodeV1Unknown means the loss is not classified; it is reported and blocks
+	// neither the active state nor control eligibility.
 	ParticipationLossCodeV1Unknown ParticipationLossCodeV1 = "unknown"
 )
 
@@ -243,9 +245,10 @@ const (
 	ParticipationCompatibilityV1Incompatible ParticipationCompatibilityV1 = "incompatible"
 )
 
-// ParticipationAdmissionV1 is the semantic producer's admission of a binding's selection. Only
-// ParticipationAdmissionV1Promoted permits the active state; selecting a candidate does not
-// elevate it.
+// ParticipationAdmissionV1 is the semantic producer's admission of a binding's selection.
+// Qualified and promoted mean declared from the recorded revision and bound at runtime, and
+// permit the active state; candidate, unknown and unsupported do not. Selecting a candidate does
+// not elevate it.
 type ParticipationAdmissionV1 string
 
 const (
@@ -253,7 +256,8 @@ const (
 	ParticipationAdmissionV1Unknown ParticipationAdmissionV1 = "unknown"
 	// ParticipationAdmissionV1Candidate means the selection is a candidate, not yet qualified.
 	ParticipationAdmissionV1Candidate ParticipationAdmissionV1 = "candidate"
-	// ParticipationAdmissionV1Qualified means the selection is qualified but not promoted.
+	// ParticipationAdmissionV1Qualified means the selection is declared from the recorded revision and
+	// bound at runtime.
 	ParticipationAdmissionV1Qualified ParticipationAdmissionV1 = "qualified"
 	// ParticipationAdmissionV1Promoted means the producer promoted the selection.
 	ParticipationAdmissionV1Promoted ParticipationAdmissionV1 = "promoted"

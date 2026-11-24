@@ -14,6 +14,7 @@ import (
 	"go/token"
 	"go/types"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,7 +29,17 @@ const (
 	modulePath    = "github.com/Project-Helianthus/helianthus-eebusreg"
 )
 
-var publicPackages = []string{modulePath, modulePath + "/eebusraw", modulePath + "/eebusevidence"}
+const pinnedSpineModelPath = "github.com/Project-Helianthus/helianthus-spine-go/model"
+
+var driverDependencyApproval = map[string]struct{}{
+	pinnedSpineModelPath: {},
+	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1":           {},
+	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1/driver":    {},
+	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1/roweval":   {},
+	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1/catalog":   {},
+	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1/operation": {},
+	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1/graph":     {},
+}
 
 var stdlibApproval = map[string]struct{}{
 	"context": {}, "fmt": {}, "net/netip": {}, "time": {}, "unsafe": {},
@@ -36,6 +47,24 @@ var stdlibApproval = map[string]struct{}{
 
 var publicApproval = map[string]struct{}{
 	modulePath: {}, modulePath + "/eebusraw": {}, modulePath + "/eebusevidence": {},
+}
+
+func isDriverPackagePath(packagePath string) bool {
+	return packagePath == modulePath+"/driver" || strings.HasPrefix(packagePath, modulePath+"/driver/")
+}
+
+func approvedPublicDependency(from, packagePath string) bool {
+	if _, ok := publicApproval[packagePath]; ok {
+		return true
+	}
+	if !isDriverPackagePath(from) {
+		return false
+	}
+	if isDriverPackagePath(packagePath) {
+		return true
+	}
+	_, ok := driverDependencyApproval[packagePath]
+	return ok
 }
 
 type document struct {
@@ -119,9 +148,13 @@ func main() {
 func fail(err error) { fmt.Fprintln(os.Stderr, "apisurface:", err); os.Exit(1) }
 
 func extract(dir string) (document, error) {
+	publicPackages, err := publicPackagePaths(dir)
+	if err != nil {
+		return document{}, err
+	}
 	checked := make(map[string]*checkedPackage, len(publicPackages))
 	external := moduleImporter(dir)
-	for _, packagePath := range []string{modulePath + "/eebusraw", modulePath + "/eebusevidence", modulePath} {
+	for _, packagePath := range publicPackages {
 		pkg, err := checkPackage(dir, packagePath, checked, external)
 		if err != nil {
 			return document{}, err
@@ -537,7 +570,7 @@ func (x *extractor) addDependency(pkg *types.Package) error {
 		x.ensureDependencies()[p] = pkg
 		return nil
 	}
-	if _, ok := publicApproval[p]; ok {
+	if approvedPublicDependency(x.pkg.Path(), p) {
 		x.ensureDependencies()[p] = pkg
 		return nil
 	}
@@ -884,4 +917,49 @@ func symbolKey(s symbol) string {
 		base = s.Receiver.Base
 	}
 	return s.Kind + "\x00" + base + "\x00" + s.Name
+}
+
+func publicPackagePaths(dir string) ([]string, error) {
+	paths := []string{modulePath + "/eebusraw", modulePath + "/eebusevidence", modulePath}
+	drivers, err := driverPackagePaths(dir)
+	if err != nil {
+		return nil, err
+	}
+	return append(paths, drivers...), nil
+}
+
+func driverPackagePaths(dir string) ([]string, error) {
+	var paths []string
+	driverRoot := filepath.Join(dir, "driver")
+	err := filepath.WalkDir(driverRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		files, err := os.ReadDir(path)
+		if err != nil {
+			return err
+		}
+		for _, file := range files {
+			if !file.IsDir() && filepath.Ext(file.Name()) == ".go" && !strings.HasSuffix(file.Name(), "_test.go") {
+				rel, err := filepath.Rel(dir, path)
+				if err != nil {
+					return err
+				}
+				paths = append(paths, modulePath+"/"+filepath.ToSlash(rel))
+				break
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(paths)
+	return paths, nil
 }

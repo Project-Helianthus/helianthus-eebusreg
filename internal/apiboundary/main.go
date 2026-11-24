@@ -661,9 +661,9 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 		if !testFile {
 			checkBuildConstraints(fset, rel, file, &violations)
 		}
+		directory := filepath.ToSlash(filepath.Dir(rel))
 		if !internal && !testFile {
-			directory := filepath.ToSlash(filepath.Dir(rel))
-			allowedName, allowed := allowedPublicPackages[directory]
+			allowedName, allowed := publicPackageRegistration(directory)
 			if !allowed || file.Name.Name != allowedName {
 				violations = append(violations, fmt.Sprintf("%s: unexpected public package %s", rel, file.Name.Name))
 			} else {
@@ -687,23 +687,7 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 		}
 
 		internalAliases := internalImportAliases(file, modulePath)
-		for _, imp := range file.Imports {
-			importPath := strings.Trim(imp.Path.Value, `"`)
-			if !internal && isProtocolImplementationImport(importPath) {
-				violations = append(violations, at(fset, imp.Pos(), rel, "direct protocol implementation imports are allowed only under internal/"))
-			}
-			rootRuntimeImplementation := !internal && !testFile && filepath.ToSlash(filepath.Dir(rel)) == "." && file.Name.Name == "eebusruntime"
-			facadeImplementationImport := rootRuntimeImplementation && importPath == modulePath+"/internal/eebusfacade" &&
-				(imp.Name == nil || imp.Name.Name != ".")
-			if !internal && !testFile && strings.HasPrefix(importPath, modulePath+"/internal/") && !facadeImplementationImport {
-				violations = append(violations, at(fset, imp.Pos(), rel, "public API packages must not import internal implementation types"))
-			}
-			for _, forbidden := range forbiddenImports {
-				if strings.Contains(importPath, forbidden) {
-					violations = append(violations, at(fset, imp.Pos(), rel, "gateway or consumer imports are not allowed in this repo"))
-				}
-			}
-		}
+		checkImportBoundary(fset, rel, file, directory, internal, testFile, modulePath, &violations)
 		if internal {
 			return nil
 		}
@@ -716,7 +700,7 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 				if declaration.Name != nil {
 					checkExportedName(fset, rel, declaration.Name, &violations)
 					if declaration.Name.IsExported() {
-						checkExportedTypeSurface(fset, rel, declaration.Type, &violations)
+						checkExportedTypeSurface(fset, rel, declaration.Type, driverSemanticInputSelectors(file, directory, declaration), &violations)
 						checkInternalTypeEscape(fset, rel, declaration.Type, internalAliases, &violations)
 					}
 				}
@@ -726,7 +710,7 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 					case *ast.TypeSpec:
 						checkExportedName(fset, rel, typed.Name, &violations)
 						if typed.Name.IsExported() {
-							checkExportedTypeSurface(fset, rel, typed.Type, &violations)
+							checkExportedTypeSurface(fset, rel, typed.Type, nil, &violations)
 							checkInternalTypeEscape(fset, rel, typed.Type, internalAliases, &violations)
 						}
 					case *ast.ValueSpec:
@@ -745,6 +729,10 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 		return nil
 	})
 	if err != nil {
+		return apiManifest{}, nil, err
+	}
+
+	if err := appendDriverPackageViolations(root, modulePath, fset, packages, &violations); err != nil {
 		return apiManifest{}, nil, err
 	}
 
@@ -1595,11 +1583,13 @@ func checkExportedName(fset *token.FileSet, rel string, ident *ast.Ident, violat
 	}
 }
 
-func checkExportedTypeSurface(fset *token.FileSet, rel string, node ast.Node, violations *[]string) {
+func checkExportedTypeSurface(fset *token.FileSet, rel string, node ast.Node, exempt map[*ast.Ident]struct{}, violations *[]string) {
 	ast.Inspect(node, func(current ast.Node) bool {
 		ident, ok := current.(*ast.Ident)
 		if ok {
-			checkExportedName(fset, rel, ident, violations)
+			if _, skip := exempt[ident]; !skip {
+				checkExportedName(fset, rel, ident, violations)
+			}
 		}
 		return true
 	})

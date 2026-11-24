@@ -35,13 +35,13 @@
       "path": "internal/apiboundary/main.go",
       "symbol": "<file>",
       "metric": "file_lines",
-      "value": 1708
+      "value": 1698
     },
     {
       "path": "internal/apiboundary/main.go",
       "symbol": "inspectGoBoundary",
       "metric": "function_lines",
-      "value": 175
+      "value": 163
     },
     {
       "path": "internal/apiboundary/stable_contract_specs.go",
@@ -137,7 +137,7 @@
       "path": "participation_contract_v1_test.go",
       "symbol": "<file>",
       "metric": "functions_per_file",
-      "value": 64
+      "value": 63
     }
   ]
 }
