@@ -25,6 +25,28 @@ func isDriverDirectory(directory string) bool {
 	return directory == "driver" || strings.HasPrefix(directory, "driver/")
 }
 
+func publicPackageRegistration(directory string) (string, bool) {
+	if isDriverDirectory(directory) {
+		return filepath.Base(directory), true
+	}
+	name, allowed := allowedPublicPackages[directory]
+	return name, allowed
+}
+
+func appendDriverPackageViolations(root, modulePath string, fset *token.FileSet, packages map[string]*packageInventory, violations *[]string) error {
+	for importPath, inventory := range packages {
+		if directory := strings.TrimPrefix(importPath, modulePath+"/"); directory != importPath && isDriverDirectory(directory) {
+			*violations = append(*violations, driverGlobalInstanceViolations(root, fset, inventory)...)
+		}
+	}
+	drift, err := driverInventoryDrift(driverExportsByDirectory(modulePath, packages))
+	if err != nil {
+		return err
+	}
+	*violations = append(*violations, drift...)
+	return nil
+}
+
 func isSemregImport(importPath string) bool {
 	return importPath == semregModulePath || strings.HasPrefix(importPath, semregModulePath+"/")
 }

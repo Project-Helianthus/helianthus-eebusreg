@@ -663,10 +663,7 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 		}
 		directory := filepath.ToSlash(filepath.Dir(rel))
 		if !internal && !testFile {
-			allowedName, allowed := allowedPublicPackages[directory]
-			if isDriverDirectory(directory) {
-				allowedName, allowed = filepath.Base(directory), true
-			}
+			allowedName, allowed := publicPackageRegistration(directory)
 			if !allowed || file.Name.Name != allowedName {
 				violations = append(violations, fmt.Sprintf("%s: unexpected public package %s", rel, file.Name.Name))
 			} else {
@@ -690,28 +687,7 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 		}
 
 		internalAliases := internalImportAliases(file, modulePath)
-		for _, imp := range file.Imports {
-			importPath := strings.Trim(imp.Path.Value, `"`)
-			if !internal && !isDriverDirectory(directory) && isProtocolImplementationImport(importPath) {
-				violations = append(violations, at(fset, imp.Pos(), rel, "direct protocol implementation imports are allowed only under internal/"))
-			}
-			rootRuntimeImplementation := !internal && !testFile && filepath.ToSlash(filepath.Dir(rel)) == "." && file.Name.Name == "eebusruntime"
-			facadeImplementationImport := rootRuntimeImplementation && importPath == modulePath+"/internal/eebusfacade" &&
-				(imp.Name == nil || imp.Name.Name != ".")
-			driverFacadeImport := !internal && !testFile && isDriverDirectory(directory) && importPath == modulePath+"/internal/eebusfacade" &&
-				(imp.Name == nil || imp.Name.Name != ".")
-			if !internal && !testFile && strings.HasPrefix(importPath, modulePath+"/internal/") && !facadeImplementationImport && !driverFacadeImport {
-				violations = append(violations, at(fset, imp.Pos(), rel, "public API packages must not import internal implementation types"))
-			}
-			if !internal && isDriverDirectory(directory) && isSemregImport(importPath) && !driverSemregImportAdmitted(importPath) {
-				violations = append(violations, at(fset, imp.Pos(), rel, "driver packages may import only the exact SemReg contract leaves, not "+importPath))
-			}
-			for _, forbidden := range forbiddenImports {
-				if strings.Contains(importPath, forbidden) {
-					violations = append(violations, at(fset, imp.Pos(), rel, "gateway or consumer imports are not allowed in this repo"))
-				}
-			}
-		}
+		checkImportBoundary(fset, rel, file, directory, internal, testFile, modulePath, &violations)
 		if internal {
 			return nil
 		}
@@ -756,16 +732,9 @@ func inspectGoBoundary(root string) (apiManifest, []string, error) {
 		return apiManifest{}, nil, err
 	}
 
-	for importPath, inventory := range packages {
-		if directory := strings.TrimPrefix(importPath, modulePath+"/"); directory != importPath && isDriverDirectory(directory) {
-			violations = append(violations, driverGlobalInstanceViolations(root, fset, inventory)...)
-		}
-	}
-	driverDrift, err := driverInventoryDrift(driverExportsByDirectory(modulePath, packages))
-	if err != nil {
+	if err := appendDriverPackageViolations(root, modulePath, fset, packages, &violations); err != nil {
 		return apiManifest{}, nil, err
 	}
-	violations = append(violations, driverDrift...)
 
 	stableContracts, stableViolations := inspectStableContracts(root, modulePath, fset, packages)
 	violations = append(violations, stableViolations...)
