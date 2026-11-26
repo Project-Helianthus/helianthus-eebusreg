@@ -3,7 +3,7 @@ module github.com/Project-Helianthus/helianthus-eebusreg
 go 1.22.0
 
 require (
-	github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.21
+	github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.21.0.20261126050215-85efea1f3fc6
 	github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.19
 	github.com/Project-Helianthus/helianthus-spine-go v0.7.1-helianthus.9
 	github.com/gorilla/websocket v1.5.3
