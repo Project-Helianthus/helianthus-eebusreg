@@ -396,15 +396,11 @@ func (acquisition *runtimeAcquisition) bindRawFeatures() error {
 		return acquisition.closeRuntime(err)
 	}
 	acquisition.runtimeEpoch = rawRuntimeEpochProvider(acquisition.firstTrust, acquisition.rawRuntimeEpoch)
-	acquisition.rawFeatures = newRawFeatureRuntimeBridgeWithMutationProfiles(
-		localDevice,
-		acquisition.runtimeEpoch,
-		acquisition.dependencies.now,
-		acquisition.rawTokenIssuer,
-		acquisition.rawConnectionGenerations,
-		acquisition.labProfiles,
-	)
-	acquisition.rawFeatures.attachRemoteSubscriptionsReporting(acquisition.stateRoot)
+	acquisition.rawFeatures = newRawFeatureRuntimeBridgeWithMutationProfiles(localDevice, acquisition.runtimeEpoch,
+		acquisition.dependencies.now, acquisition.rawTokenIssuer, acquisition.rawConnectionGenerations, acquisition.labProfiles)
+	if err := acquisition.rawFeatures.attachRemoteSubscriptionsReporting(acquisition.stateRoot); err != nil {
+		return acquisition.closeRuntime(err)
+	}
 	acquisition.rawFeatures.bindRemoteSubscriptionPairing(acquisition.firstTrust)
 	acquisition.handler.bindRawFeatureRuntime(acquisition.rawFeatures)
 	return nil
