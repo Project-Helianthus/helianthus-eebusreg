@@ -2,14 +2,18 @@ package eebusfacade
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Project-Helianthus/helianthus-eebus-go/session"
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
@@ -41,68 +45,34 @@ type RemoteFeatureDataBackend interface {
 
 var _ RemoteFeatureDataBackend = (*serviceBackend)(nil)
 
-// remoteSubscriptionRefusedLimit bounds the refusals kept for requests whose message counter is not
-// registered yet; a result can arrive before the request that caused it is registered.
-const remoteSubscriptionRefusedLimit = 64
-
 type remoteSubscriptionState struct {
 	io       sync.Mutex
 	active   map[string]*remoteSubscriptionEntry
 	notified map[string]remoteNotifiedData
-	queue    []remoteSubscriptionAction
-	pending  map[remoteSubscriptionRequest]*remoteSubscriptionEntry
-	// unsubscribing holds the unsubscribe requests whose result has not arrived; a refusal sends
-	// the unsubscribe again at the next run.
-	unsubscribing map[remoteSubscriptionRequest]*remoteSubscriptionEntry
-	refused       map[remoteSubscriptionRequest]struct{}
-	sent          map[string]*remoteSubscriptionSent
-	results       spineapi.NodeManagementInterface
-	trusted       func(string) bool
-}
-
-// remoteSubscriptionSent tracks, per subscribed feature and connection, the message counters of the
-// last subscribe and unsubscribe requests and whether the last request that actually left the host
-// was a subscribe. The SPINE sender answers a request that repeats an unanswered one with the earlier
-// counter and sends nothing, so a returned counter equal to the last one marks such a replay.
-type remoteSubscriptionSent struct {
-	lease       *rawRemoteLease
-	subscribe   *spinemodel.MsgCounterType
-	unsubscribe *spinemodel.MsgCounterType
-	subscribed  bool
-}
-
-// remoteSubscriptionRequest identifies one subscription request by the responder device and the
-// message counter the result refers to.
-type remoteSubscriptionRequest struct {
-	device  spinemodel.AddressDeviceType
-	counter spinemodel.MsgCounterType
+	results  spineapi.NodeManagementInterface
+	trusted  func(string) bool
+	revoked  func(string) bool
+	session  *session.Instance
+	told     map[string]bool
+	up       map[string]*rawRemoteLease
+	down     map[string]struct{}
+	revoke   map[string]struct{}
+	dirty    map[string]struct{}
+	sentMu   sync.Mutex
+	sent     map[string]uint64
 }
 
 func (state *remoteSubscriptionState) initLocked() {
 	if state.active == nil {
 		state.active = make(map[string]*remoteSubscriptionEntry)
 		state.notified = make(map[string]remoteNotifiedData)
-		state.pending = make(map[remoteSubscriptionRequest]*remoteSubscriptionEntry)
-		state.unsubscribing = make(map[remoteSubscriptionRequest]*remoteSubscriptionEntry)
-		state.refused = make(map[remoteSubscriptionRequest]struct{})
-		state.sent = make(map[string]*remoteSubscriptionSent)
+		state.told = make(map[string]bool)
+		state.up = make(map[string]*rawRemoteLease)
+		state.down = make(map[string]struct{})
+		state.revoke = make(map[string]struct{})
+		state.dirty = make(map[string]struct{})
+		state.sent = make(map[string]uint64)
 	}
-}
-
-// sentLocked returns the request record of an entry's feature on the entry's connection, starting a
-// new one when the connection changed.
-func (state *remoteSubscriptionState) sentLocked(entry *remoteSubscriptionEntry) *remoteSubscriptionSent {
-	state.initLocked()
-	sent := state.sent[entry.key]
-	if sent == nil || sent.lease != entry.lease {
-		sent = &remoteSubscriptionSent{lease: entry.lease}
-		state.sent[entry.key] = sent
-	}
-	return sent
-}
-
-func sameRemoteSubscriptionCounter(last, counter *spinemodel.MsgCounterType) bool {
-	return last != nil && counter != nil && *last == *counter
 }
 
 type remoteSubscriptionEntry struct {
@@ -112,9 +82,139 @@ type remoteSubscriptionEntry struct {
 	featureType spinemodel.FeatureTypeType
 }
 
-type remoteSubscriptionAction struct {
-	entry     *remoteSubscriptionEntry
-	subscribe bool
+type remoteSubscriptionWork struct {
+	ski     string
+	revoke  bool
+	down    bool
+	trusted bool
+	lease   *rawRemoteLease
+	entries []*remoteSubscriptionEntry
+}
+
+type remoteSubscriptionTransport struct {
+	bridge *rawFeatureRuntimeBridge
+}
+
+var _ session.Transport = remoteSubscriptionTransport{}
+
+func (bridge *rawFeatureRuntimeBridge) attachRemoteSubscriptions(stateRoot string) error {
+	root := remoteSubscriptionStoreRoot(stateRoot)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return err
+	}
+	instance, err := session.Attach(session.AttachConfig{
+		Device:    bridge.local,
+		StateRoot: root,
+		Transport: remoteSubscriptionTransport{bridge: bridge},
+	})
+	if err != nil {
+		return err
+	}
+	bridge.mu.Lock()
+	bridge.remoteSubscriptions.initLocked()
+	bridge.remoteSubscriptions.session = instance
+	bridge.mu.Unlock()
+	return nil
+}
+
+func remoteSubscriptionStoreRoot(stateRoot string) string {
+	return filepath.Join(filepath.Dir(stateRoot), "."+filepath.Base(stateRoot)+"-remote-subscriptions")
+}
+
+func (backend *serviceBackend) closeRemoteSubscriptions() error {
+	if backend.rawFeatures == nil {
+		return nil
+	}
+	return backend.rawFeatures.closeRemoteSubscriptions()
+}
+
+func (bridge *rawFeatureRuntimeBridge) closeRemoteSubscriptions() error {
+	state := &bridge.remoteSubscriptions
+	state.io.Lock()
+	defer state.io.Unlock()
+	bridge.mu.Lock()
+	instance := state.session
+	state.session = nil
+	bridge.mu.Unlock()
+	if instance == nil {
+		return nil
+	}
+	return instance.Close()
+}
+
+func (bridge *rawFeatureRuntimeBridge) bindRemoteSubscriptionPairing(firstTrust *runtimeFirstTrustResources) {
+	if firstTrust == nil || firstTrust.coordinator == nil {
+		return
+	}
+	coordinator := firstTrust.coordinator
+	bridge.mu.Lock()
+	bridge.remoteSubscriptions.revoked = func(ski string) bool {
+		remote, err := hex.DecodeString(ski)
+		return err == nil && len(remote) == 20 && !coordinator.trusted(remote)
+	}
+	bridge.mu.Unlock()
+}
+
+func (transport remoteSubscriptionTransport) SendSubscribe(peer string, pair session.Pair) session.SendResult {
+	client := transport.bridge.local.FeatureByAddress(&pair.Client)
+	if isNilRawRuntimeValue(client) {
+		return session.SendResult{}
+	}
+	server := cloneRawFeatureAddress(pair.Server)
+	counter, failure := client.SubscribeToRemote(&server)
+	return transport.bridge.remoteSubscriptions.sendResult(
+		peer+"\x00subscribe\x00"+pair.Client.String()+"\x00"+pair.Server.String(), counter, failure,
+	)
+}
+
+func (transport remoteSubscriptionTransport) SendDelete(peer string, del session.Delete) session.SendResult {
+	client := transport.bridge.local.FeatureByAddress(&del.Client)
+	if isNilRawRuntimeValue(client) {
+		return session.SendResult{}
+	}
+	server := cloneRawFeatureAddress(del.Server)
+	counter, failure := client.RemoveRemoteSubscription(&server)
+	return transport.bridge.remoteSubscriptions.sendResult(
+		peer+"\x00delete\x00"+del.Client.String()+"\x00"+del.Server.String(), counter, failure,
+	)
+}
+
+func (remoteSubscriptionTransport) SendNotify(
+	string,
+	spinemodel.FeatureAddressType,
+	spinemodel.FunctionType,
+	any,
+) error {
+	return errRemoteSubscriptionUnavailable
+}
+
+func (remoteSubscriptionTransport) PeerHeld(string) ([]session.Pair, bool) {
+	return nil, false
+}
+
+func (state *remoteSubscriptionState) sendResult(
+	key string,
+	counter *spinemodel.MsgCounterType,
+	failure *spinemodel.ErrorType,
+) session.SendResult {
+	if failure != nil || counter == nil {
+		return session.SendResult{}
+	}
+	state.sentMu.Lock()
+	defer state.sentMu.Unlock()
+	last, repeated := state.sent[key]
+	state.sent[key] = uint64(*counter)
+	return session.SendResult{Counter: uint64(*counter), Sent: true, Replay: repeated && last == uint64(*counter)}
+}
+
+func (state *remoteSubscriptionState) forgetSentCounters(ski string) {
+	state.sentMu.Lock()
+	defer state.sentMu.Unlock()
+	for key := range state.sent {
+		if strings.HasPrefix(key, ski+"\x00") {
+			delete(state.sent, key)
+		}
+	}
 }
 
 type remoteNotifiedData struct {
@@ -166,9 +266,6 @@ func (bridge *rawFeatureRuntimeBridge) remoteSubscriptionTrustedLocked(ski strin
 	return trusted == nil || trusted(ski)
 }
 
-// routeRemoteNotify keeps the subscription store in step with SPINE events: a remote that disappears
-// loses its subscriptions and notified data, any event for a remote whose trust is withdrawn removes
-// its subscriptions and notified data, and a NOTIFY from a trusted remote updates the stored data.
 func (handler *runtimeServiceHandler) routeRemoteNotify(payload spineapi.EventPayload) {
 	ski := strings.ToLower(strings.TrimSpace(payload.Ski))
 	if ski == "" {
@@ -185,8 +282,10 @@ func (handler *runtimeServiceHandler) routeRemoteNotify(payload spineapi.EventPa
 	switch {
 	case payload.EventType == spineapi.EventTypeDeviceChange && payload.ChangeType == spineapi.ElementChangeRemove:
 		bridge.forgetRemoteSubscriptions(ski, payload.Device)
+		bridge.revokeRemoteSubscriptions(ski)
+	case bridge.revokeRemoteSubscriptions(ski):
 	case !allowed:
-		bridge.withdrawRemoteSubscriptions(ski)
+		bridge.suspendRemoteSubscriptions(ski)
 	case payload.EventType == spineapi.EventTypeDataChange && payload.CmdClassifier != nil &&
 		*payload.CmdClassifier == spinemodel.CmdClassifierTypeNotify &&
 		!isNilRawRuntimeValue(payload.Feature) && payload.Function != "":
@@ -194,46 +293,66 @@ func (handler *runtimeServiceHandler) routeRemoteNotify(payload spineapi.EventPa
 	}
 }
 
-// withdrawRemoteSubscriptions removes the subscriptions and notified data of a remote that is no
-// longer trusted and asks the responder to delete each subscription.
 func (bridge *rawFeatureRuntimeBridge) withdrawRemoteSubscriptions(ski string) {
-	bridge.mu.Lock()
-	queued := false
-	for _, entry := range bridge.remoteSubscriptions.active {
-		if entry.lease.ski == ski {
-			bridge.dropRemoteSubscriptionLocked(entry, true)
-			queued = true
-		}
-	}
-	bridge.mu.Unlock()
-	if queued {
-		bridge.runRemoteSubscriptionActions()
+	if !bridge.revokeRemoteSubscriptions(ski) {
+		bridge.suspendRemoteSubscriptions(ski)
 	}
 }
 
-// forgetRemoteSubscriptions removes the subscriptions and notified data of a remote device that
-// disappeared. No request is sent because the responder is gone.
+func (bridge *rawFeatureRuntimeBridge) suspendRemoteSubscriptions(ski string) {
+	bridge.mu.Lock()
+	state := &bridge.remoteSubscriptions
+	state.initLocked()
+	for _, entry := range state.active {
+		if entry.lease.ski == ski {
+			bridge.dropRemoteSubscriptionLocked(entry)
+		}
+	}
+	state.down[ski] = struct{}{}
+	state.dirty[ski] = struct{}{}
+	bridge.mu.Unlock()
+	bridge.runRemoteSubscriptionActions()
+}
+
+func (bridge *rawFeatureRuntimeBridge) revokeRemoteSubscriptions(ski string) bool {
+	bridge.mu.Lock()
+	revoked := bridge.remoteSubscriptions.revoked
+	bridge.mu.Unlock()
+	if revoked == nil || !revoked(ski) {
+		return false
+	}
+	bridge.mu.Lock()
+	state := &bridge.remoteSubscriptions
+	state.initLocked()
+	for _, entry := range state.active {
+		if entry.lease.ski == ski {
+			bridge.dropRemoteSubscriptionLocked(entry)
+		}
+	}
+	state.revoke[ski] = struct{}{}
+	state.dirty[ski] = struct{}{}
+	bridge.mu.Unlock()
+	bridge.runRemoteSubscriptionActions()
+	return true
+}
+
 func (bridge *rawFeatureRuntimeBridge) forgetRemoteSubscriptions(ski string, device spineapi.DeviceRemoteInterface) {
 	bridge.mu.Lock()
-	defer bridge.mu.Unlock()
-	for _, entry := range bridge.remoteSubscriptions.active {
+	state := &bridge.remoteSubscriptions
+	state.initLocked()
+	for _, entry := range state.active {
 		if entry.lease.ski == ski &&
 			(isNilRawRuntimeValue(device) || sameRawRuntimeValue(entry.lease.remote, device)) {
-			bridge.dropRemoteSubscriptionLocked(entry, false)
+			bridge.dropRemoteSubscriptionLocked(entry)
 		}
 	}
-	for key, sent := range bridge.remoteSubscriptions.sent {
-		if sent.lease.ski == ski &&
-			(isNilRawRuntimeValue(device) || sameRawRuntimeValue(sent.lease.remote, device)) {
-			delete(bridge.remoteSubscriptions.sent, key)
-		}
+	if lease := state.up[ski]; lease != nil &&
+		(isNilRawRuntimeValue(device) || sameRawRuntimeValue(lease.remote, device)) {
+		state.down[ski] = struct{}{}
+		state.dirty[ski] = struct{}{}
 	}
-	for request, entry := range bridge.remoteSubscriptions.unsubscribing {
-		if entry.lease.ski == ski &&
-			(isNilRawRuntimeValue(device) || sameRawRuntimeValue(entry.lease.remote, device)) {
-			delete(bridge.remoteSubscriptions.unsubscribing, request)
-		}
-	}
+	bridge.mu.Unlock()
+	bridge.runRemoteSubscriptionActions()
 }
 
 func rawLeaseFeatures(lease *rawRemoteLease) []spineapi.FeatureRemoteInterface {
@@ -285,6 +404,9 @@ func (bridge *rawFeatureRuntimeBridge) planRemoteSubscriptionsLocked(
 ) {
 	state := &bridge.remoteSubscriptions
 	state.initLocked()
+	if state.session == nil {
+		return
+	}
 	trusted := bridge.remoteSubscriptionTrustedLocked(lease.ski)
 	wanted := make(map[string]spineapi.FeatureRemoteInterface)
 	for _, feature := range features {
@@ -297,17 +419,7 @@ func (bridge *rawFeatureRuntimeBridge) planRemoteSubscriptionsLocked(
 			continue
 		}
 		if _, keep := wanted[key]; !keep || entry.lease != lease {
-			bridge.dropRemoteSubscriptionLocked(entry, entry.lease == lease)
-		}
-	}
-	for key, sent := range state.sent {
-		if sent.lease.ski == lease.ski && sent.lease != lease {
-			delete(state.sent, key)
-		}
-	}
-	for request, entry := range state.unsubscribing {
-		if entry.lease.ski == lease.ski && entry.lease != lease {
-			delete(state.unsubscribing, request)
+			bridge.dropRemoteSubscriptionLocked(entry)
 		}
 	}
 	keys := make([]string, 0, len(wanted))
@@ -319,53 +431,37 @@ func (bridge *rawFeatureRuntimeBridge) planRemoteSubscriptionsLocked(
 	sort.Strings(keys)
 	for _, key := range keys {
 		feature := wanted[key]
-		entry := &remoteSubscriptionEntry{
+		state.active[key] = &remoteSubscriptionEntry{
 			key:         key,
 			lease:       lease,
 			address:     cloneRawFeatureAddress(*feature.Address()),
 			featureType: feature.Type(),
 		}
-		state.active[key] = entry
-		state.queue = append(state.queue, remoteSubscriptionAction{entry: entry, subscribe: true})
 	}
+	state.dirty[lease.ski] = struct{}{}
 }
 
 func (bridge *rawFeatureRuntimeBridge) dropRemoteSubscriptionsLocked(lease *rawRemoteLease) {
-	for _, entry := range bridge.remoteSubscriptions.active {
+	state := &bridge.remoteSubscriptions
+	state.initLocked()
+	for _, entry := range state.active {
 		if entry.lease == lease {
-			bridge.dropRemoteSubscriptionLocked(entry, false)
+			bridge.dropRemoteSubscriptionLocked(entry)
 		}
 	}
-	for key, sent := range bridge.remoteSubscriptions.sent {
-		if sent.lease == lease {
-			delete(bridge.remoteSubscriptions.sent, key)
-		}
-	}
-	for request, entry := range bridge.remoteSubscriptions.unsubscribing {
-		if entry.lease == lease {
-			delete(bridge.remoteSubscriptions.unsubscribing, request)
-		}
+	if state.up[lease.ski] == lease {
+		state.down[lease.ski] = struct{}{}
+		state.dirty[lease.ski] = struct{}{}
 	}
 }
 
-func (bridge *rawFeatureRuntimeBridge) dropRemoteSubscriptionLocked(
-	entry *remoteSubscriptionEntry,
-	unsubscribe bool,
-) {
+func (bridge *rawFeatureRuntimeBridge) dropRemoteSubscriptionLocked(entry *remoteSubscriptionEntry) {
 	state := &bridge.remoteSubscriptions
 	delete(state.active, entry.key)
 	for key, data := range state.notified {
 		if data.entry == entry {
 			delete(state.notified, key)
 		}
-	}
-	for request, pending := range state.pending {
-		if pending == entry {
-			delete(state.pending, request)
-		}
-	}
-	if unsubscribe {
-		state.queue = append(state.queue, remoteSubscriptionAction{entry: entry})
 	}
 }
 
@@ -374,71 +470,111 @@ func (bridge *rawFeatureRuntimeBridge) runRemoteSubscriptionActions() {
 	state.io.Lock()
 	defer state.io.Unlock()
 	bridge.mu.Lock()
-	actions := state.queue
-	state.queue = nil
+	state.initLocked()
+	instance := state.session
+	revoked := state.revoked
+	skis := make([]string, 0, len(state.dirty))
+	for ski := range state.dirty {
+		skis = append(skis, ski)
+	}
+	sort.Strings(skis)
+	work := make([]remoteSubscriptionWork, 0, len(skis))
+	for _, ski := range skis {
+		item := remoteSubscriptionWork{ski: ski, trusted: bridge.remoteSubscriptionTrustedLocked(ski)}
+		_, item.revoke = state.revoke[ski]
+		_, item.down = state.down[ski]
+		if lease := bridge.leasesBySKI[ski]; lease != nil && !lease.retired {
+			item.lease = lease
+		}
+		keys := make([]string, 0)
+		for key, entry := range state.active {
+			if entry.lease.ski == ski {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			item.entries = append(item.entries, state.active[key])
+		}
+		delete(state.revoke, ski)
+		delete(state.down, ski)
+		delete(state.dirty, ski)
+		work = append(work, item)
+	}
 	bridge.mu.Unlock()
-	if len(actions) == 0 {
+	if instance == nil {
 		return
 	}
-	bridge.prepareRemoteSubscriptionClients(actions)
-	var retry []remoteSubscriptionAction
-	for _, action := range actions {
-		if !action.subscribe {
-			bridge.mu.Lock()
-			due := bridge.remoteUnsubscribeDueLocked(action.entry)
-			bridge.mu.Unlock()
-			if !due {
-				continue
-			}
-			counter, done := unsubscribeRemoteFeature(bridge.local, action.entry)
-			if !done {
-				retry = append(retry, action)
-				continue
-			}
-			bridge.mu.Lock()
-			bridge.noteRemoteUnsubscribeLocked(action.entry, counter)
-			bridge.mu.Unlock()
-			continue
+	for _, item := range work {
+		if revoked != nil && revoked(item.ski) {
+			item.revoke = true
 		}
+		bridge.applyRemoteSubscriptionWork(instance, item)
+	}
+}
+
+func (bridge *rawFeatureRuntimeBridge) applyRemoteSubscriptionWork(
+	instance *session.Instance,
+	item remoteSubscriptionWork,
+) {
+	state := &bridge.remoteSubscriptions
+	disconnect := func() {
 		bridge.mu.Lock()
-		current := state.active[action.entry.key] == action.entry && !action.entry.lease.retired
-		if current && !bridge.remoteSubscriptionTrustedLocked(action.entry.lease.ski) {
-			bridge.dropRemoteSubscriptionLocked(action.entry, false)
-			current = false
-		}
+		connected := state.up[item.ski] != nil
+		delete(state.up, item.ski)
 		bridge.mu.Unlock()
-		if !current {
-			continue
+		if connected {
+			_ = instance.Connect(item.ski, false)
+			state.forgetSentCounters(item.ski)
 		}
-		counter, err := subscribeRemoteFeature(bridge.local, action.entry)
+	}
+	if item.down || item.lease == nil {
+		disconnect()
+	}
+	if item.revoke {
+		_ = instance.Trust(item.ski, false)
 		bridge.mu.Lock()
-		bridge.registerRemoteSubscriptionLocked(action.entry, counter, err)
+		delete(state.told, item.ski)
 		bridge.mu.Unlock()
 	}
+	if item.revoke || item.lease == nil || !item.trusted {
+		disconnect()
+		return
+	}
 	bridge.mu.Lock()
-	clear(state.refused)
-	// An unsubscribe that could not be sent runs again, ahead of anything queued meanwhile, at the
-	// next run.
-	state.queue = append(retry, state.queue...)
+	told := state.told[item.ski]
+	state.told[item.ski] = true
 	bridge.mu.Unlock()
-}
-
-// remoteUnsubscribeDueLocked reports whether an unsubscribe still has to reach the responder: the
-// connection that carried the subscription is live and the feature has not been subscribed again.
-func (bridge *rawFeatureRuntimeBridge) remoteUnsubscribeDueLocked(entry *remoteSubscriptionEntry) bool {
-	return !entry.lease.retired && bridge.remoteSubscriptions.active[entry.key] == nil
-}
-
-// prepareRemoteSubscriptionClients creates the local client features the queued subscriptions need,
-// announces new ones before any request is sent so a responder knows the client address when it
-// handles the request, and watches the subscription results.
-func (bridge *rawFeatureRuntimeBridge) prepareRemoteSubscriptionClients(actions []remoteSubscriptionAction) {
-	created := false
-	for _, action := range actions {
-		if !action.subscribe {
+	if !told {
+		_ = instance.Trust(item.ski, true)
+	}
+	bridge.mu.Lock()
+	linked := state.up[item.ski] == item.lease
+	state.up[item.ski] = item.lease
+	bridge.mu.Unlock()
+	if !linked {
+		_ = instance.Connect(item.ski, true)
+	}
+	bridge.prepareRemoteSubscriptionClients(item.entries)
+	pairs := make([]session.Pair, 0, len(item.entries))
+	for _, entry := range item.entries {
+		client, _ := remoteSubscriptionClient(bridge.local, entry.featureType, false)
+		if client == nil || client.Address() == nil {
 			continue
 		}
-		if _, added := remoteSubscriptionClient(bridge.local, action.entry.featureType, true); added {
+		pairs = append(pairs, session.Pair{
+			Client:            cloneRawFeatureAddress(*client.Address()),
+			Server:            cloneRawFeatureAddress(entry.address),
+			ServerFeatureType: entry.featureType,
+		})
+	}
+	_ = instance.Select(item.ski, pairs)
+}
+
+func (bridge *rawFeatureRuntimeBridge) prepareRemoteSubscriptionClients(entries []*remoteSubscriptionEntry) {
+	created := false
+	for _, entry := range entries {
+		if _, added := remoteSubscriptionClient(bridge.local, entry.featureType, true); added {
 			created = true
 		}
 	}
@@ -461,92 +597,6 @@ func (bridge *rawFeatureRuntimeBridge) prepareRemoteSubscriptionClients(actions 
 	}
 }
 
-// noteRemoteUnsubscribeLocked records an unsubscribe request and keeps it until its result arrives.
-// One that left the host cancels any earlier subscribe request still unanswered; a replay of an
-// unanswered unsubscribe sent nothing. A refusal that already arrived sends it again at the next run.
-func (bridge *rawFeatureRuntimeBridge) noteRemoteUnsubscribeLocked(
-	entry *remoteSubscriptionEntry,
-	counter *spinemodel.MsgCounterType,
-) {
-	if counter == nil || entry.lease.retired {
-		return
-	}
-	state := &bridge.remoteSubscriptions
-	sent := state.sentLocked(entry)
-	if !sameRemoteSubscriptionCounter(sent.unsubscribe, counter) {
-		value := *counter
-		sent.unsubscribe = &value
-		sent.subscribed = false
-	}
-	if entry.address.Device == nil {
-		return
-	}
-	request := remoteSubscriptionRequest{device: *entry.address.Device, counter: *counter}
-	if _, refused := state.refused[request]; refused {
-		delete(state.refused, request)
-		state.queue = append(state.queue, remoteSubscriptionAction{entry: entry})
-		return
-	}
-	state.unsubscribing[request] = entry
-}
-
-// noteRemoteSubscribeLocked records a subscribe request that returned a message counter, unless it
-// only replayed the last one.
-func (state *remoteSubscriptionState) noteRemoteSubscribeLocked(
-	entry *remoteSubscriptionEntry,
-	counter *spinemodel.MsgCounterType,
-) {
-	sent := state.sentLocked(entry)
-	if !sameRemoteSubscriptionCounter(sent.subscribe, counter) {
-		value := *counter
-		sent.subscribe = &value
-		sent.subscribed = true
-	}
-}
-
-// registerRemoteSubscriptionLocked keeps a sent request until its result arrives. A request that
-// could not be sent, whose refusal already arrived, or that only replayed an unanswered request an
-// unsubscribe has since cancelled, leaves the feature eligible for the next discovery refresh. A
-// request whose feature stopped being active while it was sent is still recorded for its connection,
-// so the unsubscribe that follows cancels it and a later replay of it is not taken as live.
-func (bridge *rawFeatureRuntimeBridge) registerRemoteSubscriptionLocked(
-	entry *remoteSubscriptionEntry,
-	counter *spinemodel.MsgCounterType,
-	err error,
-) {
-	state := &bridge.remoteSubscriptions
-	if state.active[entry.key] != entry {
-		if err == nil && counter != nil && !entry.lease.retired &&
-			bridge.leasesBySKI[entry.lease.ski] == entry.lease {
-			state.noteRemoteSubscribeLocked(entry, counter)
-		}
-		return
-	}
-	if err != nil {
-		bridge.dropRemoteSubscriptionLocked(entry, false)
-		return
-	}
-	if counter == nil || entry.address.Device == nil {
-		return
-	}
-	if sent := state.sentLocked(entry); sameRemoteSubscriptionCounter(sent.subscribe, counter) && !sent.subscribed {
-		bridge.dropRemoteSubscriptionLocked(entry, false)
-		return
-	}
-	state.noteRemoteSubscribeLocked(entry, counter)
-	request := remoteSubscriptionRequest{device: *entry.address.Device, counter: *counter}
-	if _, refused := state.refused[request]; refused {
-		delete(state.refused, request)
-		bridge.dropRemoteSubscriptionLocked(entry, false)
-		return
-	}
-	state.pending[request] = entry
-}
-
-// recordRemoteSubscriptionResult receives the responder's result for a subscription request. A
-// refused subscribe removes the subscription so the next discovery refresh requests it again; a
-// refused unsubscribe is sent again at the next run until the responder accepts it or the
-// connection is gone.
 func (bridge *rawFeatureRuntimeBridge) recordRemoteSubscriptionResult(message spineapi.ResponseMessage) {
 	if isNilRawRuntimeValue(message.DeviceRemote) || message.DeviceRemote.Address() == nil {
 		return
@@ -554,31 +604,14 @@ func (bridge *rawFeatureRuntimeBridge) recordRemoteSubscriptionResult(message sp
 	result, _ := message.Data.(*spinemodel.ResultDataType)
 	refused := result != nil && result.ErrorNumber != nil &&
 		*result.ErrorNumber != spinemodel.ErrorNumberTypeNoError
-	request := remoteSubscriptionRequest{
-		device:  *message.DeviceRemote.Address(),
-		counter: message.MsgCounterReference,
-	}
 	bridge.mu.Lock()
-	defer bridge.mu.Unlock()
-	state := &bridge.remoteSubscriptions
-	state.initLocked()
-	if entry, found := state.pending[request]; found {
-		delete(state.pending, request)
-		if refused {
-			bridge.dropRemoteSubscriptionLocked(entry, false)
-		}
+	lease := bridge.leasesByAddr[*message.DeviceRemote.Address()]
+	instance := bridge.remoteSubscriptions.session
+	bridge.mu.Unlock()
+	if lease == nil || instance == nil {
 		return
 	}
-	if entry, found := state.unsubscribing[request]; found {
-		delete(state.unsubscribing, request)
-		if refused {
-			state.queue = append(state.queue, remoteSubscriptionAction{entry: entry})
-		}
-		return
-	}
-	if refused && len(state.refused) < remoteSubscriptionRefusedLimit {
-		state.refused[request] = struct{}{}
-	}
+	_ = instance.NoteResult(lease.ski, uint64(message.MsgCounterReference), !refused)
 }
 
 func remoteSubscriptionClient(
@@ -659,38 +692,6 @@ func announceRemoteSubscriptionClients(local spineapi.DeviceLocalInterface) {
 	})
 }
 
-func subscribeRemoteFeature(
-	local spineapi.DeviceLocalInterface,
-	entry *remoteSubscriptionEntry,
-) (*spinemodel.MsgCounterType, error) {
-	client, _ := remoteSubscriptionClient(local, entry.featureType, true)
-	if client == nil {
-		return nil, errRemoteSubscriptionUnavailable
-	}
-	address := cloneRawFeatureAddress(entry.address)
-	counter, failure := client.SubscribeToRemote(&address)
-	if failure != nil {
-		return nil, errRemoteSubscriptionUnavailable
-	}
-	return counter, nil
-}
-
-// unsubscribeRemoteFeature reports whether the responder needs no further request: the unsubscribe
-// was sent, with its message counter, or no local client exists, so no subscription was ever
-// requested from one.
-func unsubscribeRemoteFeature(
-	local spineapi.DeviceLocalInterface,
-	entry *remoteSubscriptionEntry,
-) (*spinemodel.MsgCounterType, bool) {
-	client, _ := remoteSubscriptionClient(local, entry.featureType, false)
-	if client == nil {
-		return nil, true
-	}
-	address := cloneRawFeatureAddress(entry.address)
-	counter, failure := client.RemoveRemoteSubscription(&address)
-	return counter, failure == nil
-}
-
 func (bridge *rawFeatureRuntimeBridge) recordRemoteNotify(
 	ski string,
 	feature spineapi.FeatureRemoteInterface,
@@ -760,6 +761,28 @@ func (bridge *rawFeatureRuntimeBridge) recordRemoteNotify(
 		failure:    failure,
 		notifiedAt: bridge.timestamp(),
 	}
+	bridge.reportRemoteNotifyLocked(lease, entry, function, value)
+}
+
+func (bridge *rawFeatureRuntimeBridge) reportRemoteNotifyLocked(
+	lease *rawRemoteLease,
+	entry *remoteSubscriptionEntry,
+	function spinemodel.FunctionType,
+	value eebusraw.TypedValueV1,
+) {
+	instance := bridge.remoteSubscriptions.session
+	if instance == nil {
+		return
+	}
+	client, _ := remoteSubscriptionClient(bridge.local, entry.featureType, false)
+	if client == nil || client.Address() == nil {
+		return
+	}
+	instance.ReceiveNotify(lease.ski, session.Pair{
+		Client:            cloneRawFeatureAddress(*client.Address()),
+		Server:            cloneRawFeatureAddress(entry.address),
+		ServerFeatureType: entry.featureType,
+	}, function, value, bridge.timestamp())
 }
 
 // remoteNotifiedLocator identifies a subscribed feature on its lease. A feature whose address is

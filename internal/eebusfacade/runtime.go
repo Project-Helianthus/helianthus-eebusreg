@@ -401,6 +401,8 @@ func (acquisition *runtimeAcquisition) bindRawFeatures() error {
 		acquisition.rawConnectionGenerations,
 		acquisition.labProfiles,
 	)
+	_ = acquisition.rawFeatures.attachRemoteSubscriptions(acquisition.stateRoot)
+	acquisition.rawFeatures.bindRemoteSubscriptionPairing(acquisition.firstTrust)
 	acquisition.handler.bindRawFeatureRuntime(acquisition.rawFeatures)
 	return nil
 }
@@ -854,6 +856,7 @@ func (backend *serviceBackend) Close() error {
 	if backend.handler != nil {
 		backend.handler.waitForSPINEEvents()
 	}
+	subscriptionErr := backend.closeRemoteSubscriptions()
 	if backend.service != nil {
 		releaseOutputService(backend.service)
 		backend.service.Shutdown()
@@ -867,7 +870,7 @@ func (backend *serviceBackend) Close() error {
 		trustErr = backend.firstTrust.Close()
 	}
 	backend.mu.Lock()
-	backend.closeErr = errors.Join(mutationErr, eventErr, attemptErr, trustErr)
+	backend.closeErr = errors.Join(mutationErr, eventErr, subscriptionErr, attemptErr, trustErr)
 	closeErr := backend.closeErr
 	if backend.closeDone != nil {
 		close(backend.closeDone)
