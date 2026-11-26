@@ -17,6 +17,7 @@ const exportInventoryRepositoryDirectory = "internal/apiboundary/" + exportInven
 var exportInventoryFiles embed.FS
 
 var exportInventoryNames = []string{
+	"driver.txt",
 	"evidence.txt",
 	"lifecycle_native_runtime_second.txt",
 	"lifecycle_operator_admin_first.txt",
@@ -31,6 +32,7 @@ var exportInventoryNames = []string{
 }
 
 var exportInventoryPackages = map[string]string{
+	"driver.txt":                          "driver/examples/peer",
 	"evidence.txt":                        "eebusevidence",
 	"lifecycle_native_runtime_second.txt": ".",
 	"lifecycle_operator_admin_first.txt":  ".",

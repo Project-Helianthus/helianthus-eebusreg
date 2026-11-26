@@ -4,12 +4,13 @@ go 1.22.0
 
 require (
 	github.com/Project-Helianthus/helianthus-eebus-go v0.7.1-helianthus.21.0.20261126050215-85efea1f3fc6
+	github.com/Project-Helianthus/helianthus-semreg v0.0.0-20261124100158-93b56d48797e
 	github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.19
 	github.com/Project-Helianthus/helianthus-spine-go v0.7.1-helianthus.9
 	github.com/gorilla/websocket v1.5.3
 	golang.org/x/mod v0.21.0
 	golang.org/x/sys v0.25.0
-	golang.org/x/text v0.18.0
+	golang.org/x/text v0.22.0
 )
 
 require (
@@ -27,7 +28,7 @@ require (
 	github.com/stretchr/testify v1.9.0 // indirect
 	gitlab.com/c0b/go-ordered-json v0.0.0-20201030195603-febf46534d5a // indirect
 	golang.org/x/net v0.29.0 // indirect
-	golang.org/x/sync v0.8.0 // indirect
+	golang.org/x/sync v0.11.0 // indirect
 	golang.org/x/tools v0.25.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
