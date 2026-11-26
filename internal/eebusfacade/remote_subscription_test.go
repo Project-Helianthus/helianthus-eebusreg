@@ -65,6 +65,8 @@ type remoteSubscriptionSender struct {
 	// withdrawWhileSent, when set, withdraws every active subscription of that runtime while the next
 	// subscribe request is being sent, as a trust withdrawal on another goroutine does.
 	withdrawWhileSent *rawFeatureRuntimeBridge
+	// reads holds the counter of each nodeManagementSubscriptionData read sent to the remote.
+	reads []spinemodel.MsgCounterType
 }
 
 func (sender *remoteSubscriptionSender) Subscribe(

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -61,6 +62,14 @@ type remoteSubscriptionState struct {
 	dirty    map[string]struct{}
 	sentMu   sync.Mutex
 	sent     map[string]uint64
+	// heldMu guards the peer-held read state. The session calls PeerHeld while it holds its own lock,
+	// so this lock is never held across a call into the session.
+	heldMu      sync.Mutex
+	held        map[string][]session.Pair
+	heldReady   map[string]bool
+	heldAsked   map[string]bool
+	heldCounter map[string]uint64
+	heldTap     *remoteSubscriptionHeldTap
 }
 
 func (state *remoteSubscriptionState) initLocked() {
@@ -73,6 +82,10 @@ func (state *remoteSubscriptionState) initLocked() {
 		state.revoke = make(map[string]struct{})
 		state.dirty = make(map[string]struct{})
 		state.sent = make(map[string]uint64)
+		state.held = make(map[string][]session.Pair)
+		state.heldReady = make(map[string]bool)
+		state.heldAsked = make(map[string]bool)
+		state.heldCounter = make(map[string]uint64)
 	}
 }
 
@@ -115,7 +128,171 @@ func (bridge *rawFeatureRuntimeBridge) attachRemoteSubscriptions(stateRoot strin
 	bridge.remoteSubscriptions.initLocked()
 	bridge.remoteSubscriptions.session = instance
 	bridge.mu.Unlock()
+	bridge.remoteSubscriptions.installHeldTap(bridge)
 	return nil
+}
+
+// remoteSubscriptionHeldTap wraps the local node-management feature the session installed. The session
+// records the peer's nodeManagementSubscriptionData reply only for a read it sent itself, which it does
+// not do when the driver supplies the transport, so the tap hands that reply to the driver's PeerHeld.
+type remoteSubscriptionHeldTap struct {
+	spineapi.FeatureLocalInterface
+	bridge *rawFeatureRuntimeBridge
+}
+
+func (tap *remoteSubscriptionHeldTap) HandleMessage(message *spineapi.Message) *spinemodel.ErrorType {
+	result := tap.FeatureLocalInterface.HandleMessage(message)
+	if message != nil && message.Cmd.NodeManagementSubscriptionData != nil &&
+		message.CmdClassifier == spinemodel.CmdClassifierTypeReply {
+		tap.bridge.noteRemoteHeld(message)
+	}
+	return result
+}
+
+func (state *remoteSubscriptionState) installHeldTap(bridge *rawFeatureRuntimeBridge) {
+	if isNilRawRuntimeValue(bridge.local) {
+		return
+	}
+	for _, entity := range bridge.local.Entities() {
+		features := entity.Features()
+		for i, feature := range features {
+			if isNilRawRuntimeValue(feature) || feature.Type() != spinemodel.FeatureTypeTypeNodeManagement {
+				continue
+			}
+			tap := &remoteSubscriptionHeldTap{FeatureLocalInterface: feature, bridge: bridge}
+			features[i] = tap
+			state.heldMu.Lock()
+			state.heldTap = tap
+			state.heldMu.Unlock()
+			return
+		}
+	}
+}
+
+func (state *remoteSubscriptionState) removeHeldTap(local spineapi.DeviceLocalInterface) {
+	state.heldMu.Lock()
+	tap := state.heldTap
+	state.heldTap = nil
+	state.heldMu.Unlock()
+	if tap == nil || isNilRawRuntimeValue(local) {
+		return
+	}
+	for _, entity := range local.Entities() {
+		features := entity.Features()
+		for i, feature := range features {
+			if wrapped, ok := feature.(*remoteSubscriptionHeldTap); ok && wrapped == tap {
+				features[i] = tap.FeatureLocalInterface
+				return
+			}
+		}
+	}
+}
+
+func (bridge *rawFeatureRuntimeBridge) noteRemoteHeld(message *spineapi.Message) {
+	if isNilRawRuntimeValue(message.DeviceRemote) || message.RequestHeader == nil ||
+		message.RequestHeader.MsgCounterReference == nil {
+		return
+	}
+	ski := strings.ToLower(message.DeviceRemote.Ski())
+	state := &bridge.remoteSubscriptions
+	state.heldMu.Lock()
+	expected, asking := state.heldCounter[ski]
+	if !asking || expected != uint64(*message.RequestHeader.MsgCounterReference) {
+		state.heldMu.Unlock()
+		return
+	}
+	delete(state.heldCounter, ski)
+	var pairs []session.Pair
+	for _, entry := range message.Cmd.NodeManagementSubscriptionData.SubscriptionEntry {
+		if entry.ClientAddress == nil || entry.ServerAddress == nil {
+			continue
+		}
+		pairs = append(pairs, session.Pair{
+			Client: cloneRawFeatureAddress(*entry.ClientAddress),
+			Server: cloneRawFeatureAddress(*entry.ServerAddress),
+		})
+	}
+	state.held[ski] = pairs
+	state.heldReady[ski] = true
+	state.heldMu.Unlock()
+	bridge.mu.Lock()
+	instance := state.session
+	bridge.mu.Unlock()
+	if instance != nil {
+		_ = instance.Reconcile(ski)
+	}
+}
+
+// sendRemoteSubscriptionRead sends the read; a sender that cannot send counts as not answered.
+func sendRemoteSubscriptionRead(
+	local spineapi.DeviceLocalInterface,
+	remote spineapi.DeviceRemoteInterface,
+) (counter *spinemodel.MsgCounterType, ok bool) {
+	defer func() {
+		if recover() != nil {
+			counter, ok = nil, false
+		}
+	}()
+	counter, err := remote.Sender().Request(
+		spinemodel.CmdClassifierTypeCall,
+		local.NodeManagement().Address(),
+		spine.NodeManagementAddress(remote.Address()),
+		true,
+		[]spinemodel.CmdType{{NodeManagementSubscriptionData: &spinemodel.NodeManagementSubscriptionDataType{}}},
+	)
+	return counter, err == nil && counter != nil
+}
+
+func (state *remoteSubscriptionState) forgetHeld(ski string) {
+	ski = strings.ToLower(ski)
+	state.heldMu.Lock()
+	defer state.heldMu.Unlock()
+	delete(state.held, ski)
+	delete(state.heldReady, ski)
+	delete(state.heldAsked, ski)
+	delete(state.heldCounter, ski)
+}
+
+// peerHeld asks the remote for its nodeManagementSubscriptionData once per connection (SPINE 1.3.0
+// §7.4.3) and answers the session with the pairs the remote still holds once the reply arrived. The
+// answer is given a single time, so a pair established after the reply is not mistaken for a lost one.
+func (bridge *rawFeatureRuntimeBridge) peerHeld(peer string) ([]session.Pair, bool) {
+	ski := strings.ToLower(peer)
+	state := &bridge.remoteSubscriptions
+	state.heldMu.Lock()
+	if state.heldReady[ski] {
+		pairs := state.held[ski]
+		delete(state.heldReady, ski)
+		delete(state.held, ski)
+		state.heldMu.Unlock()
+		return pairs, true
+	}
+	asked := state.heldAsked[ski]
+	state.heldMu.Unlock()
+	if asked || isNilRawRuntimeValue(bridge.local) || isNilRawRuntimeValue(bridge.local.NodeManagement()) {
+		return nil, false
+	}
+	remote := bridge.local.RemoteDeviceForSki(ski)
+	if isNilRawRuntimeValue(remote) || isNilRawRuntimeValue(remote.Sender()) || remote.Address() == nil {
+		return nil, false
+	}
+	counter, ok := sendRemoteSubscriptionRead(bridge.local, remote)
+	if !ok {
+		return nil, false
+	}
+	state.heldMu.Lock()
+	state.heldAsked[ski] = true
+	state.heldCounter[ski] = uint64(*counter)
+	state.heldMu.Unlock()
+	return nil, false
+}
+
+// attachRemoteSubscriptionsReporting attaches the store and makes a failure visible: without the store the
+// driver holds no remote subscriptions, so the error is logged instead of being dropped.
+func (bridge *rawFeatureRuntimeBridge) attachRemoteSubscriptionsReporting(stateRoot string) {
+	if err := bridge.attachRemoteSubscriptions(stateRoot); err != nil {
+		slog.Error("remote subscriptions are unavailable: the subscription store did not attach", "error", err)
+	}
 }
 
 func remoteSubscriptionStoreRoot(stateRoot string) string {
@@ -137,6 +314,7 @@ func (bridge *rawFeatureRuntimeBridge) closeRemoteSubscriptions() error {
 	instance := state.session
 	state.session = nil
 	bridge.mu.Unlock()
+	state.removeHeldTap(bridge.local)
 	if instance == nil {
 		return nil
 	}
@@ -207,8 +385,8 @@ func (remoteSubscriptionTransport) SendNotify(
 	return errRemoteSubscriptionUnavailable
 }
 
-func (remoteSubscriptionTransport) PeerHeld(string) ([]session.Pair, bool) {
-	return nil, false
+func (transport remoteSubscriptionTransport) PeerHeld(peer string) ([]session.Pair, bool) {
+	return transport.bridge.peerHeld(peer)
 }
 
 func (state *remoteSubscriptionState) sendResult(
@@ -565,6 +743,7 @@ func (bridge *rawFeatureRuntimeBridge) applyRemoteSubscriptionWork(
 		if connected {
 			_ = instance.Connect(item.ski, false)
 			state.forgetSentCounters(item.ski)
+			state.forgetHeld(item.ski)
 		}
 	}
 	if item.down || item.lease == nil {
@@ -592,6 +771,7 @@ func (bridge *rawFeatureRuntimeBridge) applyRemoteSubscriptionWork(
 	state.up[item.ski] = item.lease
 	bridge.mu.Unlock()
 	if !linked {
+		state.forgetHeld(item.ski)
 		_ = instance.Connect(item.ski, true)
 	}
 	bridge.prepareRemoteSubscriptionClients(item.entries)

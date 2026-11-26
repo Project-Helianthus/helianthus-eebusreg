@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Project-Helianthus/helianthus-eebus-go/session"
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
@@ -331,5 +332,91 @@ func TestRemoteSubscriptionRevocationBeforeReopeningRemovesRestoredPairs(t *test
 	sweepRevokedRemoteSubscriptions(instance, func(ski string) bool { return ski == reopened.remoteSKI })
 	if pairs := reopened.establishedPairs(); pairs != 0 {
 		t.Fatalf("restored pairs after sweep = %d, want none", pairs)
+	}
+}
+
+func (sender *remoteSubscriptionSender) Request(
+	_ spinemodel.CmdClassifierType,
+	_ *spinemodel.FeatureAddressType,
+	_ *spinemodel.FeatureAddressType,
+	_ bool,
+	cmd []spinemodel.CmdType,
+) (*spinemodel.MsgCounterType, error) {
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(cmd) != 1 || cmd[0].NodeManagementSubscriptionData == nil {
+		return nil, errRemoteSubscriptionTestFailure
+	}
+	counter := spinemodel.MsgCounterType(900 + len(sender.reads))
+	sender.reads = append(sender.reads, counter)
+	return &counter, nil
+}
+
+func (fixture *remoteSubscriptionFixture) readCounters() []spinemodel.MsgCounterType {
+	fixture.sender.mu.Lock()
+	defer fixture.sender.mu.Unlock()
+	return append([]spinemodel.MsgCounterType(nil), fixture.sender.reads...)
+}
+
+func (fixture *remoteSubscriptionFixture) replyHeld(t *testing.T, counter spinemodel.MsgCounterType, held []session.Pair) {
+	t.Helper()
+	data := &spinemodel.NodeManagementSubscriptionDataType{}
+	for _, pair := range held {
+		client, server := pair.Client, pair.Server
+		data.SubscriptionEntry = append(data.SubscriptionEntry, spinemodel.SubscriptionManagementEntryDataType{
+			ClientAddress: &client, ServerAddress: &server,
+		})
+	}
+	fixture.bridge.remoteSubscriptions.heldMu.Lock()
+	tap := fixture.bridge.remoteSubscriptions.heldTap
+	fixture.bridge.remoteSubscriptions.heldMu.Unlock()
+	if tap == nil {
+		t.Fatal("no held-subscription tap installed")
+	}
+	tap.HandleMessage(&spineapi.Message{
+		CmdClassifier: spinemodel.CmdClassifierTypeReply,
+		Cmd:           spinemodel.CmdType{NodeManagementSubscriptionData: data},
+		RequestHeader: &spinemodel.HeaderType{MsgCounterReference: &counter},
+		DeviceRemote:  fixture.base,
+	})
+}
+
+func remoteSubscriptionReconnectedWithRetainedPair(t *testing.T, ski string) (*remoteSubscriptionFixture, []session.Pair) {
+	t.Helper()
+	fixture := newRemoteSubscriptionFixture(t, ski, remoteSubscriptionMeasurementSpec())
+	fixture.admit(t, 4)
+	fixture.establish(t, 1)
+	fixture.bridge.mu.Lock()
+	instance := fixture.bridge.remoteSubscriptions.session
+	fixture.bridge.mu.Unlock()
+	var pairs []session.Pair
+	for _, record := range instance.Established() {
+		pairs = append(pairs, record.Pair)
+	}
+	fixture.bridge.retireRemote(fixture.remoteSKI, 4)
+	fixture.admit(t, 5)
+	remoteSubscriptionEventually(t, "the held subscriptions are read again after the reconnect", func() bool {
+		return len(fixture.readCounters()) == 2
+	})
+	return fixture, pairs
+}
+
+func TestRemoteSubscriptionReconnectRenewsAPairTheRemoteLost(t *testing.T) {
+	fixture, _ := remoteSubscriptionReconnectedWithRetainedPair(t, strings.Repeat("e", 40))
+	if subscribed, _ := fixture.sender.calls(); len(subscribed) != 1 {
+		t.Fatalf("subscriptions before the reply = %d, want the retained pair not requested again", len(subscribed))
+	}
+	fixture.replyHeld(t, fixture.readCounters()[1], nil)
+	remoteSubscriptionEventually(t, "the lost pair is subscribed again", func() bool {
+		subscribed, _ := fixture.sender.calls()
+		return len(subscribed) == 2
+	})
+}
+
+func TestRemoteSubscriptionReconnectDoesNotRenewAPairTheRemoteStillHolds(t *testing.T) {
+	fixture, pairs := remoteSubscriptionReconnectedWithRetainedPair(t, strings.Repeat("f", 40))
+	fixture.replyHeld(t, fixture.readCounters()[1], pairs)
+	if subscribed, unsubscribed := fixture.sender.calls(); len(subscribed) != 1 || len(unsubscribed) != 0 {
+		t.Fatalf("subscriptions = %+v, unsubscriptions = %+v; want no new request for a held pair", subscribed, unsubscribed)
 	}
 }

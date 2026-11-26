@@ -405,7 +405,7 @@ func (acquisition *runtimeAcquisition) bindRawFeatures() error {
 		acquisition.rawConnectionGenerations,
 		acquisition.labProfiles,
 	)
-	_ = acquisition.rawFeatures.attachRemoteSubscriptions(acquisition.stateRoot)
+	acquisition.rawFeatures.attachRemoteSubscriptionsReporting(acquisition.stateRoot)
 	acquisition.rawFeatures.bindRemoteSubscriptionPairing(acquisition.firstTrust)
 	acquisition.handler.bindRawFeatureRuntime(acquisition.rawFeatures)
 	return nil
