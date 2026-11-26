@@ -153,7 +153,10 @@ func (bridge *rawFeatureRuntimeBridge) bindRemoteSubscriptionPairing(firstTrust 
 		remote, err := hex.DecodeString(ski)
 		return err == nil && len(remote) == 20 && coordinator.revokedAssociation(remote)
 	}
+	instance := bridge.remoteSubscriptions.session
+	revoked := bridge.remoteSubscriptions.revoked
 	bridge.mu.Unlock()
+	sweepRevokedRemoteSubscriptions(instance, revoked)
 }
 
 // revokedAssociation reports an explicit revocation only: the durable control view lists the remote's
@@ -526,6 +529,26 @@ func (bridge *rawFeatureRuntimeBridge) runRemoteSubscriptionActions() {
 			item.revoke = true
 		}
 		bridge.applyRemoteSubscriptionWork(instance, item)
+	}
+	sweepRevokedRemoteSubscriptions(instance, revoked)
+}
+
+// sweepRevokedRemoteSubscriptions removes the retained feature pairs of every remote whose trust was
+// explicitly revoked. A remote revoked while it was disconnected sends no event, so the pairs restored
+// from the stored state are checked against the revocation record here instead of waiting for one.
+func sweepRevokedRemoteSubscriptions(instance *session.Instance, revoked func(string) bool) {
+	if instance == nil || revoked == nil {
+		return
+	}
+	last := ""
+	for _, record := range instance.Established() {
+		if record.Peer == last {
+			continue
+		}
+		last = record.Peer
+		if revoked(record.Peer) {
+			_ = instance.Trust(record.Peer, false)
+		}
 	}
 }
 

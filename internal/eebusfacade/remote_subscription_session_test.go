@@ -284,3 +284,52 @@ func TestRemoteSubscriptionRevokedThenPairedAgainIsNotRevoked(t *testing.T) {
 		t.Fatal("revocation in the current lineage must read as revoked")
 	}
 }
+
+func TestRemoteSubscriptionRevocationWhileOfflineRemovesRetainedPairs(t *testing.T) {
+	root := t.TempDir()
+	specs := remoteSubscriptionTwoFeatureSpec()
+	fixture := newRemoteSubscriptionFixture(t, strings.Repeat("e", 40), specs, root)
+	fixture.admit(t, 4)
+	fixture.establish(t, 3)
+	fixture.bridge.retireRemote(fixture.remoteSKI, 4)
+	if pairs := fixture.establishedPairs(); pairs != 3 {
+		t.Fatalf("pairs after disconnect = %d, want 3", pairs)
+	}
+
+	// The remote is revoked while offline: no event for it ever arrives.
+	fixture.setRevoked(func(ski string) bool { return ski == fixture.remoteSKI })
+	fixture.bridge.runRemoteSubscriptionActions()
+	if pairs := fixture.establishedPairs(); pairs != 0 {
+		t.Fatalf("pairs after offline revocation = %d, want none", pairs)
+	}
+	fixture.setRevoked(func(string) bool { return false })
+	if err := fixture.bridge.closeRemoteSubscriptions(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := newRemoteSubscriptionFixture(t, strings.Repeat("e", 40), specs, root)
+	if pairs := reopened.establishedPairs(); pairs != 0 {
+		t.Fatalf("pairs restored after offline revocation = %d, want none", pairs)
+	}
+}
+
+func TestRemoteSubscriptionRevocationBeforeReopeningRemovesRestoredPairs(t *testing.T) {
+	root := t.TempDir()
+	specs := remoteSubscriptionTwoFeatureSpec()
+	first := newRemoteSubscriptionFixture(t, strings.Repeat("a", 40), specs, root)
+	first.admit(t, 4)
+	first.establish(t, 3)
+	if err := first.bridge.closeRemoteSubscriptions(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := newRemoteSubscriptionFixture(t, strings.Repeat("a", 40), specs, root)
+	if pairs := reopened.establishedPairs(); pairs != 3 {
+		t.Fatalf("restored pairs = %d, want 3", pairs)
+	}
+	reopened.bridge.mu.Lock()
+	instance := reopened.bridge.remoteSubscriptions.session
+	reopened.bridge.mu.Unlock()
+	sweepRevokedRemoteSubscriptions(instance, func(ski string) bool { return ski == reopened.remoteSKI })
+	if pairs := reopened.establishedPairs(); pairs != 0 {
+		t.Fatalf("restored pairs after sweep = %d, want none", pairs)
+	}
+}
