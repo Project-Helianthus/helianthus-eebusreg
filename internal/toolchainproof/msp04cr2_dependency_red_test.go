@@ -13,7 +13,7 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-func TestMSP05PDependencyClosureUsesReviewedHelianthusVersions(t *testing.T) {
+func TestDependencyClosurePinsReviewedHelianthusModules(t *testing.T) {
 	payload, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
 	if err != nil {
 		t.Fatalf("read repository go.mod: %v", err)
