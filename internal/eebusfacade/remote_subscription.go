@@ -1,6 +1,7 @@
 package eebusfacade
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -150,9 +151,23 @@ func (bridge *rawFeatureRuntimeBridge) bindRemoteSubscriptionPairing(firstTrust 
 	bridge.mu.Lock()
 	bridge.remoteSubscriptions.revoked = func(ski string) bool {
 		remote, err := hex.DecodeString(ski)
-		return err == nil && len(remote) == 20 && !coordinator.trusted(remote)
+		return err == nil && len(remote) == 20 && coordinator.revokedAssociation(remote)
 	}
 	bridge.mu.Unlock()
+}
+
+// revokedAssociation reports an explicit revocation only: the durable control view lists the remote's
+// association as no longer trusted. A remote that is merely absent from the in-memory trusted set
+// (quarantine, reload, unknown outcome) is not revoked and keeps its feature pairs.
+func (coordinator *firstTrustCoordinator) revokedAssociation(remote []byte) bool {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	for _, association := range coordinator.controlView.associations {
+		if bytes.Equal(association.subject, remote) {
+			return !association.trusted
+		}
+	}
+	return false
 }
 
 func (transport remoteSubscriptionTransport) SendSubscribe(peer string, pair session.Pair) session.SendResult {

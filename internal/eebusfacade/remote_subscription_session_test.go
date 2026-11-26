@@ -1,6 +1,7 @@
 package eebusfacade
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -242,5 +243,25 @@ func TestRemoteSubscriptionResultForUnsentRequestChangesNothing(t *testing.T) {
 	}
 	if subscribed, _ := fixture.sender.calls(); len(subscribed) != 1 {
 		t.Fatalf("subscriptions = %+v, want the pending request to stand", subscribed)
+	}
+}
+
+func TestRemoteSubscriptionQuarantinedTrustIsNotRevocation(t *testing.T) {
+	remote := bytes.Repeat([]byte{0x42}, 20)
+	other := bytes.Repeat([]byte{0x43}, 20)
+	coordinator := &firstTrustCoordinator{trustedRemotes: map[string]string{}}
+	coordinator.controlView.associations = []firstTrustAssociationRecord{
+		{subject: remote, trusted: true, active: true},
+		{subject: other, trusted: false},
+	}
+	// in-memory trusted set emptied by quarantine or reload: not a revocation
+	if coordinator.revokedAssociation(remote) {
+		t.Fatal("an unknown or quarantined trust state must not read as revocation")
+	}
+	if coordinator.revokedAssociation(bytes.Repeat([]byte{0x44}, 20)) {
+		t.Fatal("an unlisted remote must not read as revoked")
+	}
+	if !coordinator.revokedAssociation(other) {
+		t.Fatal("an association revoked in the control view must read as revoked")
 	}
 }
