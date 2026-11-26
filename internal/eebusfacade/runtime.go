@@ -85,6 +85,7 @@ type serviceBackend struct {
 	operatorAdmin    *operatorAdminV1Bridge
 	outgoingAttempts *firstTrustOutgoingAttemptBridge
 	unsubscribeSPINE func() error
+	useCases         *remoteUseCases
 	listenerTerminal <-chan error
 	runClaimed       bool
 	serviceStarted   bool
@@ -197,6 +198,7 @@ type runtimeAcquisition struct {
 	runtimeEpoch             func() uint64
 	rawFeatures              *rawFeatureRuntimeBridge
 	unsubscribeSPINE         func() error
+	useCases                 *remoteUseCases
 	operatorAdmin            *operatorAdminV1Bridge
 	rawMutations             *eebusmutation.Coordinator
 }
@@ -423,7 +425,7 @@ func (acquisition *runtimeAcquisition) subscribeSPINE() error {
 		return acquisition.closeRuntime(errors.New("SPINE runtime event subscription omitted unsubscribe"))
 	}
 	acquisition.unsubscribeSPINE = unsubscribeSPINE
-	return nil
+	return acquisition.registerUseCases()
 }
 
 func (acquisition *runtimeAcquisition) closeRuntimeWithSPINE(cause error) error {
@@ -509,8 +511,7 @@ func (acquisition *runtimeAcquisition) startBackend() (Backend, error) {
 	backend := &serviceBackend{
 		service: acquisition.service, handler: acquisition.handler, firstTrust: acquisition.firstTrust,
 		outgoingAttempts: acquisition.outgoingAttemptBridge, operatorAdmin: acquisition.operatorAdmin,
-		rawFeatures: acquisition.rawFeatures, rawMutations: acquisition.rawMutations,
-		unsubscribeSPINE: acquisition.unsubscribeSPINE, closeDone: make(chan struct{}),
+		rawFeatures: acquisition.rawFeatures, rawMutations: acquisition.rawMutations, useCases: acquisition.useCases, unsubscribeSPINE: acquisition.unsubscribeSPINE, closeDone: make(chan struct{}),
 	}
 	scoped, ok := acquisition.service.(runtimeScopedService)
 	if !ok {

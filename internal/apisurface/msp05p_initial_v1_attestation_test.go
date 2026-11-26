@@ -197,6 +197,9 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 		if issue137ParticipationSymbol(symbol) {
 			continue
 		}
+		if remoteMonitoringSymbol(symbol) {
+			continue
+		}
 		if issue129NativeV2Symbol(symbol) {
 			continue
 		}

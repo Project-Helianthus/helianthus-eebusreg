@@ -67,3 +67,7 @@ type ParticipationLossV1
 type ParticipationPermissionV1
 type ParticipationProvenanceV1
 type ParticipationStateV1
+type RemoteMonitoring
+type RemoteMonitoringEntity
+type RemoteMonitoringObservation
+type RemoteMonitoringRemote
