@@ -36,6 +36,9 @@ var (
 	dimensionID = semreg.DefinitionID("thermal.dimension.dhw")
 )
 
+// PeerSelector names one remote Measurement data entry of one driver instance.
+//
+//nolint:revive // the inventoried public name is fixed by the slice contract.
 type PeerSelector struct {
 	Instance    string
 	Device      model.AddressDeviceType
@@ -47,8 +50,10 @@ type PeerSelector struct {
 	ValueType   model.MeasurementValueTypeType
 }
 
+// Outcome is the kind of result an inbound read produced.
 type Outcome string
 
+// Outcome values: a fact, no match, unknown, failed determination, ambiguous or withheld.
 const (
 	OutcomeFact      Outcome = "fact"
 	OutcomeNoMatch   Outcome = "no_match"
@@ -58,6 +63,7 @@ const (
 	OutcomeWithheld  Outcome = "withheld"
 )
 
+// Reading is the inbound result of one remote read.
 type Reading struct {
 	Outcome   Outcome
 	Reason    roweval.Reason
@@ -65,19 +71,23 @@ type Reading struct {
 	Candidate *semreg.FactCandidate
 }
 
+// OutputState is the state of the SemReg value handed to the output row.
 type OutputState string
 
+// OutputState values: a value, an absent value or a failed determination.
 const (
 	OutputValue  OutputState = "value"
 	OutputAbsent OutputState = "absent"
 	OutputFailed OutputState = "failed_determination"
 )
 
+// OutputInput is the SemReg value state and value the output row encodes.
 type OutputInput struct {
 	State OutputState
 	Value semreg.Value
 }
 
+// OutputResult is the evaluation result and the Measurement data written to the local node.
 type OutputResult struct {
 	Reason      roweval.Reason
 	Detail      string
@@ -85,6 +95,7 @@ type OutputResult struct {
 	Entry       *model.MeasurementDataType
 }
 
+// Config configures one driver instance.
 type Config struct {
 	Key           string
 	DeviceAddress string
@@ -94,6 +105,7 @@ type Config struct {
 	Template      semreg.FactCandidate
 }
 
+// Instance holds the rows, node and results of one configured driver instance.
 type Instance struct {
 	engine engine
 }
@@ -115,6 +127,7 @@ type core struct {
 	closed   bool
 }
 
+// NewInstance creates an instance from a configured key.
 func NewInstance(cfg Config) (*Instance, error) {
 	return newInstance(cfg, nil)
 }
@@ -144,12 +157,15 @@ func newInstance(cfg Config, transport session.Transport) (*Instance, error) {
 	}}, nil
 }
 
+// Close stops the instance.
 func (i *Instance) Close() error { return i.engine.close() }
 
+// Read evaluates the inbound row on the data a remote last notified.
 func (i *Instance) Read(ski string, server model.FeatureAddressType) (Reading, error) {
 	return i.engine.read(ski, server)
 }
 
+// Output evaluates the output row and updates the local Measurement server data.
 func (i *Instance) Output(in OutputInput) (OutputResult, error) { return i.engine.output(in) }
 
 func (i *core) close() error {
