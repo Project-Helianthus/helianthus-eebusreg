@@ -1,0 +1,10 @@
+{
+  "id": "storage.mapping.eebus",
+  "loss": "unknown",
+  "native_owner": "helianthus-docs-eebus",
+  "qualification": "unresolved",
+  "source_refs": [
+    "eebus_ledger"
+  ],
+  "state": "unknown_pending_normative_source"
+}

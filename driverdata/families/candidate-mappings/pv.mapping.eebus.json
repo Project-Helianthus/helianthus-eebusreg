@@ -1,0 +1,11 @@
+{
+  "id": "pv.mapping.eebus",
+  "native_owner": "helianthus-docs-eebus",
+  "source_refs": [
+    "eebus_ledger",
+    "eebus_m625_donor"
+  ],
+  "state": "unknown_pending_normative_source",
+  "qualification": "unresolved",
+  "loss": "unknown"
+}
