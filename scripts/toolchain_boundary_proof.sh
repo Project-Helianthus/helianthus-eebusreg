@@ -8,7 +8,7 @@ export GOWORK=off
 export GOTOOLCHAIN=local
 
 eebus_module_path="github.com/Project-Helianthus/helianthus-eebus-go"
-eebus_module_version="v0.7.1-helianthus.21"
+eebus_module_version="v0.7.1-helianthus.21.0.20261126050215-85efea1f3fc6"
 ship_module_path="github.com/Project-Helianthus/helianthus-ship-go"
 ship_module_version="v0.6.1-helianthus.19"
 spine_module_path="github.com/Project-Helianthus/helianthus-spine-go"

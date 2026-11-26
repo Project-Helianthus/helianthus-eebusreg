@@ -13,7 +13,7 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-func TestMSP05PDependencyClosureUsesReviewedHelianthusReleases(t *testing.T) {
+func TestDependencyClosurePinsReviewedHelianthusModules(t *testing.T) {
 	payload, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
 	if err != nil {
 		t.Fatalf("read repository go.mod: %v", err)
@@ -24,10 +24,11 @@ func TestMSP05PDependencyClosureUsesReviewedHelianthusReleases(t *testing.T) {
 	}
 
 	want := []struct {
-		path    string
-		version string
+		path          string
+		version       string
+		pseudoVersion bool
 	}{
-		{path: "github.com/Project-Helianthus/helianthus-eebus-go", version: "v0.7.1-helianthus.21"},
+		{path: "github.com/Project-Helianthus/helianthus-eebus-go", version: "v0.7.1-helianthus.21.0.20261126050215-85efea1f3fc6", pseudoVersion: true},
 		{path: "github.com/Project-Helianthus/helianthus-ship-go", version: "v0.6.1-helianthus.19"},
 		{path: "github.com/Project-Helianthus/helianthus-spine-go", version: "v0.7.1-helianthus.9"},
 	}
@@ -37,10 +38,10 @@ func TestMSP05PDependencyClosureUsesReviewedHelianthusReleases(t *testing.T) {
 	}
 	for _, requirement := range want {
 		if got[requirement.path] != requirement.version {
-			t.Errorf("go.mod requirement %s = %q, want reviewed release %q", requirement.path, got[requirement.path], requirement.version)
+			t.Errorf("go.mod requirement %s = %q, want reviewed version %q", requirement.path, got[requirement.path], requirement.version)
 		}
-		if !semver.IsValid(requirement.version) || module.IsPseudoVersion(requirement.version) {
-			t.Fatalf("test contract contains non-release version %q for %s", requirement.version, requirement.path)
+		if !semver.IsValid(requirement.version) || module.IsPseudoVersion(requirement.version) != requirement.pseudoVersion {
+			t.Fatalf("invalid reviewed version %q for %s (want pseudo-version: %t)", requirement.version, requirement.path, requirement.pseudoVersion)
 		}
 	}
 	for _, requirement := range want {
@@ -77,7 +78,8 @@ func TestMSP05PDependencyClosureUsesReviewedHelianthusReleases(t *testing.T) {
 	}
 	for _, required := range file.Require {
 		for _, requirement := range want {
-			if required.Mod.Path == requirement.path && module.IsPseudoVersion(required.Mod.Version) {
+			if required.Mod.Path == requirement.path && module.IsPseudoVersion(required.Mod.Version) &&
+				(!requirement.pseudoVersion || required.Mod.Version != requirement.version) {
 				t.Errorf("reviewed fork %s uses forbidden pseudo-version %s", required.Mod.Path, required.Mod.Version)
 			}
 		}
