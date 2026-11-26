@@ -158,12 +158,13 @@ func (bridge *rawFeatureRuntimeBridge) bindRemoteSubscriptionPairing(firstTrust 
 
 // revokedAssociation reports an explicit revocation only: the durable control view lists the remote's
 // association as no longer trusted. A remote that is merely absent from the in-memory trusted set
-// (quarantine, reload, unknown outcome) is not revoked and keeps its feature pairs.
+// (quarantine, reload, unknown outcome) is not revoked and keeps its feature pairs. Only the current
+// lineage decides, so a remote paired again after a revocation is not hidden by its older revoked record.
 func (coordinator *firstTrustCoordinator) revokedAssociation(remote []byte) bool {
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
 	for _, association := range coordinator.controlView.associations {
-		if bytes.Equal(association.subject, remote) {
+		if association.lineage == coordinator.controlView.control.associationLineage && bytes.Equal(association.subject, remote) {
 			return !association.trusted
 		}
 	}

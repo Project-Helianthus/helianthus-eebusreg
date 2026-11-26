@@ -265,3 +265,22 @@ func TestRemoteSubscriptionQuarantinedTrustIsNotRevocation(t *testing.T) {
 		t.Fatal("an association revoked in the control view must read as revoked")
 	}
 }
+
+func TestRemoteSubscriptionRevokedThenPairedAgainIsNotRevoked(t *testing.T) {
+	remote := bytes.Repeat([]byte{0x52}, 20)
+	oldLineage := [32]byte{1}
+	newLineage := [32]byte{2}
+	coordinator := &firstTrustCoordinator{trustedRemotes: map[string]string{}}
+	coordinator.controlView.control.associationLineage = newLineage
+	coordinator.controlView.associations = []firstTrustAssociationRecord{
+		{subject: remote, lineage: oldLineage, trusted: false},
+		{subject: remote, lineage: newLineage, trusted: true, active: true},
+	}
+	if coordinator.revokedAssociation(remote) {
+		t.Fatal("a remote paired again in the current lineage must not read as revoked")
+	}
+	coordinator.controlView.associations[1].trusted = false
+	if !coordinator.revokedAssociation(remote) {
+		t.Fatal("revocation in the current lineage must read as revoked")
+	}
+}

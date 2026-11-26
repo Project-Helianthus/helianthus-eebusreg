@@ -379,9 +379,13 @@ func (acquisition *runtimeAcquisition) openService(serializer runtimeSnapshotSer
 func (acquisition *runtimeAcquisition) closeRuntime(cause error) error {
 	releaseOutputService(acquisition.service)
 	acquisition.service.Shutdown()
+	var subscriptionErr error
+	if acquisition.rawFeatures != nil {
+		subscriptionErr = acquisition.rawFeatures.closeRemoteSubscriptions()
+	}
 	attemptErr := acquisition.outgoingAttemptBridge.shutdown()
 	trustErr := acquisition.closeFirstTrust()
-	return errors.Join(cause, attemptErr, trustErr)
+	return errors.Join(cause, subscriptionErr, attemptErr, trustErr)
 }
 
 func (acquisition *runtimeAcquisition) bindRawFeatures() error {
@@ -856,11 +860,12 @@ func (backend *serviceBackend) Close() error {
 	if backend.handler != nil {
 		backend.handler.waitForSPINEEvents()
 	}
-	subscriptionErr := backend.closeRemoteSubscriptions()
 	if backend.service != nil {
 		releaseOutputService(backend.service)
 		backend.service.Shutdown()
 	}
+	// the session is closed only after Shutdown, when no SPINE message can reach the local feature list
+	subscriptionErr := backend.closeRemoteSubscriptions()
 	var attemptErr error
 	if backend.outgoingAttempts != nil {
 		attemptErr = backend.outgoingAttempts.shutdown()
