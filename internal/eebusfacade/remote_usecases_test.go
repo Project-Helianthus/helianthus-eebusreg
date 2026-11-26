@@ -645,8 +645,8 @@ func TestRemoteUseCasesKeyVariesEverySkiEntityUseCaseAndMeasurement(t *testing.T
 
 func TestRemoteUseCasesRegistrationStopsClientsAndDropsQueuedEvents(t *testing.T) {
 	rig := newUseCaseRig(t, "h", strings.Repeat("3", 40), 3, announceBoth(scenarioRange(7), scenarioRange(5)))
-	if len(rig.service.added) != 6 {
-		t.Fatalf("registered use cases = %d, want 6", len(rig.service.added))
+	if len(rig.service.added) != 8 {
+		t.Fatalf("registered use cases = %d, want 8", len(rig.service.added))
 	}
 	added := spineapi.EventPayload{
 		Ski: rig.ski, Device: rig.peer, Entity: rig.entity,

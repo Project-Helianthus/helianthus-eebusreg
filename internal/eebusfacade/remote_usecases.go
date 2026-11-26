@@ -18,6 +18,8 @@ import (
 	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/cem/evcem"
 	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/cem/evsecc"
 	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/cem/evsoc"
+	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/cem/vabd"
+	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/cem/vapd"
 	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/ma/mgcp"
 	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/ma/mpc"
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
@@ -123,34 +125,20 @@ type remoteUseCaseRule struct {
 }
 
 var monitoringUseCaseRules = []remoteUseCaseRule{
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint,
-		scenario: 1, name: "powerLimitationFactor", unit: "%", configKey: spinemodel.DeviceConfigurationKeyNameTypePvCurtailmentLimitFactor},
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint,
-		scenario: 2, name: "power", measurement: spinemodel.MeasurementTypeTypePower, scope: spinemodel.ScopeTypeTypeACPowerTotal, unit: "W"},
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint,
-		scenario: 3, name: "energyFeedIn", measurement: spinemodel.MeasurementTypeTypeEnergy, scope: spinemodel.ScopeTypeTypeGridFeedIn, unit: "Wh"},
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint,
-		scenario: 4, name: "energyConsumed", measurement: spinemodel.MeasurementTypeTypeEnergy, scope: spinemodel.ScopeTypeTypeGridConsumption, unit: "Wh"},
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint,
-		scenario: 5, name: "currentPerPhase", measurement: spinemodel.MeasurementTypeTypeCurrent, scope: spinemodel.ScopeTypeTypeACCurrent, unit: "A", perPhase: true},
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint,
-		scenario: 6, name: "voltagePerPhase", measurement: spinemodel.MeasurementTypeTypeVoltage, scope: spinemodel.ScopeTypeTypeACVoltage, unit: "V", perPhase: true},
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint,
-		scenario: 7, name: "frequency", measurement: spinemodel.MeasurementTypeTypeFrequency, scope: spinemodel.ScopeTypeTypeACFrequency, unit: "Hz"},
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit,
-		scenario: 1, name: "power", measurement: spinemodel.MeasurementTypeTypePower, scope: spinemodel.ScopeTypeTypeACPowerTotal, unit: "W"},
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit,
-		scenario: 1, name: "powerPerPhase", measurement: spinemodel.MeasurementTypeTypePower, scope: spinemodel.ScopeTypeTypeACPower, unit: "W", perPhase: true},
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit,
-		scenario: 2, name: "energyConsumed", measurement: spinemodel.MeasurementTypeTypeEnergy, scope: spinemodel.ScopeTypeTypeACEnergyConsumed, unit: "Wh"},
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit,
-		scenario: 2, name: "energyProduced", measurement: spinemodel.MeasurementTypeTypeEnergy, scope: spinemodel.ScopeTypeTypeACEnergyProduced, unit: "Wh"},
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit,
-		scenario: 3, name: "currentPerPhase", measurement: spinemodel.MeasurementTypeTypeCurrent, scope: spinemodel.ScopeTypeTypeACCurrent, unit: "A", perPhase: true},
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit,
-		scenario: 4, name: "voltagePerPhase", measurement: spinemodel.MeasurementTypeTypeVoltage, scope: spinemodel.ScopeTypeTypeACVoltage, unit: "V", perPhase: true},
-	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit,
-		scenario: 5, name: "frequency", measurement: spinemodel.MeasurementTypeTypeFrequency, scope: spinemodel.ScopeTypeTypeACFrequency, unit: "Hz"},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint, scenario: 1, name: "powerLimitationFactor", unit: "%", configKey: spinemodel.DeviceConfigurationKeyNameTypePvCurtailmentLimitFactor},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint, scenario: 2, name: "power", measurement: spinemodel.MeasurementTypeTypePower, scope: spinemodel.ScopeTypeTypeACPowerTotal, unit: "W"},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint, scenario: 3, name: "energyFeedIn", measurement: spinemodel.MeasurementTypeTypeEnergy, scope: spinemodel.ScopeTypeTypeGridFeedIn, unit: "Wh"},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint, scenario: 4, name: "energyConsumed", measurement: spinemodel.MeasurementTypeTypeEnergy, scope: spinemodel.ScopeTypeTypeGridConsumption, unit: "Wh"},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint, scenario: 5, name: "currentPerPhase", measurement: spinemodel.MeasurementTypeTypeCurrent, scope: spinemodel.ScopeTypeTypeACCurrent, unit: "A", perPhase: true},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint, scenario: 6, name: "voltagePerPhase", measurement: spinemodel.MeasurementTypeTypeVoltage, scope: spinemodel.ScopeTypeTypeACVoltage, unit: "V", perPhase: true},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint, scenario: 7, name: "frequency", measurement: spinemodel.MeasurementTypeTypeFrequency, scope: spinemodel.ScopeTypeTypeACFrequency, unit: "Hz"},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit, scenario: 1, name: "power", measurement: spinemodel.MeasurementTypeTypePower, scope: spinemodel.ScopeTypeTypeACPowerTotal, unit: "W"},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit, scenario: 1, name: "powerPerPhase", measurement: spinemodel.MeasurementTypeTypePower, scope: spinemodel.ScopeTypeTypeACPower, unit: "W", perPhase: true},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit, scenario: 2, name: "energyConsumed", measurement: spinemodel.MeasurementTypeTypeEnergy, scope: spinemodel.ScopeTypeTypeACEnergyConsumed, unit: "Wh"},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit, scenario: 2, name: "energyProduced", measurement: spinemodel.MeasurementTypeTypeEnergy, scope: spinemodel.ScopeTypeTypeACEnergyProduced, unit: "Wh"},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit, scenario: 3, name: "currentPerPhase", measurement: spinemodel.MeasurementTypeTypeCurrent, scope: spinemodel.ScopeTypeTypeACCurrent, unit: "A", perPhase: true},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit, scenario: 4, name: "voltagePerPhase", measurement: spinemodel.MeasurementTypeTypeVoltage, scope: spinemodel.ScopeTypeTypeACVoltage, unit: "V", perPhase: true},
+	{useCase: spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption, actor: spinemodel.UseCaseActorTypeMonitoredUnit, scenario: 5, name: "frequency", measurement: spinemodel.MeasurementTypeTypeFrequency, scope: spinemodel.ScopeTypeTypeACFrequency, unit: "Hz"},
 }
 
 var manufacturerFields = []string{
@@ -200,7 +188,21 @@ func chargingUseCaseRules() []remoteUseCaseRule {
 	return rules
 }
 
-var remoteUseCaseRules = append(append([]remoteUseCaseRule(nil), monitoringUseCaseRules...), chargingUseCaseRules()...)
+func visualizationUseCaseRules() []remoteUseCaseRule {
+	battery, pv := spinemodel.UseCaseActorTypeBatterySystem, spinemodel.UseCaseActorTypePVSystem
+	vabdName, vapdName := spinemodel.UseCaseNameTypeVisualizationOfAggregatedBatteryData, spinemodel.UseCaseNameTypeVisualizationOfAggregatedPhotovoltaicData
+	return []remoteUseCaseRule{
+		{useCase: vabdName, actor: battery, scenario: 1, name: "power", measurement: spinemodel.MeasurementTypeTypePower, scope: spinemodel.ScopeTypeTypeACPowerTotal, unit: "W"},
+		{useCase: vabdName, actor: battery, scenario: 2, name: "energyCharged", measurement: spinemodel.MeasurementTypeTypeEnergy, scope: spinemodel.ScopeTypeTypeCharge, unit: "Wh"},
+		{useCase: vabdName, actor: battery, scenario: 3, name: "energyDischarged", measurement: spinemodel.MeasurementTypeTypeEnergy, scope: spinemodel.ScopeTypeTypeDischarge, unit: "Wh"},
+		{useCase: vabdName, actor: battery, scenario: 4, name: "stateOfCharge", measurement: spinemodel.MeasurementTypeTypePercentage, scope: spinemodel.ScopeTypeTypeStateOfCharge, unit: "%", sourceUnit: "pct"},
+		{useCase: vapdName, actor: pv, scenario: 1, name: "nominalPeakPower", unit: "W", configKey: spinemodel.DeviceConfigurationKeyNameTypePeakPowerOfPVSystem},
+		{useCase: vapdName, actor: pv, scenario: 2, name: "power", measurement: spinemodel.MeasurementTypeTypePower, scope: spinemodel.ScopeTypeTypeACPowerTotal, unit: "W"},
+		{useCase: vapdName, actor: pv, scenario: 3, name: "yieldTotal", measurement: spinemodel.MeasurementTypeTypeEnergy, scope: spinemodel.ScopeTypeTypeACYieldTotal, unit: "Wh"},
+	}
+}
+
+var remoteUseCaseRules = append(append(append([]remoteUseCaseRule(nil), monitoringUseCaseRules...), chargingUseCaseRules()...), visualizationUseCaseRules()...)
 
 type remoteRetainedValue struct {
 	kind    string
@@ -281,6 +283,8 @@ func registerRemoteUseCases(
 	evConfiguration := evcc.NewEVCC(libraryService, cem, callback)
 	evMeasurement := evcem.NewEVCEM(libraryService, cem, callback)
 	evCharge := evsoc.NewEVSOC(cem, callback)
+	batteryData := vabd.NewVABD(cem, callback)
+	photovoltaicData := vapd.NewVAPD(cem, callback)
 	useCases := &remoteUseCases{
 		local: local, cem: cem, now: now, revoked: revoked, session: session,
 		remotes: make(map[string]*remoteRetainedRemote),
@@ -291,6 +295,8 @@ func registerRemoteUseCases(
 			{client: evConfiguration, base: evConfiguration.UseCaseBase, stop: evConfiguration.Stop},
 			{client: evMeasurement, base: evMeasurement.UseCaseBase, stop: evMeasurement.Stop},
 			{client: evCharge, base: evCharge.UseCaseBase, stop: evCharge.Stop},
+			{client: batteryData, base: batteryData.UseCaseBase, stop: batteryData.Stop},
+			{client: photovoltaicData, base: photovoltaicData.UseCaseBase, stop: photovoltaicData.Stop},
 		},
 	}
 	for _, client := range useCases.clients {
