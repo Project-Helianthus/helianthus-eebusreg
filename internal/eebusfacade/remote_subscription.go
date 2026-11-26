@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -29,6 +30,8 @@ var remoteSubscriptionFeatureTypes = map[spinemodel.FeatureTypeType]struct{}{
 	spinemodel.FeatureTypeTypeDeviceDiagnosis:      {},
 	spinemodel.FeatureTypeTypeLoadControl:          {},
 }
+
+var errRemoteSubscriptionRootUnavailable = errors.New("remote subscription store root is unavailable")
 
 var errRemoteSubscriptionUnavailable = errors.New("remote feature subscription is unavailable")
 
@@ -66,6 +69,8 @@ type remoteSubscriptionState struct {
 	heldReady   map[string]bool
 	heldAsked   map[string]bool
 	heldCounter map[string]uint64
+	heldSending map[string]bool
+	heldEarly   map[string]map[uint64][]session.Pair
 	heldTap     *remoteSubscriptionHeldTap
 }
 
@@ -83,6 +88,8 @@ func (state *remoteSubscriptionState) initLocked() {
 		state.heldReady = make(map[string]bool)
 		state.heldAsked = make(map[string]bool)
 		state.heldCounter = make(map[string]uint64)
+		state.heldSending = make(map[string]bool)
+		state.heldEarly = make(map[string]map[uint64][]session.Pair)
 	}
 }
 
@@ -111,7 +118,7 @@ var _ session.Transport = remoteSubscriptionTransport{}
 func (bridge *rawFeatureRuntimeBridge) attachRemoteSubscriptions(stateRoot string) error {
 	root := remoteSubscriptionStoreRoot(stateRoot)
 	if err := os.MkdirAll(root, 0o700); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errRemoteSubscriptionRootUnavailable, err)
 	}
 	instance, err := session.Attach(session.AttachConfig{
 		Device:    bridge.local,
@@ -193,12 +200,34 @@ func (bridge *rawFeatureRuntimeBridge) noteRemoteHeld(message *spineapi.Message)
 	ski := strings.ToLower(message.DeviceRemote.Ski())
 	state := &bridge.remoteSubscriptions
 	state.heldMu.Lock()
+	reference := uint64(*message.RequestHeader.MsgCounterReference)
 	expected, asking := state.heldCounter[ski]
-	if !asking || expected != uint64(*message.RequestHeader.MsgCounterReference) {
+	if !asking && state.heldSending[ski] {
+		if state.heldEarly[ski] == nil {
+			state.heldEarly[ski] = make(map[uint64][]session.Pair)
+		}
+		state.heldEarly[ski][reference] = heldPairsOf(message)
+		state.heldMu.Unlock()
+		return
+	}
+	if !asking || expected != reference {
 		state.heldMu.Unlock()
 		return
 	}
 	delete(state.heldCounter, ski)
+	pairs := heldPairsOf(message)
+	state.held[ski] = pairs
+	state.heldReady[ski] = true
+	state.heldMu.Unlock()
+	bridge.mu.Lock()
+	instance := state.session
+	bridge.mu.Unlock()
+	if instance != nil {
+		_ = instance.Reconcile(ski)
+	}
+}
+
+func heldPairsOf(message *spineapi.Message) []session.Pair {
 	var pairs []session.Pair
 	for _, entry := range message.Cmd.NodeManagementSubscriptionData.SubscriptionEntry {
 		if entry.ClientAddress == nil || entry.ServerAddress == nil {
@@ -209,15 +238,7 @@ func (bridge *rawFeatureRuntimeBridge) noteRemoteHeld(message *spineapi.Message)
 			Server: cloneRawFeatureAddress(*entry.ServerAddress),
 		})
 	}
-	state.held[ski] = pairs
-	state.heldReady[ski] = true
-	state.heldMu.Unlock()
-	bridge.mu.Lock()
-	instance := state.session
-	bridge.mu.Unlock()
-	if instance != nil {
-		_ = instance.Reconcile(ski)
-	}
+	return pairs
 }
 
 // sendRemoteSubscriptionRead sends the read; a sender that cannot send counts as not answered.
@@ -248,6 +269,8 @@ func (state *remoteSubscriptionState) forgetHeld(ski string) {
 	delete(state.heldReady, ski)
 	delete(state.heldAsked, ski)
 	delete(state.heldCounter, ski)
+	delete(state.heldSending, ski)
+	delete(state.heldEarly, ski)
 }
 
 // peerHeld asks the remote for its nodeManagementSubscriptionData once per connection (SPINE 1.3.0
@@ -264,7 +287,7 @@ func (bridge *rawFeatureRuntimeBridge) peerHeld(peer string) ([]session.Pair, bo
 		state.heldMu.Unlock()
 		return pairs, true
 	}
-	asked := state.heldAsked[ski]
+	asked := state.heldAsked[ski] || state.heldSending[ski]
 	state.heldMu.Unlock()
 	if asked || isNilRawRuntimeValue(bridge.local) || isNilRawRuntimeValue(bridge.local.NodeManagement()) {
 		return nil, false
@@ -273,22 +296,39 @@ func (bridge *rawFeatureRuntimeBridge) peerHeld(peer string) ([]session.Pair, bo
 	if isNilRawRuntimeValue(remote) || isNilRawRuntimeValue(remote.Sender()) || remote.Address() == nil {
 		return nil, false
 	}
+	state.heldMu.Lock()
+	state.heldSending[ski] = true
+	state.heldMu.Unlock()
 	counter, ok := sendRemoteSubscriptionRead(bridge.local, remote)
+	state.heldMu.Lock()
+	defer state.heldMu.Unlock()
+	delete(state.heldSending, ski)
+	early := state.heldEarly[ski]
+	delete(state.heldEarly, ski)
 	if !ok {
 		return nil, false
 	}
-	state.heldMu.Lock()
 	state.heldAsked[ski] = true
+	if pairs, replied := early[uint64(*counter)]; replied {
+		return pairs, true
+	}
 	state.heldCounter[ski] = uint64(*counter)
-	state.heldMu.Unlock()
 	return nil, false
 }
 
-// attachRemoteSubscriptionsReporting attaches the store and makes a failure visible: without the store the
-// driver holds no remote subscriptions, so the error is logged instead of being dropped.
-func (bridge *rawFeatureRuntimeBridge) attachRemoteSubscriptionsReporting(stateRoot string) {
-	if err := bridge.attachRemoteSubscriptions(stateRoot); err != nil {
-		slog.Error("remote subscriptions are unavailable: the subscription store did not attach", "error", err)
+// attachRemoteSubscriptionsReporting attaches the store. A stored state that cannot be loaded is returned,
+// so acquisition fails instead of continuing without the remote subscriptions; a store root that cannot be
+// created is only logged, as before.
+func (bridge *rawFeatureRuntimeBridge) attachRemoteSubscriptionsReporting(stateRoot string) error {
+	err := bridge.attachRemoteSubscriptions(stateRoot)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errRemoteSubscriptionRootUnavailable):
+		slog.Error("remote subscriptions are unavailable: the subscription store root is not usable", "error", err)
+		return nil
+	default:
+		return fmt.Errorf("attach the remote subscription store: %w", err)
 	}
 }
 
@@ -334,7 +374,13 @@ func (bridge *rawFeatureRuntimeBridge) bindRemoteSubscriptionPairing(firstTrust 
 	instance := bridge.remoteSubscriptions.session
 	revoked := bridge.remoteSubscriptions.revoked
 	bridge.mu.Unlock()
-	sweepRevokedRemoteSubscriptions(instance, revoked)
+	sweepRevokedRemoteSubscriptions(instance, revoked, bridge.forgetTold)
+}
+
+func (bridge *rawFeatureRuntimeBridge) forgetTold(ski string) {
+	bridge.mu.Lock()
+	delete(bridge.remoteSubscriptions.told, ski)
+	bridge.mu.Unlock()
 }
 
 // revokedAssociation reports an explicit revocation only: the durable control view lists the remote's
@@ -679,13 +725,17 @@ func (bridge *rawFeatureRuntimeBridge) runRemoteSubscriptionActions() {
 		}
 		bridge.applyRemoteSubscriptionWork(instance, item)
 	}
-	sweepRevokedRemoteSubscriptions(instance, revoked)
+	sweepRevokedRemoteSubscriptions(instance, revoked, bridge.forgetTold)
 }
 
 // sweepRevokedRemoteSubscriptions removes the retained feature pairs of every remote whose trust was
 // explicitly revoked. A remote revoked while it was disconnected sends no event, so the pairs restored
 // from the stored state are checked against the revocation record here instead of waiting for one.
-func sweepRevokedRemoteSubscriptions(instance *session.Instance, revoked func(string) bool) {
+func sweepRevokedRemoteSubscriptions(
+	instance *session.Instance,
+	revoked func(string) bool,
+	swept ...func(string),
+) {
 	if instance == nil || revoked == nil {
 		return
 	}
@@ -697,6 +747,9 @@ func sweepRevokedRemoteSubscriptions(instance *session.Instance, revoked func(st
 		last = record.Peer
 		if revoked(record.Peer) {
 			_ = instance.Trust(record.Peer, false)
+			for _, forget := range swept {
+				forget(record.Peer)
+			}
 		}
 	}
 }
