@@ -34,6 +34,7 @@ type RemoteMonitoringEntity struct {
 	DeviceAddress string
 	DeviceType    string
 	EntityAddress []uint64
+	ParentAddress []uint64
 	EntityType    string
 	UseCase       string
 	Actor         string
@@ -41,12 +42,15 @@ type RemoteMonitoringEntity struct {
 	Observations  []RemoteMonitoringObservation
 }
 
-// RemoteMonitoringObservation is one value in its native unit with the time of the REPLY or NOTIFY that carried it; Stale is set once the connection that carried it has ended.
+// RemoteMonitoringObservation is one value in its source type and native unit with the time of the REPLY or NOTIFY that carried it; Kind names which of Number, Text and Boolean carries it, and Stale is set once the connection that carried it has ended.
 type RemoteMonitoringObservation struct {
 	Scenario uint
 	Name     string
 	Phase    string
+	Kind     string
 	Number   float64
+	Text     string
+	Boolean  bool
 	Unit     string
 	Updated  time.Time
 	Source   string
@@ -128,13 +132,15 @@ func remoteMonitoringFromFacade(snapshot eebusfacade.RemoteMonitoringSnapshot) R
 		for _, entity := range remote.Entities {
 			convertedEntity := RemoteMonitoringEntity{
 				DeviceAddress: entity.DeviceAddress, DeviceType: entity.DeviceType,
-				EntityAddress: append([]uint64(nil), entity.EntityAddress...), EntityType: entity.EntityType,
-				UseCase: entity.UseCase, Actor: entity.Actor, Scenarios: append([]uint(nil), entity.Scenarios...),
+				EntityAddress: append([]uint64(nil), entity.EntityAddress...), ParentAddress: append([]uint64(nil), entity.ParentAddress...),
+				EntityType: entity.EntityType,
+				UseCase:    entity.UseCase, Actor: entity.Actor, Scenarios: append([]uint(nil), entity.Scenarios...),
 			}
 			for _, observation := range entity.Observations {
 				convertedEntity.Observations = append(convertedEntity.Observations, RemoteMonitoringObservation{
 					Scenario: observation.Scenario, Name: observation.Name, Phase: observation.Phase,
-					Number: observation.Number, Unit: observation.Unit, Updated: observation.Updated,
+					Kind: observation.Kind, Number: observation.Number, Text: observation.Text, Boolean: observation.Boolean,
+					Unit: observation.Unit, Updated: observation.Updated,
 					Source: observation.Source, Stale: observation.Stale,
 				})
 			}

@@ -36,10 +36,10 @@ func remoteMonitoringFixture() remoteMonitoringSnapshot {
 		SKI: "ski-1", SHIPID: "ship-1", SHIPState: "connected", PairingState: "paired", Visible: true, Paired: true,
 		ServiceName: "name-1", ServiceIdentifier: "identifier-1", ServiceBrand: "brand-1", ServiceType: "type-1", ServiceModel: "model-1",
 		Entities: []eebusfacade.RemoteMonitoringEntity{{
-			DeviceAddress: "device-1", DeviceType: "device-type-1", EntityAddress: []uint64{3, 4}, EntityType: "entity-type-1",
+			DeviceAddress: "device-1", DeviceType: "device-type-1", EntityAddress: []uint64{3, 4}, ParentAddress: []uint64{3}, EntityType: "entity-type-1",
 			UseCase: "use-case-1", Actor: "actor-1", Scenarios: []uint{2, 5},
 			Observations: []eebusfacade.RemoteMonitoringObservation{{
-				Scenario: 6, Name: "name-2", Phase: "b", Number: 12.5, Unit: "W",
+				Scenario: 6, Name: "name-2", Phase: "b", Kind: "text", Number: 12.5, Text: "exact text", Boolean: true, Unit: "W",
 				Updated: time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC), Source: eebusfacade.RemoteMonitoringSourceReply, Stale: true,
 			}},
 		}},
@@ -57,10 +57,10 @@ func TestRemoteMonitoringRuntimeServesEveryFieldAsCopies(t *testing.T) {
 		SKI: "ski-1", SHIPID: "ship-1", ConnectionState: "connected", PairingState: "paired", Visible: true, Paired: true,
 		ServiceName: "name-1", ServiceIdentifier: "identifier-1", ServiceBrand: "brand-1", ServiceType: "type-1", ServiceModel: "model-1",
 		Entities: []RemoteMonitoringEntity{{
-			DeviceAddress: "device-1", DeviceType: "device-type-1", EntityAddress: []uint64{3, 4}, EntityType: "entity-type-1",
+			DeviceAddress: "device-1", DeviceType: "device-type-1", EntityAddress: []uint64{3, 4}, ParentAddress: []uint64{3}, EntityType: "entity-type-1",
 			UseCase: "use-case-1", Actor: "actor-1", Scenarios: []uint{2, 5},
 			Observations: []RemoteMonitoringObservation{{
-				Scenario: 6, Name: "name-2", Phase: "b", Number: 12.5, Unit: "W",
+				Scenario: 6, Name: "name-2", Phase: "b", Kind: "text", Number: 12.5, Text: "exact text", Boolean: true, Unit: "W",
 				Updated: time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC), Source: "reply", Stale: true,
 			}},
 		}},
@@ -70,7 +70,8 @@ func TestRemoteMonitoringRuntimeServesEveryFieldAsCopies(t *testing.T) {
 	}
 	got.Remotes[0].Entities[0].EntityAddress[0] = 99
 	got.Remotes[0].Entities[0].Scenarios[0] = 99
-	if backend.snapshot.Remotes[0].Entities[0].EntityAddress[0] != 3 || backend.snapshot.Remotes[0].Entities[0].Scenarios[0] != 2 {
+	got.Remotes[0].Entities[0].ParentAddress[0] = 99
+	if backend.snapshot.Remotes[0].Entities[0].ParentAddress[0] != 3 || backend.snapshot.Remotes[0].Entities[0].EntityAddress[0] != 3 || backend.snapshot.Remotes[0].Entities[0].Scenarios[0] != 2 {
 		t.Fatal("caller mutation reached the backend snapshot")
 	}
 }

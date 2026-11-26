@@ -18,8 +18,8 @@ func TestRemoteMonitoringSurfaceIsClosed(t *testing.T) {
 	want := map[string]string{
 		"type RemoteMonitoring":            "type RemoteMonitoring struct{ Remotes []RemoteMonitoringRemote }",
 		"type RemoteMonitoringRemote":      "type RemoteMonitoringRemote struct{ SKI string; SHIPID string; ConnectionState string; PairingState string; Visible bool; Paired bool; ServiceName string; ServiceIdentifier string; ServiceBrand string; ServiceType string; ServiceModel string; Entities []RemoteMonitoringEntity }",
-		"type RemoteMonitoringEntity":      "type RemoteMonitoringEntity struct{ DeviceAddress string; DeviceType string; EntityAddress []uint64; EntityType string; UseCase string; Actor string; Scenarios []uint; Observations []RemoteMonitoringObservation }",
-		"type RemoteMonitoringObservation": "type RemoteMonitoringObservation struct{ Scenario uint; Name string; Phase string; Number float64; Unit string; Updated time.Time; Source string; Stale bool }",
+		"type RemoteMonitoringEntity":      "type RemoteMonitoringEntity struct{ DeviceAddress string; DeviceType string; EntityAddress []uint64; ParentAddress []uint64; EntityType string; UseCase string; Actor string; Scenarios []uint; Observations []RemoteMonitoringObservation }",
+		"type RemoteMonitoringObservation": "type RemoteMonitoringObservation struct{ Scenario uint; Name string; Phase string; Kind string; Number float64; Text string; Boolean bool; Unit string; Updated time.Time; Source string; Stale bool }",
 	}
 	got := map[string]string{}
 	for _, symbol := range msp05pRootSurface(t, doc).Symbols {
