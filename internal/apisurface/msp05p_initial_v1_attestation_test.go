@@ -290,6 +290,13 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 		}
 		projected.Packages[index].Symbols = rawSymbols
 	}
+	legacy := projected.Packages[:0]
+	for _, candidate := range projected.Packages {
+		if !isDriverPackagePath(candidate.Path) {
+			legacy = append(legacy, candidate)
+		}
+	}
+	projected.Packages = legacy
 	return projected
 }
 

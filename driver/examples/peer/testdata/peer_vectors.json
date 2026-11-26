@@ -1,0 +1,457 @@
+{
+ "contract": "peer-vectors/v1",
+ "inbound": [
+  {
+   "name": "value-475-scale-minus1-degC",
+   "instance_key": "alpha",
+   "remote_device": "d:_n:synthetic-remote",
+   "entity": [
+    1
+   ],
+   "description_notified": true,
+   "descriptions": [
+    {
+     "measurementId": 1,
+     "scopeType": "dhwTemperature",
+     "unit": "degC"
+    }
+   ],
+   "data": [
+    {
+     "measurementId": 1,
+     "valueType": "value",
+     "value": {
+      "number": 475,
+      "scale": -1
+     }
+    }
+   ],
+   "expect": {
+    "outcome": "fact",
+    "fact_key": "thermal.measurement.dhw_temperature",
+    "decimal": "320.65"
+   },
+   "source": "SPINE 1.3.0 3.10.1.8: 475 x 10^-1 = 47.5 degC; 47.5 + 273.15 = 320.65 K"
+  },
+  {
+   "name": "value-48-scale-omitted",
+   "instance_key": "alpha",
+   "remote_device": "d:_n:synthetic-remote",
+   "entity": [
+    1
+   ],
+   "description_notified": true,
+   "descriptions": [
+    {
+     "measurementId": 1,
+     "scopeType": "dhwTemperature",
+     "unit": "degC"
+    }
+   ],
+   "data": [
+    {
+     "measurementId": 1,
+     "valueType": "value",
+     "value": {
+      "number": 48
+     }
+    }
+   ],
+   "expect": {
+    "outcome": "fact",
+    "fact_key": "thermal.measurement.dhw_temperature",
+    "decimal": "321.15"
+   },
+   "source": "SPINE 1.3.0 3.10.1.8: scale omitted is 0; 48 + 273.15 = 321.15 K"
+  },
+  {
+   "name": "unit-degF-no-match",
+   "instance_key": "alpha",
+   "remote_device": "d:_n:synthetic-remote",
+   "entity": [
+    1
+   ],
+   "description_notified": true,
+   "descriptions": [
+    {
+     "measurementId": 1,
+     "scopeType": "dhwTemperature",
+     "unit": "degF"
+    }
+   ],
+   "data": [
+    {
+     "measurementId": 1,
+     "valueType": "value",
+     "value": {
+      "number": 475,
+      "scale": -1
+     }
+    }
+   ],
+   "expect": {
+    "outcome": "no_match"
+   },
+   "source": "SPINE 1.3.0 Table 7: unit differs from degC"
+  },
+  {
+   "name": "scope-outsideAirTemperature-no-match",
+   "instance_key": "alpha",
+   "remote_device": "d:_n:synthetic-remote",
+   "entity": [
+    1
+   ],
+   "description_notified": true,
+   "descriptions": [
+    {
+     "measurementId": 1,
+     "scopeType": "outsideAirTemperature",
+     "unit": "degC"
+    }
+   ],
+   "data": [
+    {
+     "measurementId": 1,
+     "valueType": "value",
+     "value": {
+      "number": 475,
+      "scale": -1
+     }
+    }
+   ],
+   "expect": {
+    "outcome": "no_match"
+   },
+   "source": "SPINE 1.3.0 3.10.1.22 Table 9: scope differs from dhwTemperature"
+  },
+  {
+   "name": "description-absent-no-match",
+   "instance_key": "alpha",
+   "remote_device": "d:_n:synthetic-remote",
+   "entity": [
+    1
+   ],
+   "description_notified": false,
+   "descriptions": [],
+   "data": [
+    {
+     "measurementId": 1,
+     "valueType": "value",
+     "value": {
+      "number": 475,
+      "scale": -1
+     }
+    }
+   ],
+   "expect": {
+    "outcome": "no_match"
+   },
+   "source": "SPINE 1.3.0 A.2.15: no measurementDescriptionListData entry selects the measurand"
+  },
+  {
+   "name": "description-present-data-absent-unknown",
+   "instance_key": "alpha",
+   "remote_device": "d:_n:synthetic-remote",
+   "entity": [
+    1
+   ],
+   "description_notified": true,
+   "descriptions": [
+    {
+     "measurementId": 1,
+     "scopeType": "dhwTemperature",
+     "unit": "degC"
+    }
+   ],
+   "data": [],
+   "expect": {
+    "outcome": "unknown"
+   },
+   "source": "SPINE 1.3.0 4.3.16 Table 93: no value exists, the entry is omitted"
+  },
+  {
+   "name": "value-state-error-with-number",
+   "instance_key": "alpha",
+   "remote_device": "d:_n:synthetic-remote",
+   "entity": [
+    1
+   ],
+   "description_notified": true,
+   "descriptions": [
+    {
+     "measurementId": 1,
+     "scopeType": "dhwTemperature",
+     "unit": "degC"
+    }
+   ],
+   "data": [
+    {
+     "measurementId": 1,
+     "valueType": "value",
+     "value": {
+      "number": 475,
+      "scale": -1
+     },
+     "valueState": "error"
+    }
+   ],
+   "expect": {
+    "outcome": "failed_determination"
+   },
+   "source": "SPINE Resource Specification 1.3.0 4.3.16 Table 93, Table 97: valueState error is a failed determination and a value beside it is ignored"
+  },
+  {
+   "name": "shared-id-value-then-average",
+   "instance_key": "alpha",
+   "remote_device": "d:_n:synthetic-remote",
+   "entity": [
+    1
+   ],
+   "description_notified": true,
+   "descriptions": [
+    {
+     "measurementId": 1,
+     "scopeType": "dhwTemperature",
+     "unit": "degC"
+    }
+   ],
+   "data": [
+    {
+     "measurementId": 1,
+     "valueType": "value",
+     "value": {
+      "number": 475,
+      "scale": -1
+     }
+    },
+    {
+     "measurementId": 1,
+     "valueType": "averageValue",
+     "value": {
+      "number": 999
+     }
+    }
+   ],
+   "expect": {
+    "outcome": "fact",
+    "fact_key": "thermal.measurement.dhw_temperature",
+    "decimal": "320.65"
+   },
+   "source": "SPINE 1.3.0 4.3.16 Tables 93, 94: only the valueType value entry is the current reading"
+  },
+  {
+   "name": "shared-id-average-then-value",
+   "instance_key": "alpha",
+   "remote_device": "d:_n:synthetic-remote",
+   "entity": [
+    1
+   ],
+   "description_notified": true,
+   "descriptions": [
+    {
+     "measurementId": 1,
+     "scopeType": "dhwTemperature",
+     "unit": "degC"
+    }
+   ],
+   "data": [
+    {
+     "measurementId": 1,
+     "valueType": "averageValue",
+     "value": {
+      "number": 999
+     }
+    },
+    {
+     "measurementId": 1,
+     "valueType": "value",
+     "value": {
+      "number": 475,
+      "scale": -1
+     }
+    }
+   ],
+   "expect": {
+    "outcome": "fact",
+    "fact_key": "thermal.measurement.dhw_temperature",
+    "decimal": "320.65"
+   },
+   "source": "SPINE 1.3.0 4.3.16 Tables 93, 94: only the valueType value entry is the current reading"
+  },
+  {
+   "name": "shared-id-value-error-average-normal",
+   "instance_key": "alpha",
+   "remote_device": "d:_n:synthetic-remote",
+   "entity": [
+    1
+   ],
+   "description_notified": true,
+   "descriptions": [
+    {
+     "measurementId": 1,
+     "scopeType": "dhwTemperature",
+     "unit": "degC"
+    }
+   ],
+   "data": [
+    {
+     "measurementId": 1,
+     "valueType": "value",
+     "value": {
+      "number": 475,
+      "scale": -1
+     },
+     "valueState": "error"
+    },
+    {
+     "measurementId": 1,
+     "valueType": "averageValue",
+     "value": {
+      "number": 999
+     },
+     "valueState": "normal"
+    }
+   ],
+   "expect": {
+    "outcome": "failed_determination"
+   },
+   "source": "SPINE Resource Specification 1.3.0 4.3.16 Table 93, Table 97: the error sits on the selected value entry whatever the aggregate carries"
+  },
+  {
+   "name": "shared-id-only-average",
+   "instance_key": "alpha",
+   "remote_device": "d:_n:synthetic-remote",
+   "entity": [
+    1
+   ],
+   "description_notified": true,
+   "descriptions": [
+    {
+     "measurementId": 1,
+     "scopeType": "dhwTemperature",
+     "unit": "degC"
+    }
+   ],
+   "data": [
+    {
+     "measurementId": 1,
+     "valueType": "averageValue",
+     "value": {
+      "number": 475,
+      "scale": -1
+     }
+    }
+   ],
+   "expect": {
+    "outcome": "unknown"
+   },
+   "source": "SPINE 1.3.0 4.3.16 Tables 93, 94, 97: an aggregate is never the current reading"
+  },
+  {
+   "name": "second-instance-value-480-scale-minus1",
+   "instance_key": "beta",
+   "remote_device": "d:_n:synthetic-remote",
+   "entity": [
+    1
+   ],
+   "description_notified": true,
+   "descriptions": [
+    {
+     "measurementId": 1,
+     "scopeType": "dhwTemperature",
+     "unit": "degC"
+    }
+   ],
+   "data": [
+    {
+     "measurementId": 1,
+     "valueType": "value",
+     "value": {
+      "number": 480,
+      "scale": -1
+     }
+    }
+   ],
+   "expect": {
+    "outcome": "fact",
+    "fact_key": "thermal.measurement.dhw_temperature",
+    "decimal": "321.15"
+   },
+   "source": "SPINE 1.3.0 3.10.1.8: 480 x 10^-1 = 48 degC; 48 + 273.15 = 321.15 K"
+  }
+ ],
+ "outbound": [
+  {
+   "name": "kelvin-320.65",
+   "instance_key": "alpha",
+   "input": {
+    "state": "value",
+    "kelvin": "320.65"
+   },
+   "expect": {
+    "entry": "value",
+    "represented": "47.5",
+    "number": 475,
+    "scale": -1,
+    "description": {
+     "measurementType": "temperature",
+     "scopeType": "dhwTemperature",
+     "unit": "degC"
+    }
+   },
+   "source": "SPINE 1.3.0 3.10.1.8, 4.3.16 Tables 93, 100, 101: 320.65 - 273.15 = 47.5"
+  },
+  {
+   "name": "kelvin-321.15",
+   "instance_key": "alpha",
+   "input": {
+    "state": "value",
+    "kelvin": "321.15"
+   },
+   "expect": {
+    "entry": "value",
+    "represented": "48",
+    "description": {
+     "measurementType": "temperature",
+     "scopeType": "dhwTemperature",
+     "unit": "degC"
+    }
+   },
+   "source": "SPINE 1.3.0 3.10.1.8, 4.3.16 Tables 93, 100, 101: 321.15 - 273.15 = 48"
+  },
+  {
+   "name": "value-absent",
+   "instance_key": "alpha",
+   "input": {
+    "state": "absent",
+    "kelvin": null
+   },
+   "expect": {
+    "entry": "omitted",
+    "description": {
+     "measurementType": "temperature",
+     "scopeType": "dhwTemperature",
+     "unit": "degC"
+    }
+   },
+   "source": "SPINE 1.3.0 4.3.16 Table 93: with no value and no failed determination the entry may be omitted"
+  },
+  {
+   "name": "determination-failed",
+   "instance_key": "alpha",
+   "input": {
+    "state": "failed_determination",
+    "kelvin": null
+   },
+   "expect": {
+    "entry": "error",
+    "description": {
+     "measurementType": "temperature",
+     "scopeType": "dhwTemperature",
+     "unit": "degC"
+    }
+   },
+   "source": "SPINE 1.3.0 4.3.16 Table 93, Table 97: the entry is retained with valueState error and no value"
+  }
+ ]
+}

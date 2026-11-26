@@ -799,10 +799,16 @@ func assertCanonicalManifest(t *testing.T, data []byte, fixtureRoot string) {
 	if manifest.Module != "example.test/registry" {
 		t.Fatalf("unexpected module: %q", manifest.Module)
 	}
-	if len(manifest.Packages) != 1 {
+	var fixturePackages []manifestPackage
+	for _, candidate := range manifest.Packages {
+		if candidate.ImportPath != "example.test/registry/driver/examples/peer" {
+			fixturePackages = append(fixturePackages, candidate)
+		}
+	}
+	if len(fixturePackages) != 1 {
 		t.Fatalf("want one public package, got %#v", manifest.Packages)
 	}
-	pkg := manifest.Packages[0]
+	pkg := fixturePackages[0]
 	if pkg.ImportPath != "example.test/registry/eebusraw" || pkg.Name != "eebusraw" {
 		t.Fatalf("unexpected public package: %#v", pkg)
 	}
@@ -1100,6 +1106,27 @@ func newSyntheticRepository(t *testing.T) string {
 	writeFile(t, root, "README.md", minimalREADME)
 	writeFile(t, root, "AGENTS.md", "Synthetic repository instructions.\n")
 	writeFile(t, root, "eebusraw/doc.go", "// Package eebusraw defines raw eeBUS data contracts.\npackage eebusraw\n")
+	inventoryData, err := os.ReadFile(filepath.Join("testdata", "exports", "driver.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stubLines []string
+	for _, entry := range strings.Split(strings.TrimSpace(string(inventoryData)), "\n") {
+		kind, name, _ := strings.Cut(entry, " ")
+		receiver, method, hasMethod := strings.Cut(name, ".")
+		switch {
+		case kind == "const":
+			stubLines = append(stubLines, "const "+name+" = 0")
+		case kind == "type":
+			stubLines = append(stubLines, "type "+name+" struct{}")
+		case hasMethod:
+			stubLines = append(stubLines, "func (*"+receiver+") "+method+"() {}")
+		default:
+			stubLines = append(stubLines, "func "+name+"() {}")
+		}
+	}
+	sort.Strings(stubLines)
+	writeFile(t, root, "driver/examples/peer/peer_rows.go", "package peer\n\n"+strings.Join(stubLines, "\n")+"\n")
 	runGit(t, root, nil, "init", "-q")
 	runGit(t, root, nil, "config", "core.ignorecase", "false")
 	runGit(t, root, nil, "add", "--", ".")

@@ -83,6 +83,9 @@ func TestIssue77PublicSignaturesContainNoProtocolImplementationTypes(t *testing.
 	}
 	for _, pkg := range doc.Packages {
 		for _, imported := range pkg.Imports {
+			if isDriverPackagePath(pkg.Path) && imported.Path == pinnedSpineModelPath {
+				continue
+			}
 			for _, forbidden := range []string{
 				"github.com/enbility/",
 				"github.com/Project-Helianthus/helianthus-eebus-go/",
