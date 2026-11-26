@@ -1,0 +1,30 @@
+{
+  "family_id": "eebus-inbound",
+  "name": "eeBUS inbound",
+  "native_owner": "Project-Helianthus/helianthus-eebusreg",
+  "semantic_pack": "",
+  "state": "unknown",
+  "composition": "composed_legacy",
+  "reason": "unknown_pending_normative_source",
+  "evidence": [
+    {
+      "owner": "Project-Helianthus/helianthus-eebusreg@cdfdf0c",
+      "kind": "native_registry",
+      "locator": "README.md",
+      "statement": "native end to end (runtime v2, raw and evidence packages); exact SHIP/SPINE/use-case revisions unresolved; physical verification Unknown"
+    },
+    {
+      "owner": "Project-Helianthus/helianthus-docs-semantic@30f5e5c",
+      "kind": "semantic_contract",
+      "locator": "compatibility/donor-ledger.md",
+      "statement": "eeBUS remains unknown_pending_normative_source in every pack; no normative mapping or conformance claim"
+    },
+    {
+      "owner": "Project-Helianthus/helianthus-ebusgateway@e017a547967e449ffbe76ea779d5892596306f07",
+      "kind": "gateway_composition",
+      "locator": "cmd/gateway/eebus_promoted_semantic.go",
+      "statement": "wireEEBusPromotedSemanticGraphQL composes graphql.NewPromotedSemanticProvider(base, promoted.Overlay): promoted overlay over the legacy semantic provider"
+    }
+  ],
+  "composition_verified": true
+}
