@@ -645,8 +645,8 @@ func TestRemoteUseCasesKeyVariesEverySkiEntityUseCaseAndMeasurement(t *testing.T
 
 func TestRemoteUseCasesRegistrationStopsClientsAndDropsQueuedEvents(t *testing.T) {
 	rig := newUseCaseRig(t, "h", strings.Repeat("3", 40), 3, announceBoth(scenarioRange(7), scenarioRange(5)))
-	if len(rig.service.added) != 2 {
-		t.Fatalf("registered use cases = %d, want 2", len(rig.service.added))
+	if len(rig.service.added) != 6 {
+		t.Fatalf("registered use cases = %d, want 6", len(rig.service.added))
 	}
 	added := spineapi.EventPayload{
 		Ski: rig.ski, Device: rig.peer, Entity: rig.entity,
@@ -754,5 +754,415 @@ func TestRemoteUseCasesTwoRuntimesKeepTheirRequestsAndEventsApart(t *testing.T) 
 	}
 	if got := useCaseObservationsByKey(t, b.snapshot()); len(got) != 0 {
 		t.Fatalf("stopped instance b recorded %+v", got)
+	}
+}
+
+type chargingRig struct {
+	*useCaseRig
+	evse *spine.EntityRemote
+	ev   *spine.EntityRemote
+	ec   *spine.FeatureRemote
+}
+
+func newChargingRig(t *testing.T, name, ski string, evseScenarios, evccScenarios, evcemScenarios, evsocScenarios []spinemodel.UseCaseScenarioSupportType) *chargingRig {
+	t.Helper()
+	rig := newUseCaseRig(t, name, ski, 9, nil)
+	charging := &chargingRig{useCaseRig: rig}
+	charging.evse = spine.NewEntityRemote(rig.peer, spinemodel.EntityTypeTypeEVSE, []spinemodel.AddressEntityType{1})
+	rig.peer.AddEntity(charging.evse)
+	charging.ev = spine.NewEntityRemote(rig.peer, spinemodel.EntityTypeTypeEV, []spinemodel.AddressEntityType{1, 1})
+	rig.peer.AddEntity(charging.ev)
+	charging.ec = spine.NewFeatureRemote(7, charging.ev, spinemodel.FeatureTypeTypeElectricalConnection, spinemodel.RoleTypeServer)
+	charging.ec.SetOperations([]spinemodel.FunctionPropertyType{{
+		Function:           util.Ptr(spinemodel.FunctionTypeElectricalConnectionCharacteristicListData),
+		PossibleOperations: &spinemodel.PossibleOperationsType{Read: &spinemodel.PossibleOperationsReadType{}},
+	}})
+	charging.ev.AddFeature(charging.ec)
+	diagnosis := spine.NewFeatureRemote(8, charging.evse, spinemodel.FeatureTypeTypeDeviceDiagnosis, spinemodel.RoleTypeServer)
+	charging.evse.AddFeature(diagnosis)
+	data := &spinemodel.NodeManagementUseCaseDataType{}
+	if evseScenarios != nil {
+		data.AddUseCaseSupport(*diagnosis.Address(), spinemodel.UseCaseActorTypeEVSE,
+			spinemodel.UseCaseNameTypeEVSECommissioningAndConfiguration, "1.0.1", "release", true, evseScenarios)
+	}
+	for _, announcement := range []struct {
+		name      spinemodel.UseCaseNameType
+		scenarios []spinemodel.UseCaseScenarioSupportType
+	}{
+		{spinemodel.UseCaseNameTypeEVCommissioningAndConfiguration, evccScenarios},
+		{spinemodel.UseCaseNameTypeMeasurementOfElectricityDuringEVCharging, evcemScenarios},
+		{spinemodel.UseCaseNameTypeEVStateOfCharge, evsocScenarios},
+	} {
+		if announcement.scenarios != nil {
+			data.AddUseCaseSupport(*charging.ec.Address(), spinemodel.UseCaseActorTypeEV, announcement.name, "1.0.1", "release", true, announcement.scenarios)
+		}
+	}
+	rig.publishDirect(t, rig.useCaseEvent(data, spinemodel.CmdClassifierTypeReply))
+	return charging
+}
+
+func (rig *chargingRig) feed(t *testing.T, entity spineapi.EntityRemoteInterface, function spinemodel.FunctionType, data any, classifier spinemodel.CmdClassifierType) {
+	t.Helper()
+	payload := rig.dataEvent(function, data, classifier)
+	payload.Entity = entity
+	rig.publishDirect(t, payload)
+}
+
+func (rig *chargingRig) entities() map[string]RemoteMonitoringEntity {
+	out := map[string]RemoteMonitoringEntity{}
+	for _, entity := range rig.snapshot().Entities {
+		out[entity.EntityType+"/"+entity.UseCase] = entity
+	}
+	return out
+}
+
+func observationNamed(entity RemoteMonitoringEntity, scenario uint, name, phase string) (RemoteMonitoringObservation, bool) {
+	for _, observation := range entity.Observations {
+		if observation.Scenario == scenario && observation.Name == name && observation.Phase == phase {
+			return observation, true
+		}
+	}
+	return RemoteMonitoringObservation{}, false
+}
+
+func feedChargingData(t *testing.T, rig *chargingRig, classifier spinemodel.CmdClassifierType) {
+	t.Helper()
+	text := func(value string) *spinemodel.DeviceClassificationStringType {
+		v := spinemodel.DeviceClassificationStringType(value)
+		return &v
+	}
+	label := spinemodel.LabelType("evse label")
+	rig.feed(t, rig.evse, spinemodel.FunctionTypeDeviceClassificationManufacturerData, &spinemodel.DeviceClassificationManufacturerDataType{
+		DeviceName: text("evse-name"), DeviceCode: text("evse-code"), SerialNumber: text("evse-serial"), SoftwareRevision: text("evse-sw"),
+		HardwareRevision: text("evse-hw"), VendorName: text("evse-vendor"), VendorCode: text("evse-vendor-code"),
+		BrandName: text("evse-brand"), ManufacturerLabel: &label,
+	}, classifier)
+	state, failure := spinemodel.DeviceDiagnosisOperatingStateTypeFailure, spinemodel.LastErrorCodeType("E7: überlast \"x\"")
+	rig.feed(t, rig.evse, spinemodel.FunctionTypeDeviceDiagnosisStateData,
+		&spinemodel.DeviceDiagnosisStateDataType{OperatingState: &state, LastErrorCode: &failure}, classifier)
+
+	standardKey, asymmetricKey := spinemodel.DeviceConfigurationKeyIdType(1), spinemodel.DeviceConfigurationKeyIdType(2)
+	standard, asymmetric := spinemodel.DeviceConfigurationKeyNameTypeCommunicationsStandard, spinemodel.DeviceConfigurationKeyNameTypeAsymmetricChargingSupported
+	rig.feed(t, rig.ev, spinemodel.FunctionTypeDeviceConfigurationKeyValueDescriptionListData, &spinemodel.DeviceConfigurationKeyValueDescriptionListDataType{
+		DeviceConfigurationKeyValueDescriptionData: []spinemodel.DeviceConfigurationKeyValueDescriptionDataType{
+			{KeyId: &standardKey, KeyName: &standard}, {KeyId: &asymmetricKey, KeyName: &asymmetric},
+		}}, classifier)
+	iso, yes := spinemodel.DeviceConfigurationKeyValueStringType("iso15118-2ed2"), true
+	rig.feed(t, rig.ev, spinemodel.FunctionTypeDeviceConfigurationKeyValueListData, &spinemodel.DeviceConfigurationKeyValueListDataType{
+		DeviceConfigurationKeyValueData: []spinemodel.DeviceConfigurationKeyValueDataType{
+			{KeyId: &standardKey, Value: &spinemodel.DeviceConfigurationKeyValueValueType{String: &iso}},
+			{KeyId: &asymmetricKey, Value: &spinemodel.DeviceConfigurationKeyValueValueType{Boolean: &yes}},
+		}}, classifier)
+	euiShortID, euiLongID := spinemodel.IdentificationIdType(1), spinemodel.IdentificationIdType(2)
+	euiShortType, euiLongType := spinemodel.IdentificationTypeTypeEui48, spinemodel.IdentificationTypeTypeEui64
+	euiShortValue, euiLongValue := spinemodel.IdentificationValueType("AA-BB-CC-DD-EE-FF"), spinemodel.IdentificationValueType("00-11-22-33-44-55-66-77")
+	rig.feed(t, rig.ev, spinemodel.FunctionTypeIdentificationListData, &spinemodel.IdentificationListDataType{IdentificationData: []spinemodel.IdentificationDataType{
+		{IdentificationId: &euiShortID, IdentificationType: &euiShortType, IdentificationValue: &euiShortValue},
+		{IdentificationId: &euiLongID, IdentificationType: &euiLongType, IdentificationValue: &euiLongValue},
+	}}, classifier)
+	rig.feed(t, rig.ev, spinemodel.FunctionTypeDeviceClassificationManufacturerData, &spinemodel.DeviceClassificationManufacturerDataType{
+		DeviceName: text("ev-name"), VendorName: text("ev-vendor"),
+	}, classifier)
+	standby := spinemodel.DeviceDiagnosisOperatingStateTypeStandby
+	rig.feed(t, rig.ev, spinemodel.FunctionTypeDeviceDiagnosisStateData, &spinemodel.DeviceDiagnosisStateDataType{OperatingState: &standby}, classifier)
+	feedChargingElectrical(t, rig, classifier)
+}
+
+func feedChargingElectrical(t *testing.T, rig *chargingRig, classifier spinemodel.CmdClassifierType) {
+	t.Helper()
+	phases := uint(3)
+	one, totalParameter, currentAParameter, currentBParameter, powerParameter := spinemodel.ElectricalConnectionIdType(1), spinemodel.ElectricalConnectionParameterIdType(1),
+		spinemodel.ElectricalConnectionParameterIdType(2), spinemodel.ElectricalConnectionParameterIdType(3), spinemodel.ElectricalConnectionParameterIdType(4)
+	rig.feed(t, rig.ev, spinemodel.FunctionTypeElectricalConnectionDescriptionListData, &spinemodel.ElectricalConnectionDescriptionListDataType{
+		ElectricalConnectionDescriptionData: []spinemodel.ElectricalConnectionDescriptionDataType{{ElectricalConnectionId: &one, AcConnectedPhases: &phases}},
+	}, classifier)
+	total := spinemodel.ScopeTypeTypeACPowerTotal
+	phaseA, phaseB := spinemodel.ElectricalConnectionPhaseNameTypeA, spinemodel.ElectricalConnectionPhaseNameTypeB
+	currentAMeasurement, currentBMeasurement, powerMeasurement, energyMeasurement := spinemodel.MeasurementIdType(1), spinemodel.MeasurementIdType(2), spinemodel.MeasurementIdType(3), spinemodel.MeasurementIdType(4)
+	rig.feed(t, rig.ev, spinemodel.FunctionTypeElectricalConnectionParameterDescriptionListData, &spinemodel.ElectricalConnectionParameterDescriptionListDataType{
+		ElectricalConnectionParameterDescriptionData: []spinemodel.ElectricalConnectionParameterDescriptionDataType{
+			{ElectricalConnectionId: &one, ParameterId: &totalParameter, ScopeType: &total},
+			{ElectricalConnectionId: &one, ParameterId: &currentAParameter, MeasurementId: &currentAMeasurement, AcMeasuredPhases: &phaseA},
+			{ElectricalConnectionId: &one, ParameterId: &currentBParameter, MeasurementId: &currentBMeasurement, AcMeasuredPhases: &phaseB},
+			{ElectricalConnectionId: &one, ParameterId: &powerParameter, MeasurementId: &powerMeasurement, AcMeasuredPhases: &phaseA},
+		},
+	}, classifier)
+	number := func(n int64, scale int) spinemodel.ScaledNumberType {
+		value, exponent := spinemodel.NumberType(n), spinemodel.ScaleType(scale)
+		return spinemodel.ScaledNumberType{Number: &value, Scale: &exponent}
+	}
+	minimum, maximum := number(1380, 0), number(11, 3)
+	rig.feed(t, rig.ev, spinemodel.FunctionTypeElectricalConnectionPermittedValueSetListData, &spinemodel.ElectricalConnectionPermittedValueSetListDataType{
+		ElectricalConnectionPermittedValueSetData: []spinemodel.ElectricalConnectionPermittedValueSetDataType{{
+			ElectricalConnectionId: &one, ParameterId: &totalParameter,
+			PermittedValueSet: []spinemodel.ScaledNumberSetType{{
+				Range: []spinemodel.ScaledNumberRangeType{{Min: &minimum, Max: &maximum}}, Value: []spinemodel.ScaledNumberType{number(5, 0)},
+			}},
+		}},
+	}, classifier)
+	capacity := number(64, 3)
+	context, kind, unit := spinemodel.ElectricalConnectionCharacteristicContextTypeEntity,
+		spinemodel.ElectricalConnectionCharacteristicTypeTypeEnergyCapacityNominalMax, spinemodel.UnitOfMeasurementTypeWh
+	rig.feed(t, rig.ev, spinemodel.FunctionTypeElectricalConnectionCharacteristicListData, &spinemodel.ElectricalConnectionCharacteristicListDataType{
+		ElectricalConnectionCharacteristicData: []spinemodel.ElectricalConnectionCharacteristicDataType{{
+			ElectricalConnectionId: &one, ParameterId: &totalParameter, CharacteristicContext: &context, CharacteristicType: &kind, Value: &capacity, Unit: &unit,
+		}},
+	}, classifier)
+	noCommodity := func(description spinemodel.MeasurementDescriptionDataType) spinemodel.MeasurementDescriptionDataType {
+		description.CommodityType = nil
+		return description
+	}
+	rig.feed(t, rig.ev, spinemodel.FunctionTypeMeasurementDescriptionListData, &spinemodel.MeasurementDescriptionListDataType{
+		MeasurementDescriptionData: []spinemodel.MeasurementDescriptionDataType{
+			useCaseDescription(1, spinemodel.MeasurementTypeTypeCurrent, spinemodel.ScopeTypeTypeACCurrent, spinemodel.UnitOfMeasurementTypeA),
+			useCaseDescription(2, spinemodel.MeasurementTypeTypeCurrent, spinemodel.ScopeTypeTypeACCurrent, spinemodel.UnitOfMeasurementTypeA),
+			useCaseDescription(3, spinemodel.MeasurementTypeTypePower, spinemodel.ScopeTypeTypeACPower, spinemodel.UnitOfMeasurementTypeW),
+			useCaseDescription(4, spinemodel.MeasurementTypeTypeEnergy, spinemodel.ScopeTypeTypeCharge, spinemodel.UnitOfMeasurementTypeWh),
+			useCaseDescription(5, spinemodel.MeasurementTypeTypePercentage, spinemodel.ScopeTypeTypeStateOfCharge, spinemodel.UnitOfMeasurementTypepct),
+			noCommodity(useCaseDescription(6, spinemodel.MeasurementTypeTypePercentage, spinemodel.ScopeTypeTypeStateOfHealth, spinemodel.UnitOfMeasurementTypepct)),
+			noCommodity(useCaseDescription(7, spinemodel.MeasurementTypeTypeDistance, spinemodel.ScopeTypeTypeTravelRange, spinemodel.UnitOfMeasurementTypem)),
+		},
+	}, classifier)
+	rig.feed(t, rig.ev, spinemodel.FunctionTypeMeasurementListData, &spinemodel.MeasurementListDataType{MeasurementData: []spinemodel.MeasurementDataType{
+		useCaseValue(1, 160, -1), useCaseValue(2, 170, -1), useCaseValue(3, 3680, 0), useCaseValue(4, 12345, 0),
+		useCaseValue(5, 55, 0), useCaseValue(6, 97, 0), useCaseValue(7, 312, 3),
+	}}, classifier)
+	_, _ = energyMeasurement, one
+}
+
+func TestRemoteUseCasesServeEveryEVSEAndEVScenario(t *testing.T) {
+	rig := newChargingRig(t, "c1", strings.Repeat("c", 40), scenarioRange(2), scenarioRange(8), scenarioRange(3), scenarioRange(4))
+	feedChargingData(t, rig, spinemodel.CmdClassifierTypeReply)
+	remote := rig.snapshot()
+	if len(remote.Entities) != 4 {
+		t.Fatalf("entities = %+v", remote.Entities)
+	}
+	if first := remote.Entities[0]; first.EntityType != "EVSE" || len(first.ParentAddress) != 0 {
+		t.Fatalf("first entity = %+v, want the EVSE without a parent", first)
+	}
+	for _, entity := range remote.Entities[1:] {
+		if entity.EntityType != "EV" || len(entity.EntityAddress) != 2 || len(entity.ParentAddress) != 1 || entity.ParentAddress[0] != 1 {
+			t.Fatalf("EV entity = %+v, want address 1.1 listed under parent 1", entity)
+		}
+	}
+	type want struct {
+		entity   string
+		scenario uint
+		name     string
+		phase    string
+		kind     string
+		number   float64
+		text     string
+		flag     bool
+		unit     string
+	}
+	const evse, evcc, evcem, evsoc = "EVSE/evseCommissioningAndConfiguration", "EV/evCommissioningAndConfiguration",
+		"EV/measurementOfElectricityDuringEvCharging", "EV/evStateOfCharge"
+	wants := []want{
+		{evse, 1, "deviceName", "", "text", 0, "evse-name", false, ""},
+		{evse, 1, "deviceCode", "", "text", 0, "evse-code", false, ""},
+		{evse, 1, "serialNumber", "", "text", 0, "evse-serial", false, ""},
+		{evse, 1, "softwareRevision", "", "text", 0, "evse-sw", false, ""},
+		{evse, 1, "hardwareRevision", "", "text", 0, "evse-hw", false, ""},
+		{evse, 1, "vendorName", "", "text", 0, "evse-vendor", false, ""},
+		{evse, 1, "vendorCode", "", "text", 0, "evse-vendor-code", false, ""},
+		{evse, 1, "brandName", "", "text", 0, "evse-brand", false, ""},
+		{evse, 1, "manufacturerLabel", "", "text", 0, "evse label", false, ""},
+		{evse, 2, "operatingState", "", "text", 0, "failure", false, ""},
+		{evse, 2, "lastErrorCode", "", "text", 0, "E7: überlast \"x\"", false, ""},
+		{evcc, 1, "connected", "", "boolean", 0, "", true, ""},
+		{evcc, 2, "communicationStandard", "", "text", 0, "iso15118-2ed2", false, ""},
+		{evcc, 3, "asymmetricChargingSupported", "", "boolean", 0, "", true, ""},
+		{evcc, 4, "identificationEui48", "", "text", 0, "AA-BB-CC-DD-EE-FF", false, ""},
+		{evcc, 4, "identificationEui64", "", "text", 0, "00-11-22-33-44-55-66-77", false, ""},
+		{evcc, 5, "deviceName", "", "text", 0, "ev-name", false, ""},
+		{evcc, 5, "vendorName", "", "text", 0, "ev-vendor", false, ""},
+		{evcc, 6, "minimumChargingPower", "", "number", 1380, "", false, "W"},
+		{evcc, 6, "maximumChargingPower", "", "number", 11000, "", false, "W"},
+		{evcc, 6, "standbyChargingPower", "", "number", 5, "", false, "W"},
+		{evcc, 7, "chargeState", "", "text", 0, "standby", false, ""},
+		{evcc, 7, "sleepMode", "", "boolean", 0, "", true, ""},
+		{evcem, 1, "phasesConnected", "", "number", 3, "", false, ""},
+		{evcem, 1, "currentPerPhase", "a", "number", 16, "", false, "A"},
+		{evcem, 1, "currentPerPhase", "b", "number", 17, "", false, "A"},
+		{evcem, 2, "powerPerPhase", "", "number", 0, "", false, "W"},
+		{evcem, 3, "energyCharged", "", "number", 12345, "", false, "Wh"},
+		{evsoc, 1, "stateOfCharge", "", "number", 55, "", false, "%"},
+		{evsoc, 2, "nominalCapacity", "", "number", 64000, "", false, "Wh"},
+		{evsoc, 3, "stateOfHealth", "", "number", 97, "", false, "%"},
+		{evsoc, 4, "travelRange", "", "number", 312000, "", false, "m"},
+	}
+	entities := rig.entities()
+	for _, expected := range wants {
+		if expected.name == "powerPerPhase" {
+			expected.phase, expected.number = "a", 3680
+		}
+		observation, ok := observationNamed(entities[expected.entity], expected.scenario, expected.name, expected.phase)
+		if !ok {
+			t.Errorf("%s scenario %d %s %s missing", expected.entity, expected.scenario, expected.name, expected.phase)
+			continue
+		}
+		if observation.Kind != expected.kind || observation.Number != expected.number || observation.Text != expected.text ||
+			observation.Boolean != expected.flag || observation.Unit != expected.unit || observation.Stale ||
+			observation.Source != RemoteMonitoringSourceReply || !observation.Updated.Equal(rig.clock.Now()) {
+			t.Errorf("%s %s = %+v, want %+v", expected.entity, expected.name, observation, expected)
+		}
+	}
+}
+
+func TestRemoteUseCasesAbsentChargingValueIsAbsentNeverZero(t *testing.T) {
+	rig := newChargingRig(t, "c2", strings.Repeat("b", 40), scenarioRange(2), scenarioRange(8), scenarioRange(3), scenarioRange(4))
+	name := spinemodel.DeviceClassificationStringType("only-name")
+	rig.feed(t, rig.evse, spinemodel.FunctionTypeDeviceClassificationManufacturerData,
+		&spinemodel.DeviceClassificationManufacturerDataType{DeviceName: &name}, spinemodel.CmdClassifierTypeReply)
+	entities := rig.entities()
+	if got := entities["EVSE/evseCommissioningAndConfiguration"].Observations; len(got) != 1 || got[0].Text != "only-name" {
+		t.Fatalf("EVSE observations = %+v, want only the served device name", got)
+	}
+	for _, key := range []string{"EV/evCommissioningAndConfiguration", "EV/measurementOfElectricityDuringEvCharging", "EV/evStateOfCharge"} {
+		observations := entities[key].Observations
+		if key == "EV/evCommissioningAndConfiguration" && len(observations) == 1 && observations[0].Name == "connected" {
+			continue
+		}
+		if len(observations) != 0 {
+			t.Errorf("%s served %+v without any data", key, observations)
+		}
+	}
+}
+
+func TestRemoteUseCasesReplyOnlyChargingValuesKeepReplyTimeAndTurnStale(t *testing.T) {
+	rig := newChargingRig(t, "c3", strings.Repeat("d", 40), scenarioRange(2), nil, nil, scenarioRange(4))
+	repliedAt := rig.clock.Now()
+	text := func(value string) *spinemodel.DeviceClassificationStringType {
+		v := spinemodel.DeviceClassificationStringType(value)
+		return &v
+	}
+	rig.feed(t, rig.evse, spinemodel.FunctionTypeDeviceClassificationManufacturerData, &spinemodel.DeviceClassificationManufacturerDataType{
+		DeviceName: text("  exact name  "), VendorName: text("Ünï \"v\""),
+	}, spinemodel.CmdClassifierTypeReply)
+	rig.clock.set(repliedAt.Add(time.Hour))
+	one, totalParameter := spinemodel.ElectricalConnectionIdType(1), spinemodel.ElectricalConnectionParameterIdType(1)
+	value, scale := spinemodel.NumberType(64), spinemodel.ScaleType(3)
+	context, kind, unit := spinemodel.ElectricalConnectionCharacteristicContextTypeEntity,
+		spinemodel.ElectricalConnectionCharacteristicTypeTypeEnergyCapacityNominalMax, spinemodel.UnitOfMeasurementTypeWh
+	rig.feed(t, rig.ev, spinemodel.FunctionTypeElectricalConnectionCharacteristicListData, &spinemodel.ElectricalConnectionCharacteristicListDataType{
+		ElectricalConnectionCharacteristicData: []spinemodel.ElectricalConnectionCharacteristicDataType{{
+			ElectricalConnectionId: &one, ParameterId: &totalParameter, CharacteristicContext: &context, CharacteristicType: &kind,
+			Value: &spinemodel.ScaledNumberType{Number: &value, Scale: &scale}, Unit: &unit,
+		}},
+	}, spinemodel.CmdClassifierTypeReply)
+	before := rig.entities()
+	rig.sessions.set(1, false)
+	disconnected := map[string]RemoteMonitoringEntity{}
+	for _, entity := range rig.useCases.snapshot([]runtimeGraphObservation{rig.observation(false)}).Remotes[0].Entities {
+		disconnected[entity.EntityType+"/"+entity.UseCase] = entity
+	}
+	for key, name := range map[string]string{"EVSE/evseCommissioningAndConfiguration": "deviceName", "EV/evStateOfCharge": "nominalCapacity"} {
+		scenario := uint(1)
+		if name == "nominalCapacity" {
+			scenario = 2
+		}
+		live, _ := observationNamed(before[key], scenario, name, "")
+		kept, ok := observationNamed(disconnected[key], scenario, name, "")
+		if !ok || live.Stale || !kept.Stale || kept.Updated != live.Updated || kept.Text != live.Text || kept.Number != live.Number ||
+			kept.Source != RemoteMonitoringSourceReply {
+			t.Errorf("%s before = %+v, after disconnect = %+v", name, live, kept)
+		}
+	}
+	if observation, _ := observationNamed(before["EVSE/evseCommissioningAndConfiguration"], 1, "deviceName", ""); observation.Text != "  exact name  " ||
+		!observation.Updated.Equal(repliedAt) {
+		t.Errorf("manufacturer data = %+v, want the exact text with the reply time", observation)
+	}
+	if observation, _ := observationNamed(before["EV/evStateOfCharge"], 2, "nominalCapacity", ""); observation.Number != 64000 ||
+		observation.Unit != "Wh" || !observation.Updated.Equal(repliedAt.Add(time.Hour)) {
+		t.Errorf("nominal capacity = %+v, want 64000 Wh at its own reply time", observation)
+	}
+}
+
+func TestRemoteUseCasesFailureTextIsReplacedByTheNextStateReply(t *testing.T) {
+	rig := newChargingRig(t, "c4", strings.Repeat("e", 40), []spinemodel.UseCaseScenarioSupportType{2}, nil, nil, nil)
+	failure, code := spinemodel.DeviceDiagnosisOperatingStateTypeFailure, spinemodel.LastErrorCodeType("E-17")
+	rig.feed(t, rig.evse, spinemodel.FunctionTypeDeviceDiagnosisStateData,
+		&spinemodel.DeviceDiagnosisStateDataType{OperatingState: &failure, LastErrorCode: &code}, spinemodel.CmdClassifierTypeNotify)
+	entity := rig.entities()["EVSE/evseCommissioningAndConfiguration"]
+	if text, ok := observationNamed(entity, 2, "lastErrorCode", ""); !ok || text.Text != "E-17" || text.Source != RemoteMonitoringSourceNotify {
+		t.Fatalf("failure text = %+v, %v", text, ok)
+	}
+	normal := spinemodel.DeviceDiagnosisOperatingStateTypeNormalOperation
+	rig.feed(t, rig.evse, spinemodel.FunctionTypeDeviceDiagnosisStateData,
+		&spinemodel.DeviceDiagnosisStateDataType{OperatingState: &normal}, spinemodel.CmdClassifierTypeReply)
+	entity = rig.entities()["EVSE/evseCommissioningAndConfiguration"]
+	if _, ok := observationNamed(entity, 2, "lastErrorCode", ""); ok {
+		t.Fatalf("a cleared failure text is still served: %+v", entity.Observations)
+	}
+}
+
+func TestRemoteUseCasesEVRemovalDropsOnlyTheEV(t *testing.T) {
+	rig := newChargingRig(t, "c5", strings.Repeat("f", 40), scenarioRange(2), scenarioRange(1), nil, nil)
+	rig.publishDirect(t, spineapi.EventPayload{
+		Ski: rig.ski, Device: rig.peer, Entity: rig.ev, EventType: spineapi.EventTypeEntityChange, ChangeType: spineapi.ElementChangeRemove,
+		Data: &spinemodel.NodeManagementDetailedDiscoveryDataType{},
+	})
+	entities := rig.entities()
+	if _, ok := entities["EV/evCommissioningAndConfiguration"]; ok {
+		t.Fatalf("a disconnected EV is still listed: %+v", entities)
+	}
+	if _, ok := entities["EVSE/evseCommissioningAndConfiguration"]; !ok {
+		t.Fatalf("the EVSE disappeared with its EV: %+v", entities)
+	}
+}
+
+func TestRemoteUseCasesNominalCapacityIsReadOncePerConnection(t *testing.T) {
+	rig := newChargingRig(t, "c6", strings.Repeat("a", 40), nil, nil, nil, scenarioRange(4))
+	reads := func() (count int) {
+		for _, call := range rig.sender.snapshot() {
+			if call.class == spinemodel.CmdClassifierTypeRead && strings.Contains(call.destination, "7") {
+				count++
+			}
+		}
+		return count
+	}
+	if got := reads(); got != 1 {
+		t.Fatalf("characteristic reads = %d, want 1: %+v", got, rig.sender.snapshot())
+	}
+	data := &spinemodel.NodeManagementUseCaseDataType{}
+	data.AddUseCaseSupport(*rig.ec.Address(), spinemodel.UseCaseActorTypeEV, spinemodel.UseCaseNameTypeEVStateOfCharge, "1.0.0", "RC1", true, scenarioRange(4))
+	rig.publishDirect(t, rig.useCaseEvent(data, spinemodel.CmdClassifierTypeNotify))
+	if got := reads(); got != 1 {
+		t.Fatalf("a repeated announcement sent a duplicate read: %d", got)
+	}
+	rig.sessions.set(2, true)
+	rig.publishDirect(t, rig.useCaseEvent(data, spinemodel.CmdClassifierTypeReply))
+	if got := reads(); got != 2 {
+		t.Fatalf("reads after reconnect = %d, want 2", got)
+	}
+}
+
+func TestRemoteUseCasesChargingKeyVariesEntityUseCaseScenarioAndPhase(t *testing.T) {
+	rig := newChargingRig(t, "c7", strings.Repeat("9", 40), scenarioRange(1), []spinemodel.UseCaseScenarioSupportType{5}, nil, nil)
+	evseName, evName := spinemodel.DeviceClassificationStringType("same-field-evse"), spinemodel.DeviceClassificationStringType("same-field-ev")
+	rig.feed(t, rig.evse, spinemodel.FunctionTypeDeviceClassificationManufacturerData,
+		&spinemodel.DeviceClassificationManufacturerDataType{DeviceName: &evseName}, spinemodel.CmdClassifierTypeReply)
+	rig.feed(t, rig.ev, spinemodel.FunctionTypeDeviceClassificationManufacturerData,
+		&spinemodel.DeviceClassificationManufacturerDataType{DeviceName: &evName}, spinemodel.CmdClassifierTypeReply)
+	entities := rig.entities()
+	if got, _ := observationNamed(entities["EVSE/evseCommissioningAndConfiguration"], 1, "deviceName", ""); got.Text != "same-field-evse" {
+		t.Errorf("EVSE device name = %+v", got)
+	}
+	if got, _ := observationNamed(entities["EV/evCommissioningAndConfiguration"], 5, "deviceName", ""); got.Text != "same-field-ev" {
+		t.Errorf("EV device name = %+v", got)
+	}
+	if _, ok := observationNamed(entities["EV/evCommissioningAndConfiguration"], 1, "deviceName", ""); ok {
+		t.Errorf("a scenario the EV does not announce served manufacturer data")
+	}
+	other := newChargingRig(t, "c8", strings.Repeat("8", 40), []spinemodel.UseCaseScenarioSupportType{1}, nil, nil, nil)
+	otherName := spinemodel.DeviceClassificationStringType("same-field-other-remote")
+	other.feed(t, other.evse, spinemodel.FunctionTypeDeviceClassificationManufacturerData,
+		&spinemodel.DeviceClassificationManufacturerDataType{DeviceName: &otherName}, spinemodel.CmdClassifierTypeReply)
+	if got, _ := observationNamed(other.entities()["EVSE/evseCommissioningAndConfiguration"], 1, "deviceName", ""); got.Text != "same-field-other-remote" {
+		t.Errorf("second remote device name = %+v", got)
+	}
+	if got, _ := observationNamed(rig.entities()["EVSE/evseCommissioningAndConfiguration"], 1, "deviceName", ""); got.Text != "same-field-evse" {
+		t.Errorf("first remote device name changed to %+v", got)
 	}
 }

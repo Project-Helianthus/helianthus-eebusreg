@@ -1,9 +1,11 @@
 package eebusfacade
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,6 +13,11 @@ import (
 	"time"
 
 	eebusapi "github.com/Project-Helianthus/helianthus-eebus-go/api"
+	"github.com/Project-Helianthus/helianthus-eebus-go/features/client"
+	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/cem/evcc"
+	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/cem/evcem"
+	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/cem/evsecc"
+	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/cem/evsoc"
 	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/ma/mgcp"
 	"github.com/Project-Helianthus/helianthus-eebus-go/usecases/ma/mpc"
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
@@ -22,6 +29,13 @@ import (
 const (
 	RemoteMonitoringSourceReply  = "reply"
 	RemoteMonitoringSourceNotify = "notify"
+)
+
+// RemoteMonitoringKindNumber, RemoteMonitoringKindText and RemoteMonitoringKindBoolean name the source type of an observation.
+const (
+	RemoteMonitoringKindNumber  = "number"
+	RemoteMonitoringKindText    = "text"
+	RemoteMonitoringKindBoolean = "boolean"
 )
 
 var errRemoteMonitoringUnavailable = errors.New("remote monitoring is unavailable")
@@ -57,6 +71,7 @@ type RemoteMonitoringEntity struct {
 	DeviceAddress string
 	DeviceType    string
 	EntityAddress []uint64
+	ParentAddress []uint64
 	EntityType    string
 	UseCase       string
 	Actor         string
@@ -64,12 +79,15 @@ type RemoteMonitoringEntity struct {
 	Observations  []RemoteMonitoringObservation
 }
 
-// RemoteMonitoringObservation is one value with its unit, update time, source message and stale flag.
+// RemoteMonitoringObservation is one value in its source type with its unit, update time, source message and stale flag.
 type RemoteMonitoringObservation struct {
 	Scenario uint
 	Name     string
 	Phase    string
+	Kind     string
 	Number   float64
+	Text     string
+	Boolean  bool
 	Unit     string
 	Updated  time.Time
 	Source   string
@@ -96,9 +114,15 @@ type remoteUseCaseRule struct {
 	unit        string
 	perPhase    bool
 	configKey   spinemodel.DeviceConfigurationKeyNameType
+	kind        string
+	named       string
+	derive      string
+	limit       string
+	sourceUnit  string
+	anyCommod   bool
 }
 
-var remoteUseCaseRules = []remoteUseCaseRule{
+var monitoringUseCaseRules = []remoteUseCaseRule{
 	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint,
 		scenario: 1, name: "powerLimitationFactor", unit: "%", configKey: spinemodel.DeviceConfigurationKeyNameTypePvCurtailmentLimitFactor},
 	{useCase: spinemodel.UseCaseNameTypeMonitoringOfGridConnectionPoint, actor: spinemodel.UseCaseActorTypeGridConnectionPoint,
@@ -129,8 +153,60 @@ var remoteUseCaseRules = []remoteUseCaseRule{
 		scenario: 5, name: "frequency", measurement: spinemodel.MeasurementTypeTypeFrequency, scope: spinemodel.ScopeTypeTypeACFrequency, unit: "Hz"},
 }
 
+var manufacturerFields = []string{
+	"deviceName", "deviceCode", "serialNumber", "softwareRevision", "hardwareRevision",
+	"vendorName", "vendorCode", "brandName", "manufacturerLabel", "manufacturerDescription",
+}
+
+func chargingUseCaseRules() []remoteUseCaseRule {
+	evse, ev := spinemodel.UseCaseActorTypeEVSE, spinemodel.UseCaseActorTypeEV
+	evsecc, evcc := spinemodel.UseCaseNameTypeEVSECommissioningAndConfiguration, spinemodel.UseCaseNameTypeEVCommissioningAndConfiguration
+	evcem, evsoc := spinemodel.UseCaseNameTypeMeasurementOfElectricityDuringEVCharging, spinemodel.UseCaseNameTypeEVStateOfCharge
+	text := RemoteMonitoringKindText
+	rules := []remoteUseCaseRule{
+		{useCase: evsecc, actor: evse, scenario: 2, name: "operatingState", named: "operatingState", kind: text},
+		{useCase: evsecc, actor: evse, scenario: 2, name: "lastErrorCode", named: "lastErrorCode", kind: text},
+		{useCase: evcc, actor: ev, scenario: 1, name: "connected", derive: "connected", kind: RemoteMonitoringKindBoolean},
+		{useCase: evcc, actor: ev, scenario: 2, name: "communicationStandard", kind: text,
+			configKey: spinemodel.DeviceConfigurationKeyNameTypeCommunicationsStandard},
+		{useCase: evcc, actor: ev, scenario: 3, name: "asymmetricChargingSupported", kind: RemoteMonitoringKindBoolean,
+			configKey: spinemodel.DeviceConfigurationKeyNameTypeAsymmetricChargingSupported},
+		{useCase: evcc, actor: ev, scenario: 4, name: "identification", named: "identification", kind: text},
+		{useCase: evcc, actor: ev, scenario: 6, name: "minimumChargingPower", limit: "min", unit: "W"},
+		{useCase: evcc, actor: ev, scenario: 6, name: "maximumChargingPower", limit: "max", unit: "W"},
+		{useCase: evcc, actor: ev, scenario: 6, name: "standbyChargingPower", limit: "standby", unit: "W"},
+		{useCase: evcc, actor: ev, scenario: 7, name: "chargeState", named: "operatingState", kind: text},
+		{useCase: evcc, actor: ev, scenario: 7, name: "sleepMode", derive: "sleepMode", kind: RemoteMonitoringKindBoolean},
+		{useCase: evcem, actor: ev, scenario: 1, name: "phasesConnected", named: "phasesConnected"},
+		{useCase: evcem, actor: ev, scenario: 1, name: "currentPerPhase", measurement: spinemodel.MeasurementTypeTypeCurrent,
+			scope: spinemodel.ScopeTypeTypeACCurrent, unit: "A", perPhase: true},
+		{useCase: evcem, actor: ev, scenario: 2, name: "powerPerPhase", measurement: spinemodel.MeasurementTypeTypePower,
+			scope: spinemodel.ScopeTypeTypeACPower, unit: "W", perPhase: true},
+		{useCase: evcem, actor: ev, scenario: 3, name: "energyCharged", measurement: spinemodel.MeasurementTypeTypeEnergy,
+			scope: spinemodel.ScopeTypeTypeCharge, unit: "Wh"},
+		{useCase: evsoc, actor: ev, scenario: 1, name: "stateOfCharge", measurement: spinemodel.MeasurementTypeTypePercentage,
+			scope: spinemodel.ScopeTypeTypeStateOfCharge, unit: "%", sourceUnit: "pct"},
+		{useCase: evsoc, actor: ev, scenario: 2, name: "nominalCapacity", named: "nominalCapacity", unit: "Wh"},
+		{useCase: evsoc, actor: ev, scenario: 3, name: "stateOfHealth", measurement: spinemodel.MeasurementTypeTypePercentage,
+			scope: spinemodel.ScopeTypeTypeStateOfHealth, unit: "%", sourceUnit: "pct", anyCommod: true},
+		{useCase: evsoc, actor: ev, scenario: 4, name: "travelRange", measurement: spinemodel.MeasurementTypeTypeDistance,
+			scope: spinemodel.ScopeTypeTypeTravelRange, unit: "m", anyCommod: true},
+	}
+	for _, field := range manufacturerFields {
+		rules = append(rules,
+			remoteUseCaseRule{useCase: evsecc, actor: evse, scenario: 1, name: field, named: field, kind: text},
+			remoteUseCaseRule{useCase: evcc, actor: ev, scenario: 5, name: field, named: field, kind: text})
+	}
+	return rules
+}
+
+var remoteUseCaseRules = append(append([]remoteUseCaseRule(nil), monitoringUseCaseRules...), chargingUseCaseRules()...)
+
 type remoteRetainedValue struct {
+	kind    string
 	number  float64
+	text    string
+	flag    bool
 	at      time.Time
 	source  string
 	session uint64
@@ -146,6 +222,7 @@ type remoteRetainedDescription struct {
 type remoteRetainedAnnouncement struct {
 	actor     spinemodel.UseCaseActorType
 	scenarios []uint
+	announced remoteRetainedValue
 }
 
 type remoteRetainedEntity struct {
@@ -157,6 +234,10 @@ type remoteRetainedEntity struct {
 	keyNames      map[uint]spinemodel.DeviceConfigurationKeyNameType
 	measurements  map[uint]remoteRetainedValue
 	config        map[uint]remoteRetainedValue
+	named         map[string]remoteRetainedValue
+	scopes        map[uint]spinemodel.ScopeTypeType
+	limits        map[uint]map[string]remoteRetainedValue
+	requested     uint64
 }
 
 type remoteRetainedRemote struct {
@@ -169,6 +250,7 @@ type remoteUseCases struct {
 	mu      sync.Mutex
 	stopped bool
 	local   spineapi.DeviceLocalInterface
+	cem     spineapi.EntityLocalInterface
 	now     func() time.Time
 	revoked func(string) bool
 	session func(string) (uint64, bool)
@@ -192,18 +274,28 @@ func registerRemoteUseCases(
 		return nil, errors.New("local CEM entity is unavailable for use case registration")
 	}
 	callback := func(string, spineapi.DeviceRemoteInterface, spineapi.EntityRemoteInterface, eebusapi.EventType) {}
+	libraryService, _ := service.(eebusapi.ServiceInterface)
 	grid := mgcp.NewMGCP(cem, callback)
 	consumption := mpc.NewMPC(cem, callback)
+	evseConfiguration := evsecc.NewEVSECC(cem, callback)
+	evConfiguration := evcc.NewEVCC(libraryService, cem, callback)
+	evMeasurement := evcem.NewEVCEM(libraryService, cem, callback)
+	evCharge := evsoc.NewEVSOC(cem, callback)
 	useCases := &remoteUseCases{
-		local: local, now: now, revoked: revoked, session: session,
+		local: local, cem: cem, now: now, revoked: revoked, session: session,
 		remotes: make(map[string]*remoteRetainedRemote),
 		clients: []remoteUseCaseClient{
 			{client: grid, base: grid.UseCaseBase, stop: grid.Stop},
 			{client: consumption, base: consumption.UseCaseBase, stop: consumption.Stop},
+			{client: evseConfiguration, base: evseConfiguration.UseCaseBase, stop: evseConfiguration.Stop},
+			{client: evConfiguration, base: evConfiguration.UseCaseBase, stop: evConfiguration.Stop},
+			{client: evMeasurement, base: evMeasurement.UseCaseBase, stop: evMeasurement.Stop},
+			{client: evCharge, base: evCharge.UseCaseBase, stop: evCharge.Stop},
 		},
 	}
-	adder.AddUseCase(grid)
-	adder.AddUseCase(consumption)
+	for _, client := range useCases.clients {
+		adder.AddUseCase(client.client.(eebusapi.UseCaseInterface))
+	}
 	if err := spine.Events.Subscribe(useCases); err != nil {
 		useCases.stop()
 		return nil, err
@@ -253,6 +345,10 @@ func remoteEntityKey(address []spinemodel.AddressEntityType) ([]uint64, string) 
 }
 
 func (useCases *remoteUseCases) HandleEvent(payload spineapi.EventPayload) {
+	if payload.EventType == spineapi.EventTypeEntityChange && payload.ChangeType == spineapi.ElementChangeRemove {
+		useCases.entityRemoved(payload)
+		return
+	}
 	if payload.EventType != spineapi.EventTypeDataChange || payload.CmdClassifier == nil {
 		return
 	}
@@ -282,63 +378,65 @@ func (useCases *remoteUseCases) HandleEvent(payload spineapi.EventPayload) {
 	if useCases.session != nil {
 		index, _ = useCases.session(ski)
 	}
-	at := useCases.now()
+	value := remoteRetainedValue{at: useCases.now(), source: source, session: index}
+	for _, entity := range useCases.record(ski, payload, value) {
+		useCases.requestCharacteristics(entity)
+	}
+}
+
+func (useCases *remoteUseCases) entityRemoved(payload spineapi.EventPayload) {
+	ski := strings.ToLower(strings.TrimSpace(payload.Ski))
+	if !useCases.owns(payload) || isNilRawRuntimeValue(payload.Entity) || payload.Entity.Address() == nil {
+		return
+	}
+	_, key := remoteEntityKey(payload.Entity.Address().Entity)
+	useCases.mu.Lock()
+	defer useCases.mu.Unlock()
+	remote := useCases.remotes[ski]
+	if useCases.stopped || remote == nil {
+		return
+	}
+	for existing := range remote.entities {
+		if existing == key || strings.HasPrefix(existing, key+".") {
+			delete(remote.entities, existing)
+		}
+	}
+}
+
+func (useCases *remoteUseCases) record(
+	ski string, payload spineapi.EventPayload, value remoteRetainedValue,
+) []spineapi.EntityRemoteInterface {
 	useCases.mu.Lock()
 	defer useCases.mu.Unlock()
 	if useCases.stopped {
-		return
+		return nil
 	}
 	remote := useCases.remoteLocked(ski, payload.Device)
 	if nodeData, ok := payload.Data.(*spinemodel.NodeManagementUseCaseDataType); ok {
-		useCases.recordAnnouncements(remote, payload.Device, nodeData)
-		return
+		return useCases.recordAnnouncements(remote, payload.Device, nodeData, value)
 	}
-	if isNilRawRuntimeValue(payload.Entity) {
-		return
+	if isNilRawRuntimeValue(payload.Entity) || payload.Entity.Address() == nil {
+		return nil
 	}
-	address := payload.Entity.Address()
-	if address == nil {
-		return
-	}
-	entity := remote.entityLocked(address.Entity, string(payload.Entity.EntityType()))
-	value := func(number float64) remoteRetainedValue {
-		return remoteRetainedValue{number: number, at: at, source: source, session: index}
-	}
-	switch data := payload.Data.(type) {
+	entity := remote.entityLocked(payload.Entity.Address().Entity, string(payload.Entity.EntityType()))
+	entity.record(payload.Data, value)
+	return nil
+}
+
+func (value remoteRetainedValue) asNumber(number float64) remoteRetainedValue {
+	value.kind, value.number = RemoteMonitoringKindNumber, number
+	return value
+}
+
+func (value remoteRetainedValue) asText(text string) remoteRetainedValue {
+	value.kind, value.text = RemoteMonitoringKindText, text
+	return value
+}
+
+func (entity *remoteRetainedEntity) record(data any, value remoteRetainedValue) {
+	switch data := data.(type) {
 	case *spinemodel.MeasurementDescriptionListDataType:
-		for _, item := range data.MeasurementDescriptionData {
-			if item.MeasurementId == nil {
-				continue
-			}
-			description := remoteRetainedDescription{}
-			if item.MeasurementType != nil {
-				description.measurement = *item.MeasurementType
-			}
-			if item.CommodityType != nil {
-				description.commodity = *item.CommodityType
-			}
-			if item.ScopeType != nil {
-				description.scope = *item.ScopeType
-			}
-			if item.Unit != nil {
-				description.unit = string(*item.Unit)
-			}
-			entity.descriptions[uint(*item.MeasurementId)] = description
-		}
-	case *spinemodel.ElectricalConnectionParameterDescriptionListDataType:
-		for _, item := range data.ElectricalConnectionParameterDescriptionData {
-			if item.MeasurementId == nil || item.AcMeasuredPhases == nil {
-				continue
-			}
-			entity.phases[uint(*item.MeasurementId)] = string(*item.AcMeasuredPhases)
-		}
-	case *spinemodel.DeviceConfigurationKeyValueDescriptionListDataType:
-		for _, item := range data.DeviceConfigurationKeyValueDescriptionData {
-			if item.KeyId == nil || item.KeyName == nil {
-				continue
-			}
-			entity.keyNames[uint(*item.KeyId)] = *item.KeyName
-		}
+		entity.recordMeasurementDescriptions(data)
 	case *spinemodel.MeasurementListDataType:
 		for _, item := range data.MeasurementData {
 			if item.MeasurementId == nil || item.Value == nil || item.Value.Number == nil {
@@ -347,17 +445,178 @@ func (useCases *remoteUseCases) HandleEvent(payload spineapi.EventPayload) {
 			if item.ValueType != nil && *item.ValueType != spinemodel.MeasurementValueTypeTypeValue {
 				continue
 			}
-			entity.measurements[uint(*item.MeasurementId)] = value(item.Value.GetValue())
+			entity.measurements[uint(*item.MeasurementId)] = value.asNumber(item.Value.GetValue())
+		}
+	case *spinemodel.DeviceConfigurationKeyValueDescriptionListDataType:
+		for _, item := range data.DeviceConfigurationKeyValueDescriptionData {
+			if item.KeyId != nil && item.KeyName != nil {
+				entity.keyNames[uint(*item.KeyId)] = *item.KeyName
+			}
 		}
 	case *spinemodel.DeviceConfigurationKeyValueListDataType:
-		for _, item := range data.DeviceConfigurationKeyValueData {
-			if item.KeyId == nil || item.Value == nil || item.Value.ScaledNumber == nil ||
-				item.Value.ScaledNumber.Number == nil {
-				continue
+		entity.recordConfiguration(data, value)
+	default:
+		entity.recordElectricalAndText(data, value)
+	}
+}
+
+func remoteSortedKeys[K cmp.Ordered, V any](items map[K]V) []K {
+	keys := make([]K, 0, len(items))
+	for key := range items {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func remoteDeref[T any](item *T) (zero T) {
+	if item == nil {
+		return zero
+	}
+	return *item
+}
+
+func (entity *remoteRetainedEntity) recordMeasurementDescriptions(data *spinemodel.MeasurementDescriptionListDataType) {
+	for _, item := range data.MeasurementDescriptionData {
+		if item.MeasurementId != nil {
+			entity.descriptions[uint(*item.MeasurementId)] = remoteRetainedDescription{
+				measurement: remoteDeref(item.MeasurementType), commodity: remoteDeref(item.CommodityType),
+				scope: remoteDeref(item.ScopeType), unit: string(remoteDeref(item.Unit)),
 			}
-			entity.config[uint(*item.KeyId)] = value(item.Value.ScaledNumber.GetValue())
 		}
 	}
+}
+
+func (entity *remoteRetainedEntity) recordConfiguration(
+	data *spinemodel.DeviceConfigurationKeyValueListDataType, value remoteRetainedValue,
+) {
+	for _, item := range data.DeviceConfigurationKeyValueData {
+		if item.KeyId == nil || item.Value == nil {
+			continue
+		}
+		id := uint(*item.KeyId)
+		switch {
+		case item.Value.ScaledNumber != nil && item.Value.ScaledNumber.Number != nil:
+			entity.config[id] = value.asNumber(item.Value.ScaledNumber.GetValue())
+		case item.Value.String != nil:
+			entity.config[id] = value.asText(string(*item.Value.String))
+		case item.Value.Boolean != nil:
+			stored := value
+			stored.kind, stored.flag = RemoteMonitoringKindBoolean, *item.Value.Boolean
+			entity.config[id] = stored
+		}
+	}
+}
+
+func (entity *remoteRetainedEntity) recordElectricalAndText(data any, value remoteRetainedValue) {
+	switch data := data.(type) {
+	case *spinemodel.ElectricalConnectionParameterDescriptionListDataType:
+		for _, item := range data.ElectricalConnectionParameterDescriptionData {
+			if item.MeasurementId != nil && item.AcMeasuredPhases != nil {
+				entity.phases[uint(*item.MeasurementId)] = string(*item.AcMeasuredPhases)
+			}
+			if item.ParameterId != nil && item.ScopeType != nil {
+				entity.scopes[uint(*item.ParameterId)] = *item.ScopeType
+			}
+		}
+	case *spinemodel.ElectricalConnectionPermittedValueSetListDataType:
+		entity.recordPermittedValues(data, value)
+	case *spinemodel.ElectricalConnectionDescriptionListDataType:
+		for _, item := range data.ElectricalConnectionDescriptionData {
+			if item.AcConnectedPhases != nil {
+				entity.named["phasesConnected"] = value.asNumber(float64(*item.AcConnectedPhases))
+			}
+		}
+	case *spinemodel.ElectricalConnectionCharacteristicListDataType:
+		for _, item := range data.ElectricalConnectionCharacteristicData {
+			if item.CharacteristicContext == nil || *item.CharacteristicContext != spinemodel.ElectricalConnectionCharacteristicContextTypeEntity ||
+				item.CharacteristicType == nil || *item.CharacteristicType != spinemodel.ElectricalConnectionCharacteristicTypeTypeEnergyCapacityNominalMax ||
+				item.Value == nil || item.Value.Number == nil || (item.Unit != nil && *item.Unit != spinemodel.UnitOfMeasurementTypeWh) {
+				continue
+			}
+			entity.named["nominalCapacity"] = value.asNumber(item.Value.GetValue())
+		}
+	case *spinemodel.DeviceClassificationManufacturerDataType:
+		entity.recordManufacturer(data, value)
+	case *spinemodel.DeviceDiagnosisStateDataType:
+		entity.recordState(data, value)
+	case *spinemodel.IdentificationListDataType:
+		for _, item := range data.IdentificationData {
+			if item.IdentificationId == nil || item.IdentificationType == nil || item.IdentificationValue == nil {
+				continue
+			}
+			key := fmt.Sprintf("identification/%s/%010d", *item.IdentificationType, uint64(*item.IdentificationId))
+			entity.named[key] = value.asText(string(*item.IdentificationValue))
+		}
+	}
+}
+
+func (entity *remoteRetainedEntity) recordPermittedValues(
+	data *spinemodel.ElectricalConnectionPermittedValueSetListDataType, value remoteRetainedValue,
+) {
+	for _, item := range data.ElectricalConnectionPermittedValueSetData {
+		if item.ParameterId == nil || len(item.PermittedValueSet) == 0 {
+			continue
+		}
+		set, limits := item.PermittedValueSet[0], map[string]*spinemodel.ScaledNumberType{}
+		if len(set.Range) > 0 {
+			limits["min"], limits["max"] = set.Range[0].Min, set.Range[0].Max
+		}
+		if len(set.Value) > 0 {
+			limits["standby"] = &set.Value[0]
+		}
+		if entity.limits[uint(*item.ParameterId)] == nil {
+			entity.limits[uint(*item.ParameterId)] = make(map[string]remoteRetainedValue)
+		}
+		for name, number := range limits {
+			if number != nil && number.Number != nil {
+				entity.limits[uint(*item.ParameterId)][name] = value.asNumber(number.GetValue())
+			}
+		}
+	}
+}
+
+func remoteText[T ~string](item *T) *string {
+	if item == nil {
+		return nil
+	}
+	text := string(*item)
+	return &text
+}
+
+func (entity *remoteRetainedEntity) recordManufacturer(data *spinemodel.DeviceClassificationManufacturerDataType, value remoteRetainedValue) {
+	for name, text := range map[string]*string{
+		"deviceName": remoteText(data.DeviceName), "deviceCode": remoteText(data.DeviceCode),
+		"serialNumber": remoteText(data.SerialNumber), "softwareRevision": remoteText(data.SoftwareRevision),
+		"hardwareRevision": remoteText(data.HardwareRevision), "vendorName": remoteText(data.VendorName),
+		"vendorCode": remoteText(data.VendorCode), "brandName": remoteText(data.BrandName),
+		"manufacturerLabel": remoteText(data.ManufacturerLabel), "manufacturerDescription": remoteText(data.ManufacturerDescription),
+	} {
+		if text != nil {
+			entity.named[name] = value.asText(*text)
+		}
+	}
+}
+
+func (entity *remoteRetainedEntity) recordState(data *spinemodel.DeviceDiagnosisStateDataType, value remoteRetainedValue) {
+	if value.source == RemoteMonitoringSourceReply {
+		delete(entity.named, "operatingState")
+		delete(entity.named, "lastErrorCode")
+	}
+	if data.OperatingState != nil {
+		entity.named["operatingState"] = value.asText(string(*data.OperatingState))
+	}
+	if data.LastErrorCode != nil {
+		entity.named["lastErrorCode"] = value.asText(string(*data.LastErrorCode))
+	}
+}
+
+func (useCases *remoteUseCases) requestCharacteristics(entity spineapi.EntityRemoteInterface) {
+	electrical, err := client.NewElectricalConnection(useCases.cem, entity)
+	if err != nil || electrical == nil {
+		return
+	}
+	_, _ = electrical.RequestCharacteristics(nil, nil)
 }
 
 func (useCases *remoteUseCases) remoteLocked(ski string, device spineapi.DeviceRemoteInterface) *remoteRetainedRemote {
@@ -387,6 +646,9 @@ func (remote *remoteRetainedRemote) entityLocked(address []spinemodel.AddressEnt
 			keyNames:      make(map[uint]spinemodel.DeviceConfigurationKeyNameType),
 			measurements:  make(map[uint]remoteRetainedValue),
 			config:        make(map[uint]remoteRetainedValue),
+			named:         make(map[string]remoteRetainedValue),
+			scopes:        make(map[uint]spinemodel.ScopeTypeType),
+			limits:        make(map[uint]map[string]remoteRetainedValue),
 		}
 		remote.entities[key] = entity
 	}
@@ -400,10 +662,16 @@ func (useCases *remoteUseCases) recordAnnouncements(
 	remote *remoteRetainedRemote,
 	device spineapi.DeviceRemoteInterface,
 	data *spinemodel.NodeManagementUseCaseDataType,
-) {
-	for _, entity := range remote.entities {
+	value remoteRetainedValue,
+) []spineapi.EntityRemoteInterface {
+	previous := make(map[string]remoteRetainedValue)
+	for key, entity := range remote.entities {
+		for name, announcement := range entity.announcements {
+			previous[key+"/"+string(name)] = announcement.announced
+		}
 		clear(entity.announcements)
 	}
+	var pending []spineapi.EntityRemoteInterface
 	for _, information := range data.UseCaseInformation {
 		if information.Address == nil || information.Actor == nil {
 			continue
@@ -415,8 +683,9 @@ func (useCases *remoteUseCases) recordAnnouncements(
 			if support.UseCaseAvailable != nil && !*support.UseCaseAvailable {
 				continue
 			}
+			known := device.Entity(information.Address.Entity)
 			entityType := ""
-			if known := device.Entity(information.Address.Entity); !isNilRawRuntimeValue(known) {
+			if !isNilRawRuntimeValue(known) {
 				entityType = string(known.EntityType())
 			}
 			entity := remote.entityLocked(information.Address.Entity, entityType)
@@ -425,11 +694,22 @@ func (useCases *remoteUseCases) recordAnnouncements(
 				scenarios = append(scenarios, uint(scenario))
 			}
 			sort.Slice(scenarios, func(i, j int) bool { return scenarios[i] < scenarios[j] })
+			_, key := remoteEntityKey(information.Address.Entity)
+			announced, seen := previous[key+"/"+string(*support.UseCaseName)]
+			if !seen || announced.session != value.session {
+				announced = value
+			}
 			entity.announcements[*support.UseCaseName] = remoteRetainedAnnouncement{
-				actor: *information.Actor, scenarios: scenarios,
+				actor: *information.Actor, scenarios: scenarios, announced: announced,
+			}
+			if *support.UseCaseName == spinemodel.UseCaseNameTypeEVStateOfCharge && !isNilRawRuntimeValue(known) &&
+				slices.Contains(scenarios, 2) && entity.requested != value.session+1 {
+				entity.requested = value.session + 1
+				pending = append(pending, known)
 			}
 		}
 	}
+	return pending
 }
 
 func remoteUseCaseKnown(name spinemodel.UseCaseNameType, actor spinemodel.UseCaseActorType) bool {
@@ -439,6 +719,13 @@ func remoteUseCaseKnown(name spinemodel.UseCaseNameType, actor spinemodel.UseCas
 		}
 	}
 	return false
+}
+
+func (entity *remoteRetainedEntity) parentAddress() []uint64 {
+	if len(entity.address) < 2 {
+		return nil
+	}
+	return append([]uint64(nil), entity.address[:len(entity.address)-1]...)
 }
 
 func (useCases *remoteUseCases) entitiesFor(
@@ -454,26 +741,24 @@ func (useCases *remoteUseCases) entitiesFor(
 	for key := range remote.entities {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(i, j int) bool {
+		return slices.Compare(remote.entities[keys[i]].address, remote.entities[keys[j]].address) < 0
+	})
 	var out []RemoteMonitoringEntity
 	for _, key := range keys {
 		entity := remote.entities[key]
-		names := make([]string, 0, len(entity.announcements))
-		for name := range entity.announcements {
-			names = append(names, string(name))
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			announcement := entity.announcements[spinemodel.UseCaseNameType(name)]
+		for _, name := range remoteSortedKeys(entity.announcements) {
+			announcement := entity.announcements[name]
 			out = append(out, RemoteMonitoringEntity{
 				DeviceAddress: remote.deviceAddress,
 				DeviceType:    remote.deviceType,
 				EntityAddress: append([]uint64(nil), entity.address...),
+				ParentAddress: entity.parentAddress(),
 				EntityType:    entity.entityType,
-				UseCase:       name,
+				UseCase:       string(name),
 				Actor:         string(announcement.actor),
 				Scenarios:     append([]uint(nil), announcement.scenarios...),
-				Observations:  entity.observations(spinemodel.UseCaseNameType(name), announcement, sessionIndex, connected),
+				Observations:  entity.observations(name, announcement, sessionIndex, connected),
 			})
 		}
 	}
@@ -490,57 +775,130 @@ func (entity *remoteRetainedEntity) observations(
 	for _, scenario := range announcement.scenarios {
 		announced[scenario] = true
 	}
-	observation := func(rule remoteUseCaseRule, phase string, retained remoteRetainedValue) RemoteMonitoringObservation {
-		return RemoteMonitoringObservation{
-			Scenario: rule.scenario, Name: rule.name, Phase: phase, Number: retained.number, Unit: rule.unit,
-			Updated: retained.at, Source: retained.source,
-			Stale: !connected || retained.session != sessionIndex,
-		}
-	}
 	var out []RemoteMonitoringObservation
 	for _, rule := range remoteUseCaseRules {
 		if rule.useCase != useCase || rule.actor != announcement.actor || !announced[rule.scenario] {
 			continue
 		}
-		if rule.configKey != "" {
-			ids := make([]uint, 0)
-			for id, name := range entity.keyNames {
-				if name == rule.configKey {
-					ids = append(ids, id)
-				}
+		for _, found := range entity.matches(rule, announcement) {
+			observation := rule.observation(found.phase, found.value, sessionIndex, connected)
+			if found.name != "" {
+				observation.Name = rule.name + strings.ToUpper(found.name[:1]) + found.name[1:]
 			}
-			sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-			for _, id := range ids {
-				if retained, ok := entity.config[id]; ok {
-					out = append(out, observation(rule, "", retained))
-					break
-				}
+			out = append(out, observation)
+		}
+	}
+	return out
+}
+
+type remoteRuleMatch struct {
+	phase string
+	value remoteRetainedValue
+	name  string
+}
+
+func (rule remoteUseCaseRule) observation(
+	phase string, retained remoteRetainedValue, sessionIndex uint64, connected bool,
+) RemoteMonitoringObservation {
+	kind := retained.kind
+	if kind == "" {
+		kind = RemoteMonitoringKindNumber
+	}
+	return RemoteMonitoringObservation{
+		Scenario: rule.scenario, Name: rule.name, Phase: phase, Kind: kind, Number: retained.number,
+		Text: retained.text, Boolean: retained.flag, Unit: rule.unit, Updated: retained.at, Source: retained.source,
+		Stale: !connected || retained.session != sessionIndex,
+	}
+}
+
+func (entity *remoteRetainedEntity) matches(rule remoteUseCaseRule, announcement remoteRetainedAnnouncement) []remoteRuleMatch {
+	switch {
+	case rule.derive != "":
+		return entity.derived(rule, announcement)
+	case rule.limit != "":
+		return entity.limitMatches(rule.limit)
+	case rule.named == "identification":
+		return entity.identifications()
+	case rule.named != "":
+		if retained, ok := entity.named[rule.named]; ok {
+			return []remoteRuleMatch{{value: retained}}
+		}
+		return nil
+	case rule.configKey != "":
+		return entity.configMatches(rule)
+	}
+	return entity.measurementMatches(rule)
+}
+
+func (entity *remoteRetainedEntity) derived(rule remoteUseCaseRule, announcement remoteRetainedAnnouncement) []remoteRuleMatch {
+	switch rule.derive {
+	case "connected":
+		connected := announcement.announced
+		connected.kind, connected.flag = RemoteMonitoringKindBoolean, true
+		return []remoteRuleMatch{{value: connected}}
+	case "sleepMode":
+		if state, ok := entity.named["operatingState"]; ok {
+			state.kind, state.flag, state.text = RemoteMonitoringKindBoolean, state.text == string(spinemodel.DeviceDiagnosisOperatingStateTypeStandby), ""
+			return []remoteRuleMatch{{value: state}}
+		}
+	}
+	return nil
+}
+
+func (entity *remoteRetainedEntity) limitMatches(limit string) []remoteRuleMatch {
+	for _, id := range remoteSortedKeys(entity.scopes) {
+		if retained, ok := entity.limits[id][limit]; ok && entity.scopes[id] == spinemodel.ScopeTypeTypeACPowerTotal {
+			return []remoteRuleMatch{{value: retained}}
+		}
+	}
+	return nil
+}
+
+func (entity *remoteRetainedEntity) identifications() []remoteRuleMatch {
+	var out []remoteRuleMatch
+	for _, key := range remoteSortedKeys(entity.named) {
+		if strings.HasPrefix(key, "identification/") {
+			out = append(out, remoteRuleMatch{value: entity.named[key], name: strings.Split(key, "/")[1]})
+		}
+	}
+	return out
+}
+
+func (entity *remoteRetainedEntity) configMatches(rule remoteUseCaseRule) []remoteRuleMatch {
+	for _, id := range remoteSortedKeys(entity.keyNames) {
+		if retained, ok := entity.config[id]; ok && entity.keyNames[id] == rule.configKey {
+			if rule.kind != "" && retained.kind != rule.kind {
+				return nil
 			}
+			return []remoteRuleMatch{{value: retained}}
+		}
+	}
+	return nil
+}
+
+func (entity *remoteRetainedEntity) measurementMatches(rule remoteUseCaseRule) []remoteRuleMatch {
+	sourceUnit := rule.sourceUnit
+	if sourceUnit == "" {
+		sourceUnit = rule.unit
+	}
+	var out []remoteRuleMatch
+	for _, id := range remoteSortedKeys(entity.descriptions) {
+		description := entity.descriptions[id]
+		if _, has := entity.measurements[id]; !has || description.measurement != rule.measurement || description.scope != rule.scope ||
+			(!rule.anyCommod && description.commodity != spinemodel.CommodityTypeTypeElectricity) ||
+			(description.unit != "" && description.unit != sourceUnit) {
 			continue
 		}
-		ids := make([]uint, 0)
-		for id, description := range entity.descriptions {
-			matches := description.measurement == rule.measurement &&
-				description.commodity == spinemodel.CommodityTypeTypeElectricity &&
-				description.scope == rule.scope &&
-				(description.unit == "" || description.unit == rule.unit)
-			if _, has := entity.measurements[id]; matches && has {
-				ids = append(ids, id)
+		phase := ""
+		if rule.perPhase {
+			var known bool
+			if phase, known = entity.phases[id]; !known {
+				continue
 			}
 		}
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-		for _, id := range ids {
-			phase := ""
-			if rule.perPhase {
-				var known bool
-				if phase, known = entity.phases[id]; !known {
-					continue
-				}
-			}
-			out = append(out, observation(rule, phase, entity.measurements[id]))
-			if !rule.perPhase {
-				break
-			}
+		out = append(out, remoteRuleMatch{phase: phase, value: entity.measurements[id]})
+		if !rule.perPhase {
+			break
 		}
 	}
 	return out
