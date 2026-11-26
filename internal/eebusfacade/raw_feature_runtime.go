@@ -458,18 +458,18 @@ func (bridge *rawFeatureRuntimeBridge) rawRemoteLease(
 }
 
 func (bridge *rawFeatureRuntimeBridge) retireRemote(ski string, generation uint64) {
-	ski = strings.ToLower(strings.TrimSpace(ski))
+	defer bridge.runRemoteSubscriptionActions()
 	bridge.mu.Lock()
-	lease := bridge.leasesBySKI[ski]
+	defer bridge.mu.Unlock()
+	lease := bridge.leasesBySKI[strings.ToLower(strings.TrimSpace(ski))]
 	if lease == nil || uint64(lease.generation) != generation {
-		bridge.mu.Unlock()
 		return
 	}
 	bridge.retireLeaseLocked(lease, true)
-	bridge.mu.Unlock()
 }
 
 func (bridge *rawFeatureRuntimeBridge) retireAll() {
+	defer bridge.runRemoteSubscriptionActions()
 	bridge.mu.Lock()
 	leases := make([]*rawRemoteLease, 0, len(bridge.leasesBySKI))
 	for _, lease := range bridge.leasesBySKI {

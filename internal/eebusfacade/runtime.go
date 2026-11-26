@@ -379,9 +379,10 @@ func (acquisition *runtimeAcquisition) openService(serializer runtimeSnapshotSer
 func (acquisition *runtimeAcquisition) closeRuntime(cause error) error {
 	releaseOutputService(acquisition.service)
 	acquisition.service.Shutdown()
+	subscriptionErr := acquisition.rawFeatures.closeRemoteSubscriptions()
 	attemptErr := acquisition.outgoingAttemptBridge.shutdown()
 	trustErr := acquisition.closeFirstTrust()
-	return errors.Join(cause, attemptErr, trustErr)
+	return errors.Join(cause, subscriptionErr, attemptErr, trustErr)
 }
 
 func (acquisition *runtimeAcquisition) bindRawFeatures() error {
@@ -401,6 +402,8 @@ func (acquisition *runtimeAcquisition) bindRawFeatures() error {
 		acquisition.rawConnectionGenerations,
 		acquisition.labProfiles,
 	)
+	acquisition.rawFeatures.attachRemoteSubscriptionsReporting(acquisition.stateRoot)
+	acquisition.rawFeatures.bindRemoteSubscriptionPairing(acquisition.firstTrust)
 	acquisition.handler.bindRawFeatureRuntime(acquisition.rawFeatures)
 	return nil
 }
@@ -858,6 +861,7 @@ func (backend *serviceBackend) Close() error {
 		releaseOutputService(backend.service)
 		backend.service.Shutdown()
 	}
+	subscriptionErr := backend.closeRemoteSubscriptions()
 	var attemptErr error
 	if backend.outgoingAttempts != nil {
 		attemptErr = backend.outgoingAttempts.shutdown()
@@ -867,7 +871,7 @@ func (backend *serviceBackend) Close() error {
 		trustErr = backend.firstTrust.Close()
 	}
 	backend.mu.Lock()
-	backend.closeErr = errors.Join(mutationErr, eventErr, attemptErr, trustErr)
+	backend.closeErr = errors.Join(mutationErr, eventErr, subscriptionErr, attemptErr, trustErr)
 	closeErr := backend.closeErr
 	if backend.closeDone != nil {
 		close(backend.closeDone)
