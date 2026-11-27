@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,11 +24,12 @@ const (
 )
 
 type opevLink struct {
-	mu     sync.Mutex
-	queue  chan []byte
-	done   chan struct{}
-	writes []model.LoadControlLimitDataType
-	writer shipapi.ShipConnectionDataWriterInterface
+	mu       sync.Mutex
+	inFlight atomic.Int64
+	queue    chan []byte
+	done     chan struct{}
+	writes   []model.LoadControlLimitDataType
+	writer   shipapi.ShipConnectionDataWriterInterface
 }
 
 func newOPEVLink(t *testing.T) *opevLink {
@@ -36,9 +38,11 @@ func newOPEVLink(t *testing.T) *opevLink {
 	t.Cleanup(func() { close(l.done) })
 	writer := shipmocks.NewShipConnectionDataWriterInterface(t)
 	writer.EXPECT().WriteShipMessageWithPayload("mock.Anything").Run(func(message []byte) {
+		l.inFlight.Add(1)
 		select {
 		case l.queue <- message:
 		case <-l.done:
+			l.inFlight.Add(-1)
 		}
 	}).Return().Maybe()
 	l.writer = writer
@@ -54,6 +58,7 @@ func (l *opevLink) deliver(to shipapi.ShipConnectionDataReaderInterface, observe
 					l.observe(message)
 				}
 				to.HandleShipPayloadMessage(message)
+				l.inFlight.Add(-1)
 			case <-l.done:
 				return
 			}
@@ -75,6 +80,8 @@ func (l *opevLink) observe(message []byte) {
 	}
 }
 
+func (l *opevLink) idle() bool { return l.inFlight.Load() == 0 }
+
 func (l *opevLink) Recorded() []model.LoadControlLimitDataType {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -83,6 +90,7 @@ func (l *opevLink) Recorded() []model.LoadControlLimitDataType {
 
 type recorder interface {
 	Recorded() []model.LoadControlLimitDataType
+	idle() bool
 }
 
 type opevFixture struct {
@@ -165,7 +173,11 @@ func newOPEVFixture(t *testing.T, descriptions []model.LoadControlLimitDescripti
 			return false
 		}
 		remoteEntity = device.Entity([]model.AddressEntityType{1})
-		return remoteEntity != nil && device.FeatureByEntityTypeAndRole(remoteEntity, model.FeatureTypeTypeElectricalConnection, model.RoleTypeServer) != nil
+		if remoteEntity == nil || device.FeatureByEntityTypeAndRole(remoteEntity, model.FeatureTypeTypeElectricalConnection, model.RoleTypeServer) == nil {
+			return false
+		}
+		address := device.Address()
+		return address != nil && *address == model.AddressDeviceType(opevPeerDev) && remoteEntity.Address() != nil
 	})
 	opev, err := newOPEV(opevKey, localEntity, remoteEntity)
 	if err != nil {
@@ -211,7 +223,27 @@ func (f *opevFixture) refresh(t *testing.T, ready func() bool) {
 	if err := f.opev.Request(); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the client holds the remote data", ready)
+	eventually(t, "the client holds the remote data", func() bool { return f.listsHeld() && ready() })
+}
+
+// listsHeld reports whether the client holds the lists a selection resolves
+// against besides the limit data, which every caller's ready check covers: the
+// limit descriptions and the phase parameters.
+func (f *opevFixture) listsHeld() bool {
+	core := f.opev.engine.(*opevCore)
+	descriptions, err := core.loads.GetLimitDescriptionsForFilter(model.LoadControlLimitDescriptionDataType{})
+	if err != nil || len(descriptions) == 0 {
+		return false
+	}
+	parameters, err := core.circuit.GetParameterDescriptionsForFilter(model.ElectricalConnectionParameterDescriptionDataType{})
+	return err == nil && len(parameters) > 0
+}
+
+// quiet waits until every message the client sent has reached the peer, so that a
+// check for writes that must not exist looks at the whole exchange.
+func (f *opevFixture) quiet(t *testing.T) {
+	t.Helper()
+	eventually(t, "every message of the client reached the peer", f.toPeer.idle)
 }
 
 func (f *opevFixture) holds(limit int, active bool, ampere float64) func() bool {
@@ -265,7 +297,7 @@ func TestPeerOPEVUnboundClientWritesNothing(t *testing.T) {
 	if _, err := f.opev.Inverse(f.selector(model.ElectricalConnectionPhaseNameTypeA)); !errors.Is(err, errOPEVUnbound) {
 		t.Fatalf("inverse on an unbound client = %v, want %v", err, errOPEVUnbound)
 	}
-	time.Sleep(50 * time.Millisecond)
+	f.quiet(t)
 	if got := f.toPeer.Recorded(); len(got) != 0 {
 		t.Fatalf("the peer recorded writes from an unbound client: %+v", got)
 	}
@@ -388,7 +420,7 @@ func TestPeerOPEVRejectsBeforeAnyWrite(t *testing.T) {
 		}
 	})
 
-	time.Sleep(50 * time.Millisecond)
+	f.quiet(t)
 	if got := f.toPeer.Recorded(); len(got) != 0 {
 		t.Fatalf("the peer recorded writes for rejected selectors: %+v", got)
 	}
@@ -413,6 +445,7 @@ func TestPeerOPEVAbsentAndAmbiguousDescriptions(t *testing.T) {
 		if _, err := f.opev.Set(sel, 10); !errors.Is(err, errOPEVAmbiguous) {
 			t.Fatalf("set err = %v, want %v", err, errOPEVAmbiguous)
 		}
+		f.quiet(t)
 		if got := f.toPeer.Recorded(); len(got) != 0 {
 			t.Fatalf("the peer recorded writes for an ambiguous selector: %+v", got)
 		}
@@ -424,6 +457,7 @@ func TestPeerOPEVAbsentAndAmbiguousDescriptions(t *testing.T) {
 		if _, err := f.opev.Set(f.selector(model.ElectricalConnectionPhaseNameTypeA), 10); !errors.Is(err, errOPEVAbsent) {
 			t.Fatalf("set err = %v, want %v", err, errOPEVAbsent)
 		}
+		f.quiet(t)
 		if got := f.toPeer.Recorded(); len(got) != 0 {
 			t.Fatalf("the peer recorded writes for a recommendation: %+v", got)
 		}

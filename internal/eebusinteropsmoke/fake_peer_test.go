@@ -1,6 +1,7 @@
 package eebusinteropsmoke
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -341,7 +342,11 @@ func newTestSHIPClient(endpoint netip.AddrPort, certificate tls.Certificate, rem
 		return nil, fmt.Errorf("websocket subprotocol = %q, want %q", subprotocol, shipapi.ShipWebsocketSubProtocol)
 	}
 	provider := newTestSHIPClientProvider()
-	dataHandler := shipws.NewWebsocketConnection(connection, remoteSKI)
+	dataHandler := &initGatedWriter{
+		WebsocketConnection: shipws.NewWebsocketConnection(connection, remoteSKI),
+		ready:               provider.clientWait,
+		timeout:             timeout,
+	}
 	localShipID := "test-client-" + localSKI
 	shipConnection := ship.NewConnectionHandler(
 		provider,
@@ -391,6 +396,39 @@ func (client *testSHIPClient) errors() []string {
 	return client.provider.errorsSnapshot()
 }
 
+// initGatedWriter holds the client's SHIP init message back until the client
+// state machine reports that it waits for the server's init. The state machine
+// writes the init first and enters that wait state afterwards; a server reply
+// that arrives in between is dropped, and the following hello then fails the
+// handshake as a control message where init was expected.
+type initGatedWriter struct {
+	*shipws.WebsocketConnection
+	ready   <-chan struct{}
+	timeout time.Duration
+	sent    sync.Once
+}
+
+func (writer *initGatedWriter) WriteMessageToWebsocketConnection(message []byte) error {
+	if !bytes.Equal(message, shipmodel.ShipInit) {
+		return writer.WebsocketConnection.WriteMessageToWebsocketConnection(message)
+	}
+	first := false
+	writer.sent.Do(func() { first = true })
+	if !first {
+		return writer.WebsocketConnection.WriteMessageToWebsocketConnection(message)
+	}
+	go func() {
+		timer := time.NewTimer(writer.timeout)
+		defer timer.Stop()
+		select {
+		case <-writer.ready:
+		case <-timer.C:
+		}
+		_ = writer.WebsocketConnection.WriteMessageToWebsocketConnection(message)
+	}()
+	return nil
+}
+
 type testSHIPClientProvider struct {
 	mu          sync.Mutex
 	states      []shipmodel.ShipMessageExchangeState
@@ -398,12 +436,15 @@ type testSHIPClientProvider struct {
 	closed      bool
 	stateEvents chan shipmodel.ShipMessageExchangeState
 	closeEvents chan struct{}
+	clientWait  chan struct{}
+	waitOnce    sync.Once
 }
 
 func newTestSHIPClientProvider() *testSHIPClientProvider {
 	return &testSHIPClientProvider{
 		stateEvents: make(chan shipmodel.ShipMessageExchangeState, 32),
 		closeEvents: make(chan struct{}, 1),
+		clientWait:  make(chan struct{}),
 	}
 }
 
@@ -430,6 +471,9 @@ func (provider *testSHIPClientProvider) HandleShipHandshakeStateUpdate(_ string,
 		provider.errors = append(provider.errors, state.Error.Error())
 	}
 	provider.mu.Unlock()
+	if state.State == shipmodel.CmiStateClientWait {
+		provider.waitOnce.Do(func() { close(provider.clientWait) })
+	}
 	select {
 	case provider.stateEvents <- state.State:
 	default:
