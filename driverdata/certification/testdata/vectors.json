@@ -1,0 +1,1456 @@
+{
+  "contract": "helianthus.semreg.certification-references-vectors/v1",
+  "schema": "api/v1/certification-references-v1.schema.json",
+  "vectors": [
+    {
+      "id": "CR-POS-01",
+      "description": "A reference, a gap and an unavailable entry for three different models are accepted.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          },
+          {
+            "source": "certification",
+            "category": "gap",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-2000",
+            "firmware": {
+              "form": "not_stated"
+            },
+            "issuer": "Example Certification Body",
+            "url": "https://example.invalid/registry/search",
+            "retrieved_on": "2000-02-01"
+          },
+          {
+            "source": "certification",
+            "category": "unavailable",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-3000",
+            "firmware": {
+              "form": "not_stated"
+            },
+            "issuer": "Example Certification Body",
+            "url": "https://example.invalid/registry/search",
+            "retrieved_on": "2000-02-01",
+            "refusal": "The registry answered that automated access is not permitted."
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true
+      }
+    },
+    {
+      "id": "CR-POS-02",
+      "description": "A reference whose certificate names the device and states no firmware release records the firmware as not stated.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "not_stated"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true
+      },
+      "coverage": [
+        {
+          "entry": 0,
+          "release": "1.0.0",
+          "result": "not_stated"
+        },
+        {
+          "entry": 0,
+          "release": "9.9.9",
+          "result": "not_stated"
+        }
+      ]
+    },
+    {
+      "id": "CR-POS-03",
+      "description": "A stated value carries only the members the certificate states: here the measured flag, a measured range and a ratio.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "measured": true,
+              "ratio_maximum": {
+                "coefficient": "15",
+                "exponent10": -3
+              },
+              "measured_minimum": {
+                "coefficient": "0",
+                "exponent10": 0
+              },
+              "measured_maximum": {
+                "coefficient": "5",
+                "exponent10": 3
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true
+      }
+    },
+    {
+      "id": "CR-POS-04",
+      "description": "Two references of one category for one device identity are accepted; two certificates can name one device.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          },
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0002",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true
+      }
+    },
+    {
+      "id": "CR-COV-01",
+      "description": "A certified release is a floor: a later release is covered, an earlier release is not, the certified release is.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true
+      },
+      "coverage": [
+        {
+          "entry": 0,
+          "release": "1.4.0",
+          "result": "covered"
+        },
+        {
+          "entry": 0,
+          "release": "1.4.1",
+          "result": "covered"
+        },
+        {
+          "entry": 0,
+          "release": "2.0.0",
+          "result": "covered"
+        },
+        {
+          "entry": 0,
+          "release": "1.3.9",
+          "result": "not_covered"
+        },
+        {
+          "entry": 0,
+          "release": "0.9.0",
+          "result": "not_covered"
+        }
+      ]
+    },
+    {
+      "id": "CR-COV-02",
+      "description": "A range with a stated upper bound covers its bounds and what lies between, and nothing beyond the upper bound.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "range",
+              "from": "1.0.0",
+              "to": "2.0.0",
+              "upper_bound_stated_by": "vendor_document"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true
+      },
+      "coverage": [
+        {
+          "entry": 0,
+          "release": "1.0.0",
+          "result": "covered"
+        },
+        {
+          "entry": 0,
+          "release": "1.5.0",
+          "result": "covered"
+        },
+        {
+          "entry": 0,
+          "release": "2.0.0",
+          "result": "covered"
+        },
+        {
+          "entry": 0,
+          "release": "2.0.1",
+          "result": "not_covered"
+        },
+        {
+          "entry": 0,
+          "release": "0.9.9",
+          "result": "not_covered"
+        }
+      ]
+    },
+    {
+      "id": "CR-NEG-SOURCE-01",
+      "description": "A source other than certification is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "device",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "source_not_certification",
+        "entry": 0,
+        "member": "source"
+      }
+    },
+    {
+      "id": "CR-NEG-MEMBER-01",
+      "description": "A member that names a device-published value is rejected on a certification entry.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01",
+            "device_published_value": {
+              "coefficient": "1",
+              "exponent10": 0
+            }
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "unknown_member",
+        "entry": 0,
+        "member": "device_published_value"
+      }
+    },
+    {
+      "id": "CR-NEG-MISSING-SOURCE",
+      "description": "A reference entry without source is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "missing_member",
+        "entry": 0,
+        "member": "source"
+      }
+    },
+    {
+      "id": "CR-NEG-MISSING-DRIVER",
+      "description": "A reference entry without driver is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "missing_member",
+        "entry": 0,
+        "member": "driver"
+      }
+    },
+    {
+      "id": "CR-NEG-MISSING-VENDOR",
+      "description": "A reference entry without vendor is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "missing_member",
+        "entry": 0,
+        "member": "vendor"
+      }
+    },
+    {
+      "id": "CR-NEG-MISSING-FLAVOR",
+      "description": "A reference entry without flavor is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "missing_member",
+        "entry": 0,
+        "member": "flavor"
+      }
+    },
+    {
+      "id": "CR-NEG-MISSING-MODEL",
+      "description": "A reference entry without model is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "missing_member",
+        "entry": 0,
+        "member": "model"
+      }
+    },
+    {
+      "id": "CR-NEG-MISSING-FIRMWARE",
+      "description": "A reference entry without firmware is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "missing_member",
+        "entry": 0,
+        "member": "firmware"
+      }
+    },
+    {
+      "id": "CR-NEG-MISSING-ISSUER",
+      "description": "A reference entry without issuer is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "missing_member",
+        "entry": 0,
+        "member": "issuer"
+      }
+    },
+    {
+      "id": "CR-NEG-MISSING-CERTIFICATE-NUMBER",
+      "description": "A reference entry without certificate_number is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "missing_member",
+        "entry": 0,
+        "member": "certificate_number"
+      }
+    },
+    {
+      "id": "CR-NEG-MISSING-ISSUE-DATE",
+      "description": "A reference entry without issue_date is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "missing_member",
+        "entry": 0,
+        "member": "issue_date"
+      }
+    },
+    {
+      "id": "CR-NEG-MISSING-STATED-VALUE",
+      "description": "A reference entry without stated_value is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "missing_member",
+        "entry": 0,
+        "member": "stated_value"
+      }
+    },
+    {
+      "id": "CR-NEG-MISSING-URL",
+      "description": "A reference entry without url is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "missing_member",
+        "entry": 0,
+        "member": "url"
+      }
+    },
+    {
+      "id": "CR-NEG-MISSING-RETRIEVED-ON",
+      "description": "A reference entry without retrieved_on is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "missing_member",
+        "entry": 0,
+        "member": "retrieved_on"
+      }
+    },
+    {
+      "id": "CR-NEG-CATEGORY-01",
+      "description": "Two entries of different categories for one driver, vendor, flavor, model and firmware are rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          },
+          {
+            "source": "certification",
+            "category": "gap",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "url": "https://example.invalid/registry/search",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "category_conflict",
+        "entry": 1
+      }
+    },
+    {
+      "id": "CR-NEG-GAP-01",
+      "description": "A gap entry that carries a stated value is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "gap",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-2000",
+            "firmware": {
+              "form": "not_stated"
+            },
+            "issuer": "Example Certification Body",
+            "url": "https://example.invalid/registry/search",
+            "retrieved_on": "2000-02-01",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "measured": true
+            }
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "stated_value_not_allowed",
+        "entry": 0,
+        "member": "stated_value"
+      }
+    },
+    {
+      "id": "CR-NEG-UNAVAILABLE-01",
+      "description": "An unavailable entry that carries a stated value is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "unavailable",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-3000",
+            "firmware": {
+              "form": "not_stated"
+            },
+            "issuer": "Example Certification Body",
+            "url": "https://example.invalid/registry/search",
+            "retrieved_on": "2000-02-01",
+            "refusal": "The registry answered that automated access is not permitted.",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "measured": true
+            }
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "stated_value_not_allowed",
+        "entry": 0,
+        "member": "stated_value"
+      }
+    },
+    {
+      "id": "CR-NEG-UNAVAILABLE-02",
+      "description": "An unavailable entry without refusal text is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "unavailable",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-3000",
+            "firmware": {
+              "form": "not_stated"
+            },
+            "issuer": "Example Certification Body",
+            "url": "https://example.invalid/registry/search",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "refusal_missing",
+        "entry": 0,
+        "member": "refusal"
+      }
+    },
+    {
+      "id": "CR-NEG-UNAVAILABLE-03",
+      "description": "An unavailable entry with empty refusal text is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "unavailable",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-3000",
+            "firmware": {
+              "form": "not_stated"
+            },
+            "issuer": "Example Certification Body",
+            "url": "https://example.invalid/registry/search",
+            "retrieved_on": "2000-02-01",
+            "refusal": ""
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "refusal_missing",
+        "entry": 0,
+        "member": "refusal"
+      }
+    },
+    {
+      "id": "CR-NEG-FIRMWARE-01",
+      "description": "A firmware range without an upper-bound statement is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "range",
+              "from": "1.0.0",
+              "to": "2.0.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "firmware_upper_bound_unstated",
+        "entry": 0,
+        "member": "firmware"
+      }
+    },
+    {
+      "id": "CR-NEG-FIRMWARE-02",
+      "description": "A firmware range whose upper bound is stated by neither a certificate nor a vendor document is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "range",
+              "from": "1.0.0",
+              "to": "2.0.0",
+              "upper_bound_stated_by": "driver"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "firmware_upper_bound_unstated",
+        "entry": 0,
+        "member": "firmware"
+      }
+    },
+    {
+      "id": "CR-NEG-FIRMWARE-03",
+      "description": "A firmware range whose lower bound is above its upper bound is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "range",
+              "from": "2.0.0",
+              "to": "1.0.0",
+              "upper_bound_stated_by": "certificate"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "firmware_invalid",
+        "entry": 0,
+        "member": "firmware"
+      }
+    },
+    {
+      "id": "CR-NEG-FIRMWARE-04",
+      "description": "A release that is not dot-separated numbers is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "V1.4"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "firmware_invalid",
+        "entry": 0,
+        "member": "firmware"
+      }
+    },
+    {
+      "id": "CR-NEG-STATED-01",
+      "description": "A stated value with a null member is rejected; no member is null or defaulted.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": null
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "stated_value_invalid",
+        "entry": 0,
+        "member": "stated_value"
+      }
+    },
+    {
+      "id": "CR-NEG-STATED-02",
+      "description": "A stated value that names a measurement type and states nothing is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power"
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "stated_value_invalid",
+        "entry": 0,
+        "member": "stated_value"
+      }
+    },
+    {
+      "id": "CR-NEG-STATED-03",
+      "description": "A stated value with a member outside the accuracy values is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "power_mode": "ac"
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "stated_value_invalid",
+        "entry": 0,
+        "member": "stated_value"
+      }
+    },
+    {
+      "id": "CR-NEG-STATED-04",
+      "description": "A stated decimal that is not canonical is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "10",
+                "exponent10": 0
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "stated_value_invalid",
+        "entry": 0,
+        "member": "stated_value"
+      }
+    },
+    {
+      "id": "CR-NEG-VALUE-01",
+      "description": "A retrieval date that is not a calendar date is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-30"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "invalid_value",
+        "entry": 0,
+        "member": "retrieved_on"
+      }
+    },
+    {
+      "id": "CR-NEG-VALUE-02",
+      "description": "A source address that is not an https address is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_power",
+              "ratio_maximum": {
+                "coefficient": "1",
+                "exponent10": -2
+              }
+            },
+            "url": "http://example.invalid/registry",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "invalid_value",
+        "entry": 0,
+        "member": "url"
+      }
+    },
+    {
+      "id": "CR-NEG-SCHEMA-01",
+      "description": "A document without entries is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": []
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "schema"
+      }
+    }
+  ]
+}

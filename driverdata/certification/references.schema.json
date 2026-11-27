@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Project-Helianthus/helianthus-docs-semantic/blob/main/api/v1/certification-references-v1.schema.json",
+  "title": "Helianthus certification references v1",
+  "description": "Structural shape of a certification-references document. The repository module scripts/json_schema_subset_v1.py enforces this schema. The rules that a schema of this subset cannot state (a calendar date, a release order, two entries of different categories for one device, the stable failure reasons) are enforced in code by scripts/validate_certification_references_v1.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "entries"],
+  "properties": {
+    "contract": {"const": "helianthus.semreg.certification-references/v1"},
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/reference"},
+          {"$ref": "#/$defs/gap"},
+          {"$ref": "#/$defs/unavailable"}
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "text": {"type": "string", "minLength": 1},
+    "date": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "url": {"type": "string", "pattern": "^https://[^ ]+$"},
+    "release": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)*$"},
+    "decimal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coefficient", "exponent10"],
+      "properties": {
+        "coefficient": {"type": "string", "pattern": "^(0|-?[1-9]([0-9]*[1-9])?)$"},
+        "exponent10": {"type": "integer", "minimum": -18, "maximum": 18}
+      }
+    },
+    "firmware": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["form"],
+          "properties": {"form": {"const": "not_stated"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["form", "release"],
+          "properties": {
+            "form": {"const": "release"},
+            "release": {"$ref": "#/$defs/release"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["form", "from", "to", "upper_bound_stated_by"],
+          "properties": {
+            "form": {"const": "range"},
+            "from": {"$ref": "#/$defs/release"},
+            "to": {"$ref": "#/$defs/release"},
+            "upper_bound_stated_by": {"enum": ["certificate", "vendor_document"]}
+          }
+        }
+      ]
+    },
+    "stated_value": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["measurement_type"],
+      "properties": {
+        "measurement_type": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "measured": {"type": "boolean"},
+        "ratio_maximum": {"$ref": "#/$defs/decimal"},
+        "measured_minimum": {"$ref": "#/$defs/decimal"},
+        "measured_maximum": {"$ref": "#/$defs/decimal"},
+        "range_minimum": {"$ref": "#/$defs/decimal"},
+        "range_maximum": {"$ref": "#/$defs/decimal"}
+      },
+      "anyOf": [
+        {"required": ["measured"]},
+        {"required": ["ratio_maximum"]},
+        {"required": ["measured_minimum"]},
+        {"required": ["measured_maximum"]},
+        {"required": ["range_minimum"]},
+        {"required": ["range_maximum"]}
+      ]
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source", "category", "driver", "vendor", "flavor", "model", "firmware",
+        "issuer", "certificate_number", "issue_date", "stated_value", "url", "retrieved_on"
+      ],
+      "properties": {
+        "source": {"const": "certification"},
+        "category": {"const": "reference"},
+        "driver": {"$ref": "#/$defs/text"},
+        "vendor": {"$ref": "#/$defs/text"},
+        "flavor": {"$ref": "#/$defs/text"},
+        "model": {"$ref": "#/$defs/text"},
+        "firmware": {"$ref": "#/$defs/firmware"},
+        "issuer": {"$ref": "#/$defs/text"},
+        "certificate_number": {"$ref": "#/$defs/text"},
+        "issue_date": {"$ref": "#/$defs/date"},
+        "stated_value": {"$ref": "#/$defs/stated_value"},
+        "url": {"$ref": "#/$defs/url"},
+        "retrieved_on": {"$ref": "#/$defs/date"}
+      }
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source", "category", "driver", "vendor", "flavor", "model", "firmware",
+        "issuer", "url", "retrieved_on"
+      ],
+      "properties": {
+        "source": {"const": "certification"},
+        "category": {"const": "gap"},
+        "driver": {"$ref": "#/$defs/text"},
+        "vendor": {"$ref": "#/$defs/text"},
+        "flavor": {"$ref": "#/$defs/text"},
+        "model": {"$ref": "#/$defs/text"},
+        "firmware": {"$ref": "#/$defs/firmware"},
+        "issuer": {"$ref": "#/$defs/text"},
+        "url": {"$ref": "#/$defs/url"},
+        "retrieved_on": {"$ref": "#/$defs/date"}
+      }
+    },
+    "unavailable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source", "category", "driver", "vendor", "flavor", "model", "firmware",
+        "issuer", "url", "retrieved_on", "refusal"
+      ],
+      "properties": {
+        "source": {"const": "certification"},
+        "category": {"const": "unavailable"},
+        "driver": {"$ref": "#/$defs/text"},
+        "vendor": {"$ref": "#/$defs/text"},
+        "flavor": {"$ref": "#/$defs/text"},
+        "model": {"$ref": "#/$defs/text"},
+        "firmware": {"$ref": "#/$defs/firmware"},
+        "issuer": {"$ref": "#/$defs/text"},
+        "url": {"$ref": "#/$defs/url"},
+        "retrieved_on": {"$ref": "#/$defs/date"},
+        "refusal": {"$ref": "#/$defs/text"}
+      }
+    }
+  }
+}
