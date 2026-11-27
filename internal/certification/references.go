@@ -1,3 +1,6 @@
+// Package certification loads and checks documents of certification
+// reference records: values that certificates state about measurement
+// accuracy, held apart from anything a device publishes.
 package certification
 
 import (
@@ -14,6 +17,8 @@ import (
 	"time"
 )
 
+// Contract identity, categories, firmware forms, coverage results and the
+// stable failure reasons of a rejected document.
 const (
 	ContractID = "helianthus.semreg.certification-references/v1"
 	Source     = "certification"
@@ -43,11 +48,13 @@ const (
 	ReasonCategoryConflict           = "category_conflict"
 )
 
+// Decimal is an exact decimal value: Coefficient times ten to Exponent.
 type Decimal struct {
 	Coefficient string
 	Exponent    int
 }
 
+// Firmware records the firmware release or range an entry applies to.
 type Firmware struct {
 	Form               string
 	Release            string
@@ -56,6 +63,7 @@ type Firmware struct {
 	UpperBoundStatedBy string
 }
 
+// StatedValue is the accuracy value a certificate states.
 type StatedValue struct {
 	MeasurementType string
 	Measured        *bool
@@ -66,6 +74,7 @@ type StatedValue struct {
 	RangeMaximum    *Decimal
 }
 
+// Entry is one reference, gap or unavailable record.
 type Entry struct {
 	Source            string
 	Category          string
@@ -83,17 +92,20 @@ type Entry struct {
 	Refusal           string
 }
 
+// Document is a loaded certification references document.
 type Document struct {
 	Contract string
 	Entries  []Entry
 }
 
+// Finding is the error returned for a rejected document.
 type Finding struct {
 	Reason string
 	Entry  int
 	Member string
 }
 
+// Error describes the finding by its stable reason, entry and member.
 func (f *Finding) Error() string {
 	text := "certification references rejected: " + f.Reason
 	if f.Entry >= 0 {
@@ -210,6 +222,9 @@ func isText(value any) bool {
 func isDate(value any) bool {
 	text, ok := value.(string)
 	if !ok || !datePattern.MatchString(text) {
+		return false
+	}
+	if strings.HasPrefix(text, "0000") {
 		return false
 	}
 	_, err := time.Parse("2006-01-02", text)
@@ -469,6 +484,7 @@ func checkCategories(entries []any) *Finding {
 	return nil
 }
 
+// Load checks a document given as bytes and returns it, or a *Finding.
 func Load(data []byte) (*Document, error) {
 	parsed, err := parseDocument(data)
 	if err != nil {
@@ -496,6 +512,8 @@ func Load(data []byte) (*Document, error) {
 	return build(root), nil
 }
 
+// Coverage states whether a firmware release is covered by an entry's
+// firmware form; a release at or above a stated release is covered.
 func Coverage(firmware Firmware, release string) (string, error) {
 	if !releasePattern.MatchString(release) {
 		return "", errors.New("release is not dot-separated non-negative integers")

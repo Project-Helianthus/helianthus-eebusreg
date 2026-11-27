@@ -1,3 +1,4 @@
+// Tests for the certification references loader.
 package certification
 
 import (
@@ -235,5 +236,14 @@ func TestCoverageRefusesMalformedRelease(t *testing.T) {
 	got, err := Coverage(Firmware{Form: FormRelease, Release: "1.0"}, "1.0.0")
 	if err != nil || got != CoverageCovered {
 		t.Fatalf("a missing component counts as zero: %q %v", got, err)
+	}
+}
+
+func TestYearZeroDateIsRefused(t *testing.T) {
+	if isDate("0000-01-01") {
+		t.Fatal("year 0000 must be refused")
+	}
+	if !isDate("2000-02-29") {
+		t.Fatal("a valid date must be accepted")
 	}
 }
