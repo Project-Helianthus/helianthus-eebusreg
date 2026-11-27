@@ -143,7 +143,7 @@ func isExportInventoryPath(repositoryPath string) bool {
 	return directory == exportInventoryRepositoryDirectory+"/" && isExportInventoryName(name)
 }
 
-var msp055RuntimeExports = map[manifestExport]struct{}{
+var lifecycleRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "const", Name: "PairingPolicyClosed"}:       {},
 	{Kind: "func", Name: "New"}:                        {},
 	{Kind: "func", Name: "RawMutationOutcomeV1.Clone"}: {},

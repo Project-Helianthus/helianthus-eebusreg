@@ -800,7 +800,7 @@ func inspectRuntimeExports(modulePath string, packages map[string]*packageInvent
 			if _, participation := issue137ParticipationExports[expected]; participation {
 				continue
 			}
-			if _, lifecycle := msp055RuntimeExports[expected]; lifecycle {
+			if _, lifecycle := lifecycleRuntimeExports[expected]; lifecycle {
 				continue
 			}
 			if _, powerLimit := outputPowerLimitRuntimeExports[expected]; powerLimit {
