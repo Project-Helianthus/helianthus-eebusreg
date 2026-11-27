@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 
 	eebusruntime "github.com/Project-Helianthus/helianthus-eebusreg"
@@ -93,11 +94,16 @@ func New(key semdriver.InstanceKey, config eebusruntime.Config) (semdriver.Insta
 	if err := key.Validate(); err != nil {
 		return nil, err
 	}
-	runtime, err := eebusruntime.New(config)
+	checked, err := eebusruntime.New(config)
 	if err != nil {
 		return nil, err
 	}
-	return &peerInstance{key: key, runtime: runtime, config: detachRuntimeConfig(config)}, nil
+	runtime, admin, err := eebusruntime.NewOperatorRuntimeV1(config)
+	if err != nil {
+		return nil, err
+	}
+	_ = checked
+	return &peerInstance{key: key, runtime: runtime, admin: admin, config: detachRuntimeConfig(config)}, nil
 }
 
 func (f *Factory) lock() { f.gate <- struct{}{} }
@@ -108,10 +114,12 @@ type peerInstance struct {
 	mu      sync.Mutex
 	key     semdriver.InstanceKey
 	runtime eebusruntime.Runtime
+	admin   eebusruntime.AdminV1
 	config  eebusruntime.Config
 	session semdriver.Session
 	started bool
 	fenced  bool
+	pairing pairingState
 }
 
 func (instance *peerInstance) Start(ctx context.Context, session semdriver.Session) error {
@@ -125,21 +133,26 @@ func (instance *peerInstance) Start(ctx context.Context, session semdriver.Sessi
 		return errors.New("instance already started")
 	}
 	instance.mu.Unlock()
-	if err := instance.runtime.Start(ctx); err != nil {
+	if err := instance.runtime.Start(instance.transportContext(ctx)); err != nil {
 		return err
 	}
 	instance.mu.Lock()
-	defer instance.mu.Unlock()
 	if instance.fenced {
 		_ = instance.runtime.Shutdown()
+		instance.mu.Unlock()
 		return errors.New("instance withdrawn")
 	}
 	if instance.started {
+		instance.mu.Unlock()
 		return errors.New("instance already started")
 	}
 	instance.session = session
 	instance.started = true
-	return nil
+	instance.mu.Unlock()
+	if session == nil {
+		return nil
+	}
+	return instance.registerPairingNamespace(ctx, session)
 }
 
 func (instance *peerInstance) FenceWithdrawal() {
@@ -232,4 +245,20 @@ var runtimeOptionKeys = map[string]struct{}{
 	"MutationLabProfiles":       {},
 	"OutputPowerLimitFallbacks": {},
 	"DiscoveryEnabled":          {},
+}
+
+func pairingMemberKey(namespace semdriver.NamespaceID, instance semdriver.InstanceKey, node semdriver.NodeID, local string) semdriver.MemberKey {
+	return semdriver.MemberKey{Namespace: namespace, Instance: instance, Node: node, Local: semdriver.MemberID(local)}
+}
+
+func pairingMemberSpec(local string) semdriver.MemberSpec {
+	return semdriver.MemberSpec{Local: semdriver.MemberID(local), Schema: "eebus.remote", Mode: "read", Scope: "instance"}
+}
+
+func pairingMethodSpec(local string) semdriver.MethodSpec {
+	return semdriver.MethodSpec{Local: semdriver.MemberID(local), Schema: "eebus.pairing", Scope: "instance"}
+}
+
+func normalizeSKI(ski string) string {
+	return strings.ToLower(strings.TrimSpace(ski))
 }

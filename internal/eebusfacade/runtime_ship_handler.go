@@ -48,6 +48,8 @@ type runtimeServiceHandler struct {
 	spineWake                 chan struct{}
 	spinePending              map[string]runtimeSPINERefresh
 	rawFeatures               *rawFeatureRuntimeBridge
+	remoteTransport           RemoteTransportFunc
+	remoteSource              RemoteSourceFunc
 }
 
 func newRuntimeServiceHandler(config RuntimeConfig, localSKI string, now func() time.Time) (*runtimeServiceHandler, error) {
@@ -132,6 +134,7 @@ func (handler *runtimeServiceHandler) RemoteSKIConnected(service eebusapi.Servic
 		observation.Devices = currentDevices
 	})
 	handler.refreshRawFeatureRemote(ski)
+	handler.notifyTransport(RemoteTransportConnected, ski)
 }
 
 func (handler *runtimeServiceHandler) allocateRawFeatureConnectionGeneration(ski string) (uint64, error) {
@@ -167,6 +170,7 @@ func (handler *runtimeServiceHandler) RemoteSKIDisconnected(_ eebusapi.ServiceIn
 		observation.Devices = nil
 	})
 	handler.retireRawFeatureRemote(ski)
+	handler.notifyTransport(RemoteTransportDisconnected, ski)
 }
 
 func (handler *runtimeServiceHandler) VisibleRemoteServicesUpdated(_ eebusapi.ServiceInterface, entries []shipapi.RemoteService) {
@@ -309,9 +313,13 @@ func (handler *runtimeServiceHandler) retireRawFeatureRemote(ski string) {
 	bridge := handler.rawFeatures
 	observation, ok := handler.observations[ski]
 	handler.mu.Unlock()
-	if bridge != nil && ok && observation.SessionIndex > 0 {
-		bridge.retireRemote(ski, observation.SessionIndex)
+	if bridge == nil || !ok || observation.SessionIndex == 0 {
+		return
 	}
+	bridge.retireRemote(ski, observation.SessionIndex)
+	handler.notifySource(RemoteSourceNotice{
+		Kind: RemoteSourceGenerationStopped, SKI: ski, Generation: observation.SessionIndex,
+	})
 }
 
 func runtimeSessionIdentity(observation runtimeGraphObservation) string {
