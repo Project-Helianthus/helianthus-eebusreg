@@ -42,8 +42,12 @@ func rankName(rank string) string {
 	return rank
 }
 
-func sourcePath(rank, device, entity, fact string) string {
-	return "rank/" + rankName(rank) + "/device/" + device + "/entity/" + entity + "/fact/" + fact
+func sourcePath(rank, device, entity, fact, phase string) string {
+	path := "rank/" + rankName(rank) + "/device/" + device + "/entity/" + entity + "/fact/" + fact
+	if phase != "" {
+		path += "/phase/" + phase
+	}
+	return path
 }
 
 func (w *world) ingest(remotes []Remote) error {
@@ -68,6 +72,9 @@ func (w *world) ingestRemote(remote Remote) error {
 		return nil
 	}
 	w.clearDevice(remote.Device)
+	if electricalOnly(remote) {
+		return w.ingestElectrical(remote)
+	}
 	system := w.placeSystem(remote)
 	if system.incomplete {
 		return nil
@@ -103,6 +110,7 @@ func (w *world) placeSystem(remote Remote) placedNode {
 		kind: "resource.thermal_system", slot: deviceSlot(remote.Device), device: remote.Device,
 		entityType: "device", ski: remote.SKI, brand: remote.Brand, vendor: remote.Vendor,
 		manufacturer: trim(remote.Manufacturer), serial: trim(remote.Serial), identityToken: trim(remote.IdentityToken),
+		identity: true,
 	}
 	if len(node.slot) > 128 {
 		node.incomplete = true

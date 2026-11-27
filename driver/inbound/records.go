@@ -1,28 +1,44 @@
 package inbound
 
 import (
+	"fmt"
 	"strconv"
 
 	semreg "github.com/Project-Helianthus/helianthus-semreg/semreg/v1"
 	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1/driver"
 )
 
-func resourceRecord(scope Scope, node placedNode) (semreg.Resource, error) {
+func resourceRecord(scope Scope, node placedNode, parent semreg.ResourceID) (semreg.Resource, error) {
 	proof, err := proofFor(node.slot, node.kind)
 	if err != nil {
 		return semreg.Resource{}, err
 	}
 	source, epoch, binding := deviceBinding(scope, node.device)
 	slot := node.slot
+	class := node.anchor
+	if class == "" {
+		class = semreg.AnchorFunction
+	}
+	anchor := semreg.ResourceAnchor{
+		Class: class, Basis: semreg.AnchorNativeSlot, Slot: &slot, Evidence: []semreg.EvidenceRef{proof},
+	}
+	if node.parentSlot != "" {
+		if parent == "" {
+			return semreg.Resource{}, fmt.Errorf("inbound: %s names a missing parent", node.slot)
+		}
+		anchor.Parent = &parent
+	}
+	state := semreg.ResourceCurrent
+	if node.retired {
+		state = semreg.ResourceRetired
+	}
 	return semreg.Resource{
 		ResourceID: scope.nodeID(node),
 		Kind:       semreg.DefinitionID(node.kind),
-		Anchor: semreg.ResourceAnchor{
-			Class: semreg.AnchorFunction, Basis: semreg.AnchorNativeSlot, Slot: &slot, Evidence: []semreg.EvidenceRef{proof},
-		},
-		State:    semreg.ResourceCurrent,
-		Origin:   nativeOrigin(semreg.OriginID(opaqueID("origin.", node.slot)), source, epoch, binding, proof),
-		Revision: "1",
+		Anchor:     anchor,
+		State:      state,
+		Origin:     nativeOrigin(semreg.OriginID(opaqueID("origin.", node.slot)), source, epoch, binding, proof),
+		Revision:   "1",
 	}, nil
 }
 
@@ -34,10 +50,17 @@ func relationRecord(scope Scope, link builtLink, from, to semreg.ResourceID) (se
 	source, epoch, binding := deviceBinding(scope, deviceFromSlot(link.from))
 	return semreg.RelationInstance{
 		Definition: thermalRef(link.relation), From: from, To: to, State: semreg.LinkQualified,
-		BasisClass: semreg.RelationNativeObservation, Basis: []semreg.EvidenceRef{proof},
+		BasisClass: linkBasis(link), Basis: []semreg.EvidenceRef{proof},
 		Origin:   nativeOrigin(semreg.OriginID(opaqueID("origin.", link.relation, link.from, link.to)), source, epoch, binding, proof),
 		Revision: "1",
 	}, nil
+}
+
+func linkBasis(link builtLink) semreg.RelationBasis {
+	if link.basis == "" {
+		return semreg.RelationNativeObservation
+	}
+	return semreg.RelationBasis(link.basis)
 }
 
 func deviceFromSlot(slot string) string {
@@ -80,6 +103,10 @@ func sampleOf(scope Scope, fact placedFact, source driver.Source) (driver.Sample
 	if fact.availability == semreg.AvailabilityWithdrawn {
 		value = nil
 	}
+	policy := fact.policy
+	if policy == "" {
+		policy = "policy.heating"
+	}
 	candidate := semreg.FactCandidate{
 		CandidateID: semreg.CandidateID(opaqueID("candidate.", scope.Installation, scope.Instance, fact.path)),
 		Key:         factKey(fact.fact),
@@ -94,7 +121,7 @@ func sampleOf(scope Scope, fact placedFact, source driver.Source) (driver.Sample
 			EvaluatedAt: point, EvaluateMonotonic: monotonic(fact.observed),
 		},
 		FreshnessPolicy: semreg.FreshnessPolicy{
-			PolicyID: "policy.heating", Version: "1.0.0", FreshForNS: "1000000000", RetainForNS: "2000000000", MaxWallUncertaintyNS: "0",
+			PolicyID: semreg.PolicyID(policy), Version: "1.0.0", FreshForNS: "1000000000", RetainForNS: "2000000000", MaxWallUncertaintyNS: "0",
 		},
 		BindingID: &binding, SourceEpochID: &epoch, DriverGeneration: &generation,
 		Origin:   nativeOrigin(semreg.OriginID(opaqueID("origin.", fact.path)), sourceIDOf(scope, fact.device), epoch, binding, proof),
@@ -117,6 +144,14 @@ func factValue(fact placedFact) *semreg.Value {
 	if fact.symbol != nil {
 		symbol := *fact.symbol
 		return &semreg.Value{Kind: semreg.ValueSymbol, Symbol: &symbol}
+	}
+	if fact.boolean != nil {
+		value := *fact.boolean
+		return &semreg.Value{Kind: semreg.ValueBoolean, Boolean: &value}
+	}
+	if fact.text != nil {
+		value := *fact.text
+		return &semreg.Value{Kind: semreg.ValueText, Text: &value}
 	}
 	return nil
 }

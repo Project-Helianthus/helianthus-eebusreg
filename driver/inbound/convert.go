@@ -46,7 +46,23 @@ func applyAffine(value semreg.Decimal, affine roweval.Affine) (semreg.Decimal, e
 		}
 		left.Add(left, add)
 	}
-	return canonicalDecimal(left)
+	return canonicalLabeled(left, "temperature")
+}
+
+func scaleDecimal(text string, num, den int64) (semreg.Decimal, error) {
+	number, err := parseDecimal(text)
+	if err != nil {
+		return semreg.Decimal{}, err
+	}
+	rat, err := decimalRat(number)
+	if err != nil {
+		return semreg.Decimal{}, err
+	}
+	if den == 0 {
+		return semreg.Decimal{}, errors.New("inbound: scale denominator is zero")
+	}
+	rat.Mul(rat, big.NewRat(num, den))
+	return canonicalLabeled(rat, "quantity")
 }
 
 func absInt(v int) int {
@@ -81,6 +97,10 @@ func decimalRat(value semreg.Decimal) (*big.Rat, error) {
 }
 
 func canonicalDecimal(value *big.Rat) (semreg.Decimal, error) {
+	return canonicalLabeled(value, "temperature")
+}
+
+func canonicalLabeled(value *big.Rat, label string) (semreg.Decimal, error) {
 	if value.Sign() == 0 {
 		return semreg.Decimal{Coefficient: "0", Exponent10: 0}, nil
 	}
@@ -101,10 +121,10 @@ func canonicalDecimal(value *big.Rat) (semreg.Decimal, error) {
 			numerator.Mul(numerator, two)
 			exponent--
 		default:
-			return semreg.Decimal{}, errors.New("inbound: temperature is not a finite decimal")
+			return semreg.Decimal{}, errors.New("inbound: " + label + " is not a finite decimal")
 		}
 		if exponent < -18 {
-			return semreg.Decimal{}, errors.New("inbound: temperature exponent is out of range")
+			return semreg.Decimal{}, errors.New("inbound: " + label + " exponent is out of range")
 		}
 	}
 	for numerator.Sign() != 0 && new(big.Int).Mod(numerator, ten).Sign() == 0 && exponent < 18 {
@@ -112,7 +132,7 @@ func canonicalDecimal(value *big.Rat) (semreg.Decimal, error) {
 		exponent++
 	}
 	if exponent < -18 || exponent > 18 {
-		return semreg.Decimal{}, errors.New("inbound: temperature exponent is out of range")
+		return semreg.Decimal{}, errors.New("inbound: " + label + " exponent is out of range")
 	}
 	return semreg.Decimal{Coefficient: numerator.String(), Exponent10: int32(exponent)}, nil
 }
