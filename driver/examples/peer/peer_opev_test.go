@@ -221,6 +221,16 @@ func (f *opevFixture) holds(limit int, active bool, ampere float64) func() bool 
 	}
 }
 
+// selectorReady reports whether Select can already see the phase parameters and the
+// limit descriptions. Limit data can be stored first; a single Select before those
+// two lists arrive is absence, not the selector result.
+func (f *opevFixture) selectorReady(sel OPEVSelector, limit, measurement int) func() bool {
+	return func() bool {
+		got, err := f.opev.Select(sel)
+		return err == nil && int(got.LimitID) == limit && int(got.MeasurementID) == measurement
+	}
+}
+
 func (f *opevFixture) peerData(t *testing.T, limit int) model.LoadControlLimitDataType {
 	t.Helper()
 	list := f.server.DataCopy(model.FunctionTypeLoadControlLimitListData).(*model.LoadControlLimitListDataType)
@@ -264,8 +274,10 @@ func TestPeerOPEVUnboundClientWritesNothing(t *testing.T) {
 func TestPeerOPEVSetInverseAndReadback(t *testing.T) {
 	f := newOPEVFixture(t, standardDescriptions(), true)
 	f.bind(t)
-	f.refresh(t, f.holds(2, false, 16))
 	phaseA, phaseB := f.selector(model.ElectricalConnectionPhaseNameTypeA), f.selector(model.ElectricalConnectionPhaseNameTypeB)
+	f.refresh(t, func() bool {
+		return f.holds(2, false, 16)() && f.selectorReady(phaseA, 1, 1)() && f.selectorReady(phaseB, 2, 2)()
+	})
 
 	selection, err := f.opev.Select(phaseA)
 	if err != nil || selection.LimitID != 1 || selection.MeasurementID != 1 {
@@ -326,8 +338,15 @@ func TestPeerOPEVSetInverseAndReadback(t *testing.T) {
 func TestPeerOPEVRejectsBeforeAnyWrite(t *testing.T) {
 	f := newOPEVFixture(t, standardDescriptions(), false)
 	f.bind(t)
-	f.refresh(t, f.holds(4, false, 16))
 	base := f.selector(model.ElectricalConnectionPhaseNameTypeA)
+	phaseC := f.selector(model.ElectricalConnectionPhaseNameTypeC)
+	f.refresh(t, func() bool {
+		if !f.holds(4, false, 16)() || !f.selectorReady(base, 1, 1)() {
+			return false
+		}
+		_, err := f.opev.Select(phaseC)
+		return errors.Is(err, errOPEVNotChangeable)
+	})
 
 	cases := []struct {
 		name   string
@@ -361,7 +380,6 @@ func TestPeerOPEVRejectsBeforeAnyWrite(t *testing.T) {
 	}
 
 	t.Run("ChangeableFalse", func(t *testing.T) {
-		phaseC := f.selector(model.ElectricalConnectionPhaseNameTypeC)
 		if _, err := f.opev.Set(phaseC, 10); !errors.Is(err, errOPEVNotChangeable) {
 			t.Fatalf("set err = %v, want %v", err, errOPEVNotChangeable)
 		}
@@ -384,8 +402,15 @@ func TestPeerOPEVAbsentAndAmbiguousDescriptions(t *testing.T) {
 		descriptions := append(standardDescriptions(), limitDescription(5, 1, model.LoadControlCategoryTypeObligation))
 		f := newOPEVFixture(t, descriptions, true)
 		f.bind(t)
-		f.refresh(t, func() bool { _, err := f.opev.Readback(4); return err == nil })
-		if _, err := f.opev.Set(f.selector(model.ElectricalConnectionPhaseNameTypeA), 10); !errors.Is(err, errOPEVAmbiguous) {
+		sel := f.selector(model.ElectricalConnectionPhaseNameTypeA)
+		f.refresh(t, func() bool {
+			if _, err := f.opev.Readback(4); err != nil {
+				return false
+			}
+			_, err := f.opev.Select(sel)
+			return errors.Is(err, errOPEVAmbiguous)
+		})
+		if _, err := f.opev.Set(sel, 10); !errors.Is(err, errOPEVAmbiguous) {
 			t.Fatalf("set err = %v, want %v", err, errOPEVAmbiguous)
 		}
 		if got := f.toPeer.Recorded(); len(got) != 0 {

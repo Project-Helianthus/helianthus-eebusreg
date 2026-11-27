@@ -311,15 +311,15 @@ func (f *cevcFixture) refreshIncentive(t *testing.T, ready func() bool) {
 }
 
 func (f *cevcFixture) seriesSeeded() bool {
-	one, err1 := f.series.Readback(cevcSeries)
-	other, err2 := f.series.Readback(cevcOtherSeries)
-	return err1 == nil && err2 == nil && len(one.Slots) == 2 && len(other.Slots) == 1
+	one, readErr := f.series.Readback(cevcSeries)
+	other, otherErr := f.series.Readback(cevcOtherSeries)
+	return readErr == nil && otherErr == nil && len(one.Slots) == 2 && len(other.Slots) == 1
 }
 
 func (f *cevcFixture) incentiveSeeded() bool {
-	one, err1 := f.table.Readback(cevcTariff)
-	other, err2 := f.table.Readback(cevcOtherTariff)
-	return err1 == nil && err2 == nil && one.Description != nil && one.Values != nil && other.Description != nil && other.Values != nil
+	one, readErr := f.table.Readback(cevcTariff)
+	other, otherErr := f.table.Readback(cevcOtherTariff)
+	return readErr == nil && otherErr == nil && one.Description != nil && one.Values != nil && other.Description != nil && other.Values != nil
 }
 
 func (f *cevcFixture) otherSeriesReady() bool {
