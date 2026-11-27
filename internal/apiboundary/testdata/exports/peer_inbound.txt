@@ -1,0 +1,17 @@
+const PriorityProducer
+const PriorityRelayed
+const PrioritySecondary
+func New
+func Publisher.Apply
+func Publisher.Revoke
+func Publisher.StopGeneration
+type Entity
+type FactView
+type LinkView
+type MemberView
+type NodeView
+type Publisher
+type Reading
+type Remote
+type Result
+type Scope

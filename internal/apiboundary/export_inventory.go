@@ -27,6 +27,7 @@ var exportInventoryNames = []string{
 	"participation.txt",
 	"participation_operator.txt",
 	"peer_driver.txt",
+	"peer_inbound.txt",
 	"raw.txt",
 	"raw_feature.txt",
 	"raw_mutation.txt",
@@ -43,6 +44,7 @@ var exportInventoryPackages = map[string]string{
 	"participation.txt":                   ".",
 	"participation_operator.txt":          ".",
 	"peer_driver.txt":                     "driver",
+	"peer_inbound.txt":                    "driver/inbound",
 	"raw.txt":                             "eebusraw",
 	"raw_feature.txt":                     "eebusraw",
 	"raw_mutation.txt":                    "eebusraw",
@@ -63,6 +65,12 @@ func driverInventoryDrift(observed map[string]map[manifestExport]struct{}) ([]st
 		inventory, err := readExportInventory(name)
 		if err != nil {
 			return nil, err
+		}
+		// An inventory names a package. A snapshot that does not contain that
+		// package is not a stale listing; a snapshot that contains it still
+		// fails closed when the listing and the exports disagree.
+		if _, present := observed[directory]; !present {
+			continue
 		}
 		if stale := exportDifference(inventory, observed[directory]); len(stale) > 0 {
 			violations = append(violations, fmt.Sprintf("%s lists exports that %s does not export: %s", name, directory, strings.Join(stale, ", ")))
