@@ -220,6 +220,39 @@
       }
     },
     {
+      "id": "CR-POS-05",
+      "description": "A reference whose certificate states the accuracy only as a class designation carries measurement_type and statement and no other stated member.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0005",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_energy",
+              "statement": "Accuracy class designation: class B, with the standard the certificate names."
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0005",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true
+      }
+    },
+    {
       "id": "CR-COV-01",
       "description": "A certified release is a floor: a later release is covered, an earlier release is not, the certified release is.",
       "document": {
@@ -1349,6 +1382,78 @@
                 "coefficient": "10",
                 "exponent10": 0
               }
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "stated_value_invalid",
+        "entry": 0,
+        "member": "stated_value"
+      }
+    },
+    {
+      "id": "CR-NEG-STATED-05",
+      "description": "A statement that is empty is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_energy",
+              "statement": ""
+            },
+            "url": "https://example.invalid/registry/EX-CERT-0001",
+            "retrieved_on": "2000-02-01"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reason": "stated_value_invalid",
+        "entry": 0,
+        "member": "stated_value"
+      }
+    },
+    {
+      "id": "CR-NEG-STATED-06",
+      "description": "A statement that is not a string is rejected.",
+      "document": {
+        "contract": "helianthus.semreg.certification-references/v1",
+        "entries": [
+          {
+            "source": "certification",
+            "category": "reference",
+            "driver": "example-driver",
+            "vendor": "Example Vendor",
+            "flavor": "example-profile",
+            "model": "EX-1000",
+            "firmware": {
+              "form": "release",
+              "release": "1.4.0"
+            },
+            "issuer": "Example Certification Body",
+            "certificate_number": "EX-CERT-0001",
+            "issue_date": "2000-01-15",
+            "stated_value": {
+              "measurement_type": "active_energy",
+              "statement": 1
             },
             "url": "https://example.invalid/registry/EX-CERT-0001",
             "retrieved_on": "2000-02-01"

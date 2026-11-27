@@ -29,7 +29,7 @@ DATE_MEMBERS = ("issue_date", "retrieved_on")
 IDENTITY = ("driver", "vendor", "flavor", "model", "firmware")
 STATED_MEMBERS = (
     "measurement_type", "measured", "ratio_maximum", "measured_minimum",
-    "measured_maximum", "range_minimum", "range_maximum",
+    "measured_maximum", "range_minimum", "range_maximum", "statement",
 )
 DECIMAL_MEMBERS = ("ratio_maximum", "measured_minimum", "measured_maximum", "range_minimum", "range_maximum")
 UPPER_BOUND_SOURCES = ("certificate", "vendor_document")
@@ -244,6 +244,8 @@ def check_stated_value(entry):
         return problem
     values = set(stated) - {"measurement_type"}
     if not values or ("measured" in values and type(stated["measured"]) is not bool):
+        return problem
+    if "statement" in values and not is_text(stated["statement"]):
         return problem
     if not all(is_decimal(stated[name]) for name in values & set(DECIMAL_MEMBERS)):
         return problem
