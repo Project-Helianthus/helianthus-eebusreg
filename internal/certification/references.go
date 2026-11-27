@@ -72,6 +72,7 @@ type StatedValue struct {
 	MeasuredMaximum *Decimal
 	RangeMinimum    *Decimal
 	RangeMaximum    *Decimal
+	Statement       string
 }
 
 // Entry is one reference, gap or unavailable record.
@@ -138,7 +139,7 @@ var (
 	textMembers    = []string{"driver", "vendor", "flavor", "model", "issuer", "certificate_number"}
 	dateMembers    = []string{"issue_date", "retrieved_on"}
 	decimalMembers = []string{"ratio_maximum", "measured_minimum", "measured_maximum", "range_minimum", "range_maximum"}
-	statedMembers  = append([]string{"measurement_type", "measured"}, decimalMembers...)
+	statedMembers  = append(append([]string{"measurement_type", "measured"}, decimalMembers...), "statement")
 	firmwareTails  = map[string][]string{
 		FormNotStated: nil,
 		FormRelease:   {"release"},
@@ -404,6 +405,9 @@ func checkStatedValue(entry *object) *Finding {
 			return bad
 		}
 	}
+	if stated.has("statement") && !isText(stated.values["statement"]) {
+		return bad
+	}
 	for _, name := range decimalMembers {
 		if stated.has(name) && !isDecimal(stated.values[name]) {
 			return bad
@@ -557,6 +561,7 @@ func buildStated(obj *object) *StatedValue {
 		MeasuredMaximum: decimalOf(obj, "measured_maximum"),
 		RangeMinimum:    decimalOf(obj, "range_minimum"),
 		RangeMaximum:    decimalOf(obj, "range_maximum"),
+		Statement:       text(obj, "statement"),
 	}
 	if measured, ok := obj.values["measured"].(bool); ok {
 		stated.Measured = &measured

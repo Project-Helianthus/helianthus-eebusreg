@@ -247,3 +247,36 @@ func TestYearZeroDateIsRefused(t *testing.T) {
 		t.Fatal("a valid date must be accepted")
 	}
 }
+
+func statementDocument(stated string) string {
+	return `{"contract":"` + ContractID + `","entries":[{"source":"certification","category":"reference","driver":"d","vendor":"v","flavor":"f","model":"m","firmware":{"form":"release","release":"1.4.0"},"issuer":"i","certificate_number":"c","issue_date":"2000-01-15","stated_value":` + stated + `,"url":"https://example.invalid/r","retrieved_on":"2000-02-01"}]}`
+}
+
+func TestLoadedReferenceKeepsTheStatementUnchanged(t *testing.T) {
+	const words = "Class B  per the standard the certificate names, as written."
+	document, err := Load([]byte(statementDocument(`{"measurement_type":"active_energy","statement":"` + words + `"}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := document.Entries[0].StatedValue
+	if s == nil || s.MeasurementType != "active_energy" || s.Statement != words {
+		t.Fatalf("stated value %+v", s)
+	}
+	if s.Measured != nil || s.RatioMaximum != nil || s.RangeMaximum != nil {
+		t.Fatalf("a member appeared that the record does not hold: %+v", s)
+	}
+}
+
+func TestStatementMustBeNonemptyText(t *testing.T) {
+	for _, stated := range []string{
+		`{"measurement_type":"active_energy","statement":""}`,
+		`{"measurement_type":"active_energy","statement":1}`,
+		`{"measurement_type":"active_energy","statement":null}`,
+	} {
+		_, err := Load([]byte(statementDocument(stated)))
+		var f *Finding
+		if !asFinding(err, &f) || f.Reason != ReasonStatedValueInvalid {
+			t.Fatalf("%s: %v", stated, err)
+		}
+	}
+}

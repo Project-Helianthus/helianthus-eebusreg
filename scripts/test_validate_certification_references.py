@@ -127,6 +127,26 @@ class CommandTests(unittest.TestCase):
         self.assertIn("entry 1: refusal on gap", names)
 
 
+class StatementTests(unittest.TestCase):
+    def check(self, stated):
+        document = validator.load_json(VECTORS)["vectors"][0]["document"]
+        entry = next(e for e in document["entries"] if e["category"] == "reference")
+        entry["stated_value"] = stated
+        return validator.check_document(document, validator.load_json(SCHEMA))
+
+    def test_statement_only_stated_value_passes(self):
+        self.assertIsNone(self.check({"measurement_type": "active_energy", "statement": "Class B as written."}))
+
+    def test_empty_statement_fails(self):
+        found = self.check({"measurement_type": "active_energy", "statement": ""})
+        self.assertEqual("stated_value_invalid", found["reason"])
+
+    def test_non_text_statement_fails(self):
+        for bad in (1, None):
+            found = self.check({"measurement_type": "active_energy", "statement": bad})
+            self.assertEqual("stated_value_invalid", found["reason"])
+
+
 class MutationCheckCatchesWeakValidators(unittest.TestCase):
     """Each case removes one rule from the validator; the mutation check must then fail."""
 

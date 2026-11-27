@@ -75,7 +75,8 @@
         "measured_minimum": {"$ref": "#/$defs/decimal"},
         "measured_maximum": {"$ref": "#/$defs/decimal"},
         "range_minimum": {"$ref": "#/$defs/decimal"},
-        "range_maximum": {"$ref": "#/$defs/decimal"}
+        "range_maximum": {"$ref": "#/$defs/decimal"},
+        "statement": {"$ref": "#/$defs/text"}
       },
       "anyOf": [
         {"required": ["measured"]},
@@ -83,7 +84,8 @@
         {"required": ["measured_minimum"]},
         {"required": ["measured_maximum"]},
         {"required": ["range_minimum"]},
-        {"required": ["range_maximum"]}
+        {"required": ["range_maximum"]},
+        {"required": ["statement"]}
       ]
     },
     "reference": {
