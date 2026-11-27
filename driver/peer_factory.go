@@ -93,11 +93,16 @@ func New(key semdriver.InstanceKey, config eebusruntime.Config) (semdriver.Insta
 	if err := key.Validate(); err != nil {
 		return nil, err
 	}
-	runtime, err := eebusruntime.New(config)
+	checked, err := eebusruntime.New(config)
 	if err != nil {
 		return nil, err
 	}
-	return &peerInstance{key: key, runtime: runtime, config: detachRuntimeConfig(config)}, nil
+	runtime, admin, err := eebusruntime.NewOperatorRuntimeV1(config)
+	if err != nil {
+		return nil, err
+	}
+	_ = checked
+	return &peerInstance{key: key, runtime: runtime, admin: admin, config: detachRuntimeConfig(config)}, nil
 }
 
 func (f *Factory) lock() { f.gate <- struct{}{} }
@@ -108,10 +113,12 @@ type peerInstance struct {
 	mu      sync.Mutex
 	key     semdriver.InstanceKey
 	runtime eebusruntime.Runtime
+	admin   eebusruntime.AdminV1
 	config  eebusruntime.Config
 	session semdriver.Session
 	started bool
 	fenced  bool
+	pairing pairingState
 }
 
 func (instance *peerInstance) Start(ctx context.Context, session semdriver.Session) error {
@@ -125,21 +132,26 @@ func (instance *peerInstance) Start(ctx context.Context, session semdriver.Sessi
 		return errors.New("instance already started")
 	}
 	instance.mu.Unlock()
-	if err := instance.runtime.Start(ctx); err != nil {
+	if err := instance.runtime.Start(instance.transportContext(ctx)); err != nil {
 		return err
 	}
 	instance.mu.Lock()
-	defer instance.mu.Unlock()
 	if instance.fenced {
 		_ = instance.runtime.Shutdown()
+		instance.mu.Unlock()
 		return errors.New("instance withdrawn")
 	}
 	if instance.started {
+		instance.mu.Unlock()
 		return errors.New("instance already started")
 	}
 	instance.session = session
 	instance.started = true
-	return nil
+	instance.mu.Unlock()
+	if session == nil {
+		return nil
+	}
+	return instance.registerPairingNamespace(ctx, session)
 }
 
 func (instance *peerInstance) FenceWithdrawal() {

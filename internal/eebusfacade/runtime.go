@@ -238,6 +238,7 @@ func acquireRuntimeWithSnapshotSerializer(
 	if err := acquisition.openService(serializer); err != nil {
 		return nil, err
 	}
+	bindRemoteTransport(acquisition.handler, ctx)
 	if err := acquisition.bindRawFeatures(); err != nil {
 		return nil, err
 	}
