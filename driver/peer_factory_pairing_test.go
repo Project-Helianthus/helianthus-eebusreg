@@ -3,7 +3,9 @@ package driver
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/netip"
 	"path/filepath"
 	"strings"
@@ -12,9 +14,9 @@ import (
 
 	eebusruntime "github.com/Project-Helianthus/helianthus-eebusreg"
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusservicebridge"
 	semreg "github.com/Project-Helianthus/helianthus-semreg/semreg/v1"
 	semdriver "github.com/Project-Helianthus/helianthus-semreg/semreg/v1/driver"
-	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1/graph"
 )
 
 type pairingWorld struct {
@@ -41,6 +43,7 @@ type pairingAdmin struct {
 }
 
 type pairingSession struct {
+	eebusservicebridge.PairingSessionSurface
 	root    semdriver.NodeRef
 	methods map[string]semdriver.NativeMethod
 	members []semdriver.MemberSpec
@@ -49,6 +52,15 @@ type pairingSession struct {
 	sources []semdriver.Source
 	readers map[string]semdriver.NativeReader
 }
+
+var (
+	_ semdriver.Session                = (*pairingSession)(nil)
+	_ semdriver.NativeRegistry         = (*pairingSession)(nil)
+	_ semdriver.Publisher              = (*pairingSession)(nil)
+	_ semdriver.PublicationTransaction = (*pairingSession)(nil)
+	_ semdriver.ScopedOperations       = (*pairingSession)(nil)
+	_ semdriver.Calendar               = (*pairingSession)(nil)
+)
 
 func newPairingWorld(t *testing.T, key string) *pairingWorld {
 	t.Helper()
@@ -59,14 +71,16 @@ func newPairingWorld(t *testing.T, key string) *pairingWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
+	session := &pairingSession{
+		root:    semdriver.NodeRef{Bridge: "bridge.eebus", ID: semreg.ResourceID("installations/lab/instances/eebus-inbound/" + key)},
+		methods: map[string]semdriver.NativeMethod{},
+	}
+	session.PairingSessionSurface = eebusservicebridge.NewPairingSessionSurface(session)
 	world := &pairingWorld{
 		instance: created.(*peerInstance),
 		runtime:  &pairingRuntime{snapshot: eebusruntime.SnapshotV1{}},
 		admin:    &pairingAdmin{revision: 7},
-		session: &pairingSession{
-			root:    semdriver.NodeRef{Bridge: "bridge.eebus", ID: semreg.ResourceID("installations/lab/instances/eebus-inbound/" + key)},
-			methods: map[string]semdriver.NativeMethod{},
-		},
+		session:  session,
 	}
 	world.instance.runtime = world.runtime
 	world.instance.admin = world.admin
@@ -175,8 +189,6 @@ func (admin *pairingAdmin) Untrust(context.Context, eebusruntime.UntrustRequestV
 	return eebusruntime.AdminMutationResultV1{StateRevision: admin.revision, Outcome: "untrusted"}, nil
 }
 
-func (session *pairingSession) Native() semdriver.NativeRegistry             { return session }
-func (session *pairingSession) SemanticInput() semdriver.SemanticInput       { return session }
 func (session *pairingSession) ScopedOperations() semdriver.ScopedOperations { return session }
 func (session *pairingSession) Calendar() semdriver.Calendar                 { return session }
 func (session *pairingSession) Publisher() semdriver.Publisher               { return session }
@@ -185,18 +197,6 @@ func (session *pairingSession) Prepare(func(*semreg.PublicationBatch)) (semreg.P
 }
 func (session *pairingSession) RegisterExecutor(semdriver.SettingRoute, semdriver.Executor) (func(), error) {
 	return nil, nil
-}
-func (session *pairingSession) Capture(context.Context, semdriver.Filter) (semdriver.SemanticCut, error) {
-	return semdriver.SemanticCut{}, errors.New("not used")
-}
-func (session *pairingSession) Resume(context.Context, semdriver.Cursor, semdriver.Filter) (semdriver.Changes, error) {
-	return semdriver.Changes{}, errors.New("not used")
-}
-func (session *pairingSession) RetrieveLens(context.Context, graph.CutRef, graph.LensRequest) (graph.LensResult, error) {
-	return graph.LensResult{}, errors.New("not used")
-}
-func (session *pairingSession) SumMembers(context.Context, graph.CutRef, graph.LensRequest, semreg.DefinitionRef, semreg.ResourceID) (graph.MemberSum, error) {
-	return graph.MemberSum{}, errors.New("not used")
 }
 func (session *pairingSession) Invoke(context.Context, semdriver.OperationRequest) (semdriver.OperationResult, error) {
 	return semdriver.OperationResult{}, nil
@@ -592,5 +592,91 @@ func sharedElement() semdriver.Element {
 		Key: semreg.FactKey{
 			PackID: "pack.eebus-inbound", PackVersion: "1.0.0", FactID: "fact.remote-observation", Dimensions: []semreg.Dimension{},
 		},
+	}
+}
+
+func TestPairingPublicFilesOmitBoundaryTerms(t *testing.T) {
+	fragments := []string{"Registry", "Semantic"}
+	if got := exportedBoundaryTerms(parseBoundaryFile(t, "package driver\nfunc Native() (semdriver.NativeRegistry, error) { return nil, nil }\n"), fragments); len(got) == 0 {
+		t.Fatal("checker accepted an exported signature boundary term")
+	}
+	if got := exportedBoundaryTerms(parseBoundaryFile(t, "package driver\nfunc hidden() semdriver.SemanticInput { return nil }\n"), fragments); len(got) != 0 {
+		t.Fatalf("checker flagged an unexported method: %v", got)
+	}
+	for _, name := range []string{"peer_factory_pairing.go", "peer_factory_pairing_test.go"} {
+		for _, term := range exportedBoundaryTerms(parseBoundaryFile(t, name), fragments) {
+			t.Errorf("%s: %s", name, term)
+		}
+	}
+}
+
+func parseBoundaryFile(t *testing.T, name string) *ast.File {
+	t.Helper()
+	var (
+		file *ast.File
+		err  error
+	)
+	if strings.Contains(name, "\n") {
+		file, err = parser.ParseFile(token.NewFileSet(), "fixture.go", name, 0)
+	} else {
+		file, err = parser.ParseFile(token.NewFileSet(), name, nil, 0)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+func exportedBoundaryTerms(file *ast.File, fragments []string) []string {
+	var found []string
+	for _, decl := range file.Decls {
+		switch declaration := decl.(type) {
+		case *ast.FuncDecl:
+			if declaration.Name == nil || !declaration.Name.IsExported() {
+				continue
+			}
+			noteBoundaryTerm(declaration.Name, fragments, &found)
+			ast.Inspect(declaration.Type, func(node ast.Node) bool {
+				ident, ok := node.(*ast.Ident)
+				if ok {
+					noteBoundaryTerm(ident, fragments, &found)
+				}
+				return true
+			})
+		case *ast.GenDecl:
+			for _, spec := range declaration.Specs {
+				switch typed := spec.(type) {
+				case *ast.TypeSpec:
+					if !typed.Name.IsExported() {
+						continue
+					}
+					noteBoundaryTerm(typed.Name, fragments, &found)
+					ast.Inspect(typed.Type, func(node ast.Node) bool {
+						ident, ok := node.(*ast.Ident)
+						if ok {
+							noteBoundaryTerm(ident, fragments, &found)
+						}
+						return true
+					})
+				case *ast.ValueSpec:
+					for _, name := range typed.Names {
+						noteBoundaryTerm(name, fragments, &found)
+					}
+				}
+			}
+		}
+	}
+	return found
+}
+
+func noteBoundaryTerm(ident *ast.Ident, fragments []string, found *[]string) {
+	if ident == nil || !ident.IsExported() {
+		return
+	}
+	for _, fragment := range fragments {
+		if strings.Contains(ident.Name, fragment) {
+			*found = append(*found, ident.Name+" contains "+fragment)
+			return
+		}
 	}
 }
