@@ -1,0 +1,19 @@
+{
+  "contract": "helianthus.semreg.certification-references/v1",
+  "entries": [
+    {
+      "source": "certification",
+      "category": "gap",
+      "driver": "eebus-inbound",
+      "vendor": "vendor_not_named_by_driver",
+      "flavor": "eebus-inbound",
+      "model": "model_not_named_by_driver",
+      "firmware": {
+        "form": "not_stated"
+      },
+      "issuer": "no_registry_consulted",
+      "url": "https://github.com/Project-Helianthus/helianthus-docs-semantic/blob/main/api/v1/certification-references-v1.md",
+      "retrieved_on": "2026-11-27"
+    }
+  ]
+}
