@@ -57,6 +57,9 @@ func approvedPublicDependency(from, packagePath string) bool {
 	if _, ok := publicApproval[packagePath]; ok {
 		return true
 	}
+	if from == modulePath && packagePath == "github.com/Project-Helianthus/helianthus-semreg/semreg/v1" {
+		return true
+	}
 	if !isDriverPackagePath(from) {
 		return false
 	}

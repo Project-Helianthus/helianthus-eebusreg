@@ -26,6 +26,7 @@ var exportInventoryNames = []string{
 	"operator_admin_runtime.txt",
 	"participation.txt",
 	"participation_operator.txt",
+	"peer_driver.txt",
 	"raw.txt",
 	"raw_feature.txt",
 	"raw_mutation.txt",
@@ -41,6 +42,7 @@ var exportInventoryPackages = map[string]string{
 	"operator_admin_runtime.txt":          ".",
 	"participation.txt":                   ".",
 	"participation_operator.txt":          ".",
+	"peer_driver.txt":                     "driver",
 	"raw.txt":                             "eebusraw",
 	"raw_feature.txt":                     "eebusraw",
 	"raw_mutation.txt":                    "eebusraw",
@@ -139,4 +141,26 @@ func isExportInventoryName(name string) bool {
 func isExportInventoryPath(repositoryPath string) bool {
 	directory, name := path.Split(repositoryPath)
 	return directory == exportInventoryRepositoryDirectory+"/" && isExportInventoryName(name)
+}
+
+var msp055RuntimeExports = map[manifestExport]struct{}{
+	{Kind: "const", Name: "PairingPolicyClosed"}:       {},
+	{Kind: "func", Name: "New"}:                        {},
+	{Kind: "func", Name: "RawMutationOutcomeV1.Clone"}: {},
+	{Kind: "type", Name: "Config"}:                     {},
+	{Kind: "type", Name: "PairingPolicy"}:              {},
+	{Kind: "type", Name: "RawFeatureRuntimeV1"}:        {},
+	{Kind: "type", Name: "RawMutationOutcomeV1"}:       {},
+	{Kind: "type", Name: "RawMutationRuntimeV1"}:       {},
+	{Kind: "type", Name: "Remote"}:                     {},
+	{Kind: "type", Name: "Runtime"}:                    {},
+	{Kind: "var", Name: "ErrRuntimeDisabled"}:          {},
+	{Kind: "var", Name: "ErrRuntimeShutdown"}:          {},
+}
+
+var outputPowerLimitRuntimeExports = map[manifestExport]struct{}{
+	{Kind: "const", Name: "PowerLimitDirectionConsumption"}: {},
+	{Kind: "const", Name: "PowerLimitDirectionProduction"}:  {},
+	{Kind: "type", Name: "OutputPowerLimitFallback"}:        {},
+	{Kind: "type", Name: "PowerLimitDirection"}:             {},
 }

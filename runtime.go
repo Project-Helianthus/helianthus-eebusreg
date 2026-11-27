@@ -15,6 +15,7 @@ import (
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
+	semreg "github.com/Project-Helianthus/helianthus-semreg/semreg/v1"
 )
 
 var (
@@ -53,8 +54,8 @@ type Runtime interface {
 
 // Config selects and bounds one runtime instance. Constructors validate and normalize it before
 // any I/O. With Enabled false every other field must hold its zero value, nil slices included;
-// with Enabled true the per-field rules below apply. The constructor deep-copies Remotes and
-// MutationLabProfiles, so the caller may reuse its slices.
+// with Enabled true the per-field rules below apply. The constructor deep-copies Remotes,
+// MutationLabProfiles and OutputPowerLimitFallbacks, so the caller may reuse its slices.
 type Config struct {
 	// Enabled false yields an inert runtime that never listens or opens StateRoot.
 	Enabled bool
@@ -79,7 +80,32 @@ type Config struct {
 	// eebusraw.ValidateMutationLabProfileV1, target a remote listed in Remotes, and be unique by
 	// profile ID and by content.
 	MutationLabProfiles []eebusraw.MutationLabProfileV1
+	// OutputPowerLimitFallbacks is the declared per-resource power-limit fallback of this
+	// instance. Each entry names one resource and one direction and a nonnegative power in watts.
+	// A missing entry is not a configured zero. An unrelated resource or instance does not
+	// inherit an entry.
+	OutputPowerLimitFallbacks []OutputPowerLimitFallback
 }
+
+// PowerLimitDirection is the declared direction of one power-limit fallback.
+type PowerLimitDirection string
+
+const (
+	// PowerLimitDirectionConsumption is the consumption direction.
+	PowerLimitDirectionConsumption PowerLimitDirection = "consumption"
+	// PowerLimitDirectionProduction is the production direction.
+	PowerLimitDirectionProduction PowerLimitDirection = "production"
+)
+
+// OutputPowerLimitFallback is one declared power-limit fallback for one resource and one
+// direction. Power is a nonnegative magnitude in watts.
+type OutputPowerLimitFallback struct {
+	Resource  semreg.ResourceID
+	Direction PowerLimitDirection
+	Power     semreg.Quantity
+}
+
+const powerLimitWattUnit semreg.DefinitionID = "unit.watt"
 
 // PairingPolicy names how a runtime admits pairing. An enabled Config accepts only
 // PairingPolicyClosed; the policy is specified in
@@ -738,7 +764,7 @@ func normalizeRuntimeConfig(config Config) (Config, error) {
 		if config.StateRoot != "" || config.Interface != "" ||
 			config.ListenAddress != (netip.AddrPort{}) || config.DiscoveryEnabled ||
 			config.Remotes != nil || config.PairingPolicy != "" ||
-			config.MutationLabProfiles != nil {
+			config.MutationLabProfiles != nil || config.OutputPowerLimitFallbacks != nil {
 			return Config{}, errors.New("disabled runtime configuration must be empty")
 		}
 		return Config{}, nil
@@ -827,7 +853,53 @@ func normalizeRuntimeConfig(config Config) (Config, error) {
 		}
 		config.MutationLabProfiles = profiles
 	}
+	fallbacks, err := normalizeOutputPowerLimitFallbacks(config.OutputPowerLimitFallbacks)
+	if err != nil {
+		return Config{}, err
+	}
+	config.OutputPowerLimitFallbacks = fallbacks
 	return config, nil
+}
+
+func normalizeOutputPowerLimitFallbacks(source []OutputPowerLimitFallback) ([]OutputPowerLimitFallback, error) {
+	if source == nil {
+		return nil, nil
+	}
+	copied := make([]OutputPowerLimitFallback, len(source))
+	seen := make(map[string]struct{}, len(source))
+	for index, entry := range source {
+		if entry.Resource == "" {
+			return nil, fmt.Errorf("output power limit fallback %d resource is empty", index)
+		}
+		if err := entry.Resource.Validate(); err != nil {
+			return nil, fmt.Errorf("output power limit fallback %d resource is invalid", index)
+		}
+		if entry.Direction == "" {
+			return nil, fmt.Errorf("output power limit fallback %d direction is empty", index)
+		}
+		if entry.Direction != PowerLimitDirectionConsumption && entry.Direction != PowerLimitDirectionProduction {
+			return nil, fmt.Errorf("output power limit fallback %d direction is invalid", index)
+		}
+		if entry.Power.Unit == "" {
+			return nil, fmt.Errorf("output power limit fallback %d unit is empty", index)
+		}
+		if entry.Power.Unit != powerLimitWattUnit {
+			return nil, fmt.Errorf("output power limit fallback %d unit is invalid", index)
+		}
+		if err := entry.Power.Validate(); err != nil {
+			return nil, fmt.Errorf("output power limit fallback %d power is invalid", index)
+		}
+		if strings.HasPrefix(entry.Power.Number.Coefficient, "-") {
+			return nil, fmt.Errorf("output power limit fallback %d power is negative", index)
+		}
+		key := string(entry.Resource) + "\x00" + string(entry.Direction)
+		if _, exists := seen[key]; exists {
+			return nil, fmt.Errorf("output power limit fallback %d duplicates resource and direction", index)
+		}
+		seen[key] = struct{}{}
+		copied[index] = entry
+	}
+	return copied, nil
 }
 
 func validateRuntimeListenAddress(endpoint netip.AddrPort) error {
@@ -874,6 +946,9 @@ func cloneRuntimeConfig(config Config) Config {
 			profiles[index] = profile.Clone()
 		}
 		config.MutationLabProfiles = profiles
+	}
+	if config.OutputPowerLimitFallbacks != nil {
+		config.OutputPowerLimitFallbacks = append([]OutputPowerLimitFallback(nil), config.OutputPowerLimitFallbacks...)
 	}
 	return config
 }

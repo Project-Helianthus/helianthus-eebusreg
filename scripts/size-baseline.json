@@ -35,7 +35,7 @@
       "path": "internal/apiboundary/main.go",
       "symbol": "<file>",
       "metric": "file_lines",
-      "value": 1698
+      "value": 1690
     },
     {
       "path": "internal/apiboundary/main.go",
