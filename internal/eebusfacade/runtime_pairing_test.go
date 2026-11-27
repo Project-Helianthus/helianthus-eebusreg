@@ -10,10 +10,11 @@ import (
 )
 
 func TestRemoteTransportContextIsPerCall(t *testing.T) {
-	if RemoteTransportFrom(nil) != nil || RemoteTransportFrom(context.Background()) != nil {
+	var absent context.Context
+	if RemoteTransportFrom(absent) != nil || RemoteTransportFrom(context.Background()) != nil {
 		t.Fatal("an empty context carried a notice function")
 	}
-	if RemoteTransportFrom(WithRemoteTransport(nil, nil)) != nil {
+	if RemoteTransportFrom(WithRemoteTransport(absent, nil)) != nil {
 		t.Fatal("a nil notice was stored")
 	}
 	bindRemoteTransport(nil, context.Background())

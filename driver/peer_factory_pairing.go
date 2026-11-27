@@ -913,22 +913,6 @@ func candidateHandle(snapshot eebusruntime.AdminSnapshotV1, ski string) (eebusru
 	return eebusruntime.CandidateHandleV1{}, false
 }
 
-func pairingMemberKey(namespace semdriver.NamespaceID, instance semdriver.InstanceKey, node semdriver.NodeID, local string) semdriver.MemberKey {
-	return semdriver.MemberKey{Namespace: namespace, Instance: instance, Node: node, Local: semdriver.MemberID(local)}
-}
-
-func pairingMemberSpec(local string) semdriver.MemberSpec {
-	return semdriver.MemberSpec{Local: semdriver.MemberID(local), Schema: "eebus.remote", Mode: "read", Scope: "instance"}
-}
-
-func pairingMethodSpec(local string) semdriver.MethodSpec {
-	return semdriver.MethodSpec{Local: semdriver.MemberID(local), Schema: "eebus.pairing", Scope: "instance"}
-}
-
-func normalizeSKI(ski string) string {
-	return strings.ToLower(strings.TrimSpace(ski))
-}
-
 func generationKey(ski string, generation uint64) string {
 	return ski + "/" + strconv.FormatUint(generation, 10)
 }

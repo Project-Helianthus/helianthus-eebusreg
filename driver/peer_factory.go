@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 
 	eebusruntime "github.com/Project-Helianthus/helianthus-eebusreg"
@@ -244,4 +245,20 @@ var runtimeOptionKeys = map[string]struct{}{
 	"MutationLabProfiles":       {},
 	"OutputPowerLimitFallbacks": {},
 	"DiscoveryEnabled":          {},
+}
+
+func pairingMemberKey(namespace semdriver.NamespaceID, instance semdriver.InstanceKey, node semdriver.NodeID, local string) semdriver.MemberKey {
+	return semdriver.MemberKey{Namespace: namespace, Instance: instance, Node: node, Local: semdriver.MemberID(local)}
+}
+
+func pairingMemberSpec(local string) semdriver.MemberSpec {
+	return semdriver.MemberSpec{Local: semdriver.MemberID(local), Schema: "eebus.remote", Mode: "read", Scope: "instance"}
+}
+
+func pairingMethodSpec(local string) semdriver.MethodSpec {
+	return semdriver.MethodSpec{Local: semdriver.MemberID(local), Schema: "eebus.pairing", Scope: "instance"}
+}
+
+func normalizeSKI(ski string) string {
+	return strings.ToLower(strings.TrimSpace(ski))
 }
