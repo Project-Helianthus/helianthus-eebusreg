@@ -49,6 +49,7 @@ type runtimeServiceHandler struct {
 	spinePending              map[string]runtimeSPINERefresh
 	rawFeatures               *rawFeatureRuntimeBridge
 	remoteTransport           RemoteTransportFunc
+	remoteSource              RemoteSourceFunc
 }
 
 func newRuntimeServiceHandler(config RuntimeConfig, localSKI string, now func() time.Time) (*runtimeServiceHandler, error) {
@@ -312,9 +313,13 @@ func (handler *runtimeServiceHandler) retireRawFeatureRemote(ski string) {
 	bridge := handler.rawFeatures
 	observation, ok := handler.observations[ski]
 	handler.mu.Unlock()
-	if bridge != nil && ok && observation.SessionIndex > 0 {
-		bridge.retireRemote(ski, observation.SessionIndex)
+	if bridge == nil || !ok || observation.SessionIndex == 0 {
+		return
 	}
+	bridge.retireRemote(ski, observation.SessionIndex)
+	handler.notifySource(RemoteSourceNotice{
+		Kind: RemoteSourceGenerationStopped, SKI: ski, Generation: observation.SessionIndex,
+	})
 }
 
 func runtimeSessionIdentity(observation runtimeGraphObservation) string {

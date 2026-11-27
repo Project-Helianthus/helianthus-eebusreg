@@ -142,6 +142,39 @@ func pairingDestinationCount(calls []remoteSubscriptionCall) int {
 	return len(seen)
 }
 
+func TestRuntimeSourceNoticeFollowsNotifyAndGenerationStop(t *testing.T) {
+	ski := strings.Repeat("a", 40)
+	fixture := newRemoteSubscriptionFixture(t, ski, remoteSubscriptionMeasurementSpec())
+	handler := newRemoteSubscriptionHandler(t, fixture, remoteSubscriptionTrustAll)
+	var notices []RemoteSourceNotice
+	bindRemoteTransport(handler, WithRemoteSource(context.Background(), func(notice RemoteSourceNotice) {
+		notices = append(notices, notice)
+	}))
+	fixture.admit(t, 4)
+	if err := fixture.bridge.refreshRemote(fixture.remoteSKI, fixture.shipID, 4, fixture.remote); err != nil {
+		t.Fatal(err)
+	}
+	notifiedAt := time.Date(2030, 1, 2, 3, 5, 0, 0, time.UTC)
+	fixture.clock.set(notifiedAt)
+	handler.HandleEvent(remoteSubscriptionNotify(
+		t, fixture, fixture.feature(11), spinemodel.FunctionTypeMeasurementListData, remoteSubscriptionMeasurementData(215),
+	))
+	if len(notices) != 1 || notices[0].Kind != RemoteSourceValue || notices[0].SKI != ski || notices[0].Generation != 4 || !notices[0].ObservedAt.Equal(notifiedAt) || !strings.Contains(notices[0].Value, "215") {
+		t.Fatalf("value notice = %+v", notices)
+	}
+	handler.mu.Lock()
+	observation := handler.newRemoteObservation(ski)
+	observation.SessionIndex = 4
+	observation.SessionID = "session:test:4"
+	observation.SessionState = "connected"
+	handler.observations[ski] = observation
+	handler.mu.Unlock()
+	handler.RemoteSKIDisconnected(nil, ski)
+	if len(notices) < 2 || notices[1].Kind != RemoteSourceGenerationStopped || notices[1].SKI != ski || notices[1].Generation != 4 {
+		t.Fatalf("stop notice = %+v", notices)
+	}
+}
+
 func pairingHandlerError(handler *runtimeServiceHandler) error {
 	select {
 	case err := <-handler.errors:

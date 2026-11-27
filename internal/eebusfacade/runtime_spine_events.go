@@ -50,7 +50,11 @@ func (handler *runtimeServiceHandler) deactivateSPINEEvents() {
 	handler.spineCancel = nil
 	handler.spinePending = nil
 	rawFeatures := handler.rawFeatures
+	stops := handler.stoppedSourceNoticesLocked()
 	handler.mu.Unlock()
+	for _, notice := range stops {
+		handler.notifySource(notice)
+	}
 	if rawFeatures != nil {
 		rawFeatures.retireAll()
 	}
@@ -65,7 +69,7 @@ func (handler *runtimeServiceHandler) waitForSPINEEvents() {
 }
 
 func (handler *runtimeServiceHandler) HandleEvent(payload spineapi.EventPayload) {
-	handler.routeRemoteNotify(payload)
+	handler.noteRemoteNotify(payload)
 	if !runtimeTopologyEvent(payload) {
 		return
 	}

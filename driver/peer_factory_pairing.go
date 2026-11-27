@@ -23,8 +23,11 @@ type pairingState struct {
 	records    []pairingSource
 	selections map[string]eebusruntime.SelectionHandleV1
 	nodes      map[string]semdriver.NodeRef
+	stopped    map[string]struct{}
 	seq        uint64
 }
+
+const producerPriority int32 = 3
 
 type pairingSource struct {
 	ski          string
@@ -75,9 +78,28 @@ type pairingCallResult struct {
 }
 
 func (instance *peerInstance) transportContext(ctx context.Context) context.Context {
-	return eebusfacade.WithRemoteTransport(ctx, func(notice eebusfacade.RemoteTransportNotice) {
+	ctx = eebusfacade.WithRemoteTransport(ctx, func(notice eebusfacade.RemoteTransportNotice) {
 		instance.onTransport(notice.Kind, notice.SKI)
 	})
+	return eebusfacade.WithRemoteSource(ctx, func(notice eebusfacade.RemoteSourceNotice) {
+		instance.onSource(notice)
+	})
+}
+
+func (instance *peerInstance) onSource(notice eebusfacade.RemoteSourceNotice) {
+	switch notice.Kind {
+	case eebusfacade.RemoteSourceValue:
+		if notice.Generation == 0 || notice.Value == "" || notice.Value == "null" {
+			return
+		}
+		priority := notice.Priority
+		if priority == 0 {
+			priority = producerPriority
+		}
+		_ = instance.recordPairedValue(notice.SKI, semdriver.Element{}, priority, notice.Generation, notice.Value, notice.ObservedAt, notice.Path)
+	case eebusfacade.RemoteSourceGenerationStopped:
+		instance.stopGeneration(notice.SKI, notice.Generation)
+	}
 }
 
 func (instance *peerInstance) onTransport(kind, ski string) {
@@ -359,8 +381,26 @@ func (instance *peerInstance) featuresDataGet(ctx context.Context, raw []byte) (
 	if terminal != nil {
 		return encodeCode(string(terminal.Code))
 	}
+	instance.recordRead(data)
 	body, err := json.Marshal(data)
 	return body, err
+}
+
+func (instance *peerInstance) recordRead(data eebusraw.FeatureDataGetDataV1) {
+	for _, result := range data.Results {
+		if result.Runtime.ConnectionGeneration == 0 || strings.TrimSpace(result.Target.RemoteSKI) == "" {
+			continue
+		}
+		encoded, err := json.Marshal(result.Value)
+		if err != nil || len(encoded) == 0 || string(encoded) == "null" {
+			continue
+		}
+		at := result.DataTimestamp
+		if at.IsZero() {
+			at = result.ReceivedAt
+		}
+		_ = instance.recordPairedValue(result.Target.RemoteSKI, semdriver.Element{}, producerPriority, result.Runtime.ConnectionGeneration, string(encoded), at, "")
+	}
 }
 
 func (instance *peerInstance) featuresDataSet(ctx context.Context, raw []byte) ([]byte, error) {
@@ -493,6 +533,10 @@ func (instance *peerInstance) recordPairedValue(ski string, element semdriver.El
 		path = instance.defaultPath(ski, generation)
 	}
 	instance.pairing.mu.Lock()
+	if _, stopped := instance.pairing.stopped[generationKey(ski, generation)]; stopped {
+		instance.pairing.mu.Unlock()
+		return nil
+	}
 	if current := instance.pairing.byPath(path); current != nil {
 		if current.availability == "withdrawn" {
 			instance.pairing.mu.Unlock()
@@ -526,6 +570,10 @@ func (instance *peerInstance) stopGeneration(ski string, generation uint64) {
 	ski = normalizeSKI(ski)
 	instance.pairing.mu.Lock()
 	defer instance.pairing.mu.Unlock()
+	if instance.pairing.stopped == nil {
+		instance.pairing.stopped = map[string]struct{}{}
+	}
+	instance.pairing.stopped[generationKey(ski, generation)] = struct{}{}
 	for index := range instance.pairing.records {
 		record := &instance.pairing.records[index]
 		if record.ski == ski && record.generation == generation && record.availability != "withdrawn" {
@@ -879,6 +927,10 @@ func pairingMethodSpec(local string) semdriver.MethodSpec {
 
 func normalizeSKI(ski string) string {
 	return strings.ToLower(strings.TrimSpace(ski))
+}
+
+func generationKey(ski string, generation uint64) string {
+	return ski + "/" + strconv.FormatUint(generation, 10)
 }
 
 func pairingElementEqual(left, right semdriver.Element) bool {

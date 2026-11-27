@@ -14,6 +14,7 @@ import (
 
 	eebusruntime "github.com/Project-Helianthus/helianthus-eebusreg"
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusservicebridge"
 	semreg "github.com/Project-Helianthus/helianthus-semreg/semreg/v1"
 	semdriver "github.com/Project-Helianthus/helianthus-semreg/semreg/v1/driver"
@@ -27,8 +28,10 @@ type pairingWorld struct {
 }
 
 type pairingRuntime struct {
-	snapshot eebusruntime.SnapshotV1
-	reads    int
+	snapshot     eebusruntime.SnapshotV1
+	reads        int
+	readData     eebusraw.FeatureDataGetDataV1
+	sourceNotice eebusfacade.RemoteSourceFunc
 }
 
 type pairingAdmin struct {
@@ -120,8 +123,11 @@ func (world *pairingWorld) read(t *testing.T, local string) []byte {
 	return body
 }
 
-func (runtime *pairingRuntime) Start(context.Context) error { return nil }
-func (runtime *pairingRuntime) Shutdown() error             { return nil }
+func (runtime *pairingRuntime) Start(ctx context.Context) error {
+	runtime.sourceNotice = eebusfacade.RemoteSourceFrom(ctx)
+	return nil
+}
+func (runtime *pairingRuntime) Shutdown() error { return nil }
 func (runtime *pairingRuntime) Snapshot() (eebusruntime.SnapshotV1, error) {
 	return runtime.snapshot, nil
 }
@@ -134,7 +140,7 @@ func (runtime *pairingRuntime) FeaturesGet(context.Context, eebusraw.ReadAuthori
 }
 func (runtime *pairingRuntime) FeaturesDataGet(context.Context, eebusraw.ReadAuthorizationV1, eebusraw.FeatureDataGetRequestV1) (eebusraw.FeatureDataGetDataV1, *eebusraw.ErrorV1) {
 	runtime.reads++
-	return eebusraw.FeatureDataGetDataV1{}, nil
+	return runtime.readData, nil
 }
 
 func (admin *pairingAdmin) Snapshot(_ context.Context, request eebusruntime.AdminSnapshotRequestV1) (eebusruntime.AdminSnapshotV1, *eebusruntime.AdminErrorV1) {
@@ -592,6 +598,97 @@ func sharedElement() semdriver.Element {
 		Key: semreg.FactKey{
 			PackID: "pack.eebus-inbound", PackVersion: "1.0.0", FactID: "fact.remote-observation", Dimensions: []semreg.Dimension{},
 		},
+	}
+}
+
+func TestPairingSourceNoticeRecordsAndStopsOneRemote(t *testing.T) {
+	first := strings.Repeat("a", 40)
+	second := strings.Repeat("b", 40)
+	world := newPairingWorld(t, "heating.east")
+	if world.runtime.sourceNotice == nil {
+		t.Fatal("start did not install the native source notice")
+	}
+	world.runtime.snapshot = eebusruntime.SnapshotV1{
+		Services: []eebusruntime.ServiceV1{{SKI: first, Paired: true}, {SKI: second, Paired: true}},
+		Pairing: []eebusruntime.PairingObservationV1{
+			{RemoteSKI: first, State: eebusraw.PairingStatePaired},
+			{RemoteSKI: second, State: eebusraw.PairingStatePaired},
+		},
+	}
+	at := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	world.runtime.sourceNotice(eebusfacade.RemoteSourceNotice{
+		Kind: eebusfacade.RemoteSourceValue, SKI: first, Generation: 4, Value: "48.5", ObservedAt: at,
+	})
+	world.runtime.sourceNotice(eebusfacade.RemoteSourceNotice{
+		Kind: eebusfacade.RemoteSourceValue, SKI: second, Generation: 8, Value: "12.0", ObservedAt: at.Add(time.Minute), Priority: 1,
+	})
+	if len(world.session.sources) != 2 {
+		t.Fatalf("declarations = %d", len(world.session.sources))
+	}
+	recorded, ok := world.instance.sourceForSKI(first)
+	if !ok || recorded.value != "48.5" || recorded.priority != 3 || recorded.generation != 4 || recorded.availability != "available" || !recorded.at.Equal(at) {
+		t.Fatalf("recorded = %+v ok=%v", recorded, ok)
+	}
+	world.runtime.sourceNotice(eebusfacade.RemoteSourceNotice{
+		Kind: eebusfacade.RemoteSourceGenerationStopped, SKI: first, Generation: 4,
+	})
+	stopped, ok := world.instance.sourceForSKI(first)
+	if !ok || !stopped.stopped || stopped.availability != "stale" || stopped.value != "48.5" || !stopped.at.Equal(at) || stopped.priority != 3 {
+		t.Fatalf("stopped = %+v ok=%v", stopped, ok)
+	}
+	world.runtime.sourceNotice(eebusfacade.RemoteSourceNotice{
+		Kind: eebusfacade.RemoteSourceValue, SKI: first, Generation: 4, Value: "replaced", ObservedAt: at.Add(time.Hour),
+	})
+	stopped, _ = world.instance.sourceForSKI(first)
+	if stopped.value != "48.5" || !stopped.stopped || stopped.availability != "stale" {
+		t.Fatalf("stopped generation accepted a value: %+v", stopped)
+	}
+	other, ok := world.instance.sourceForSKI(second)
+	if !ok || other.value != "12.0" || other.availability != "available" || other.priority != 1 || other.stopped {
+		t.Fatalf("other = %+v ok=%v", other, ok)
+	}
+	if len(world.session.sources) != 2 {
+		t.Fatal("generation stop declared another source")
+	}
+}
+
+func TestPairingFeatureReadRecordsTheRemoteSource(t *testing.T) {
+	ski := strings.Repeat("c", 40)
+	world := newPairingWorld(t, "heating.east")
+	if world.runtime.sourceNotice == nil {
+		t.Fatal("start did not install the native source notice")
+	}
+	world.runtime.snapshot = remoteSnapshot(ski, eebusruntime.ObservedSessionStateV1Connected, eebusraw.PairingStatePaired, true)
+	at := time.Date(2030, 6, 7, 8, 9, 10, 0, time.UTC)
+	value, err := eebusraw.NewTypedValueV1("48.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.runtime.readData = eebusraw.FeatureDataGetDataV1{Results: []eebusraw.ReadObservationV1{{
+		Target: eebusraw.FeatureTargetV1{RemoteSKI: ski}, Runtime: eebusraw.RuntimeBindingV1{RuntimeEpoch: 2, ConnectionGeneration: 6},
+		Value: value, DataTimestamp: at,
+	}}, Complete: true}
+	if strings.Contains(string(world.call(t, "features_data_get", map[string]any{"targets": []any{}})), "pin") {
+		t.Fatal("feature read echoed a pin")
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded, ok := world.instance.sourceForSKI(ski)
+	if !ok || recorded.generation != 6 || recorded.priority != 3 || !recorded.at.Equal(at) || recorded.value != string(encoded) || len(world.session.sources) != 1 {
+		t.Fatalf("read source = %+v ok=%v declarations %d", recorded, ok, len(world.session.sources))
+	}
+	world.runtime.sourceNotice(eebusfacade.RemoteSourceNotice{Kind: eebusfacade.RemoteSourceGenerationStopped, SKI: ski, Generation: 6})
+	later, err := eebusraw.NewTypedValueV1("99")
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.runtime.readData.Results[0].Value = later
+	world.call(t, "features_data_get", map[string]any{"targets": []any{}})
+	recorded, _ = world.instance.sourceForSKI(ski)
+	if recorded.value != string(encoded) || !recorded.stopped || recorded.availability != "stale" {
+		t.Fatalf("retired generation accepted a read: %+v", recorded)
 	}
 }
 
