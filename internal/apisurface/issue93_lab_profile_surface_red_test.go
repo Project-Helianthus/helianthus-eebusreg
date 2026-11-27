@@ -22,7 +22,7 @@ func TestIssue93PublicLabProfileSurfaceIsAdditiveAndMethodSetsStayFrozen(t *test
 	if got := root["RawFeatureRuntimeV1"].Signature; got != readRuntimeSignature {
 		t.Fatalf("RawFeatureRuntimeV1 signature = %q, want unchanged %q", got, readRuntimeSignature)
 	}
-	const configSignature = `type Config struct{ Enabled bool; StateRoot string; Interface string; ListenAddress netip.AddrPort; DiscoveryEnabled bool; Remotes []Remote; PairingPolicy PairingPolicy; MutationLabProfiles []eebusraw.MutationLabProfileV1 }`
+	const configSignature = `type Config struct{ Enabled bool; StateRoot string; Interface string; ListenAddress netip.AddrPort; DiscoveryEnabled bool; Remotes []Remote; PairingPolicy PairingPolicy; MutationLabProfiles []eebusraw.MutationLabProfileV1; OutputPowerLimitFallbacks []OutputPowerLimitFallback }`
 	if got := root["Config"].Signature; got != configSignature {
 		t.Fatalf("Config signature = %q, want %q", got, configSignature)
 	}

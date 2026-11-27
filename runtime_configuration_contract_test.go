@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
+	semreg "github.com/Project-Helianthus/helianthus-semreg/semreg/v1"
 )
 
 var (
@@ -29,7 +31,20 @@ func TestRuntimeConfigurationPublicShapeIsExact(t *testing.T) {
 		{name: "Remotes", typ: reflect.TypeOf([]Remote(nil))},
 		{name: "PairingPolicy", typ: reflect.TypeOf(PairingPolicy(""))},
 		{name: "MutationLabProfiles", typ: reflect.TypeOf([]eebusraw.MutationLabProfileV1(nil))},
+		{name: "OutputPowerLimitFallbacks", typ: reflect.TypeOf([]OutputPowerLimitFallback(nil))},
 	})
+	assertMSP05PStructFields(t, reflect.TypeOf(OutputPowerLimitFallback{}), []msp05pField{
+		{name: "Resource", typ: reflect.TypeOf(semreg.ResourceID(""))},
+		{name: "Direction", typ: reflect.TypeOf(PowerLimitDirection(""))},
+		{name: "Power", typ: reflect.TypeOf(semreg.Quantity{})},
+	})
+	direction := reflect.TypeOf(PowerLimitDirection(""))
+	if direction.Kind() != reflect.String || direction.Name() != "PowerLimitDirection" || direction.PkgPath() == "" {
+		t.Fatalf("PowerLimitDirection type = %s/%s/%s", direction.Kind(), direction.PkgPath(), direction.Name())
+	}
+	if PowerLimitDirectionConsumption != "consumption" || PowerLimitDirectionProduction != "production" {
+		t.Fatalf("power limit directions = %q %q", PowerLimitDirectionConsumption, PowerLimitDirectionProduction)
+	}
 
 	policyType := reflect.TypeOf(PairingPolicy(""))
 	if policyType.Kind() != reflect.String || policyType.Name() != "PairingPolicy" || policyType.PkgPath() == "" {
@@ -264,6 +279,7 @@ func TestRuntimeConfigurationDisabledModeIsStrictlyInert(t *testing.T) {
 		{name: "discovery", config: Config{DiscoveryEnabled: true}},
 		{name: "remotes", config: Config{Remotes: []Remote{{SKI: strings.Repeat("a", 40)}}}},
 		{name: "pairing policy", config: Config{PairingPolicy: PairingPolicyClosed}},
+		{name: "power limit fallbacks", config: Config{OutputPowerLimitFallbacks: []OutputPowerLimitFallback{}}},
 	}
 	for _, test := range mixed {
 		t.Run(test.name, func(t *testing.T) {
@@ -291,6 +307,38 @@ func assertMSP05PStructFields(t *testing.T, typ reflect.Type, want []msp05pField
 		if field.Name != expected.name || field.Type != expected.typ || field.Anonymous || field.PkgPath != "" || field.Tag != "" {
 			t.Fatalf("%s field %d = %#v, want exported %s %s without tags", typ, index, field, expected.name, expected.typ)
 		}
+	}
+}
+
+func TestOutputPowerLimitFallbacksAreCopiedBeforeStartup(t *testing.T) {
+	stateRoot := filepath.Join(t.TempDir(), "runtime-state")
+	config := validCleanupRuntimeConfig(stateRoot, false, nil)
+	config.OutputPowerLimitFallbacks = []OutputPowerLimitFallback{{
+		Resource:  "resource.east.heater",
+		Direction: PowerLimitDirectionConsumption,
+		Power: semreg.Quantity{
+			Number: semreg.Decimal{Coefficient: "15", Exponent10: 2},
+			Unit:   "unit.watt",
+		},
+	}}
+	runtime, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.OutputPowerLimitFallbacks[0].Power.Number.Coefficient = "1"
+	config.OutputPowerLimitFallbacks[0].Resource = "resource.replaced"
+	implementation := runtime.(*runtimeImplementation)
+	stored := implementation.config.OutputPowerLimitFallbacks
+	if len(stored) != 1 || stored[0].Resource != "resource.east.heater" || stored[0].Power.Number.Coefficient != "15" || stored[0].Power.Number.Exponent10 != 2 {
+		t.Fatalf("runtime kept the caller slice: %+v", stored)
+	}
+	cloned := cloneRuntimeConfig(implementation.config)
+	implementation.config.OutputPowerLimitFallbacks[0].Power.Number.Coefficient = "2"
+	if cloned.OutputPowerLimitFallbacks[0].Power.Number.Coefficient != "15" {
+		t.Fatal("startup clone shares the runtime fallback slice")
+	}
+	if _, err := os.Lstat(stateRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("constructor touched the state root: %v", err)
 	}
 }
 

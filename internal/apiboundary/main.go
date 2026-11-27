@@ -126,6 +126,8 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "const", Name: "FeatureRoleV1Client"}:                       {},
 	{Kind: "const", Name: "FeatureRoleV1Server"}:                       {},
 	{Kind: "const", Name: "PairingPolicyClosed"}:                       {},
+	{Kind: "const", Name: "PowerLimitDirectionConsumption"}:            {},
+	{Kind: "const", Name: "PowerLimitDirectionProduction"}:             {},
 	{Kind: "const", Name: "AdminViewV1Trusted"}:                        {},
 	{Kind: "const", Name: "AdminViewV1Connected"}:                      {},
 	{Kind: "const", Name: "AdminViewV1Discovered"}:                     {},
@@ -194,7 +196,9 @@ var allowedRuntimeExports = map[manifestExport]struct{}{
 	{Kind: "type", Name: "OpaqueScalarV1"}:                             {},
 	{Kind: "type", Name: "OpaqueValueV1"}:                              {},
 	{Kind: "type", Name: "PairingObservationV1"}:                       {},
+	{Kind: "type", Name: "OutputPowerLimitFallback"}:                   {},
 	{Kind: "type", Name: "PairingPolicy"}:                              {},
+	{Kind: "type", Name: "PowerLimitDirection"}:                        {},
 	{Kind: "type", Name: "RedactedDeviceV1"}:                           {},
 	{Kind: "type", Name: "RedactedEntityV1"}:                           {},
 	{Kind: "type", Name: "RedactedFeatureV1"}:                          {},
@@ -265,21 +269,6 @@ func init() {
 }
 
 var issue129NativeRuntimeV2Exports = loadExportInventory("native_runtime_second.txt")
-
-var msp055RuntimeExports = map[manifestExport]struct{}{
-	{Kind: "const", Name: "PairingPolicyClosed"}:       {},
-	{Kind: "func", Name: "New"}:                        {},
-	{Kind: "func", Name: "RawMutationOutcomeV1.Clone"}: {},
-	{Kind: "type", Name: "Config"}:                     {},
-	{Kind: "type", Name: "PairingPolicy"}:              {},
-	{Kind: "type", Name: "RawFeatureRuntimeV1"}:        {},
-	{Kind: "type", Name: "RawMutationOutcomeV1"}:       {},
-	{Kind: "type", Name: "RawMutationRuntimeV1"}:       {},
-	{Kind: "type", Name: "Remote"}:                     {},
-	{Kind: "type", Name: "Runtime"}:                    {},
-	{Kind: "var", Name: "ErrRuntimeDisabled"}:          {},
-	{Kind: "var", Name: "ErrRuntimeShutdown"}:          {},
-}
 
 var allowedMSP035RawExports = loadExportInventory("raw.txt")
 
@@ -811,7 +800,10 @@ func inspectRuntimeExports(modulePath string, packages map[string]*packageInvent
 			if _, participation := issue137ParticipationExports[expected]; participation {
 				continue
 			}
-			if _, lifecycle := msp055RuntimeExports[expected]; lifecycle {
+			if _, lifecycle := lifecycleRuntimeExports[expected]; lifecycle {
+				continue
+			}
+			if _, powerLimit := outputPowerLimitRuntimeExports[expected]; powerLimit {
 				continue
 			}
 			if _, operatorAdmin := postM9OperatorAdminRuntimeExports[expected]; operatorAdmin {

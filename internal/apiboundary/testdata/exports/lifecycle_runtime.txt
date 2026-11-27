@@ -19,6 +19,8 @@ const ObservedSessionStateV1Degraded
 const ObservedSessionStateV1Disconnected
 const ObservedSessionStateV1Unknown
 const PairingPolicyClosed
+const PowerLimitDirectionConsumption
+const PowerLimitDirectionProduction
 const ServiceKindV1Local
 const ServiceKindV1Remote
 const SnapshotContractV1
@@ -60,8 +62,10 @@ type ObservedSessionStateV1
 type OpaqueObservationV1
 type OpaqueScalarV1
 type OpaqueValueV1
+type OutputPowerLimitFallback
 type PairingObservationV1
 type PairingPolicy
+type PowerLimitDirection
 type RawFeatureRuntimeV1
 type RedactedDeviceV1
 type RedactedEntityV1

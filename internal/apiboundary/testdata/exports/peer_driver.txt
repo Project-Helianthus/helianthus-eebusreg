@@ -1,0 +1,7 @@
+const Kind
+func Factory.Construct
+func Factory.Descriptor
+func Factory.Plan
+func New
+func NewFactory
+type Factory

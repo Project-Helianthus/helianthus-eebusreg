@@ -148,7 +148,9 @@ func TestDriverPackageAcceptsPairingHookOnDriverType(t *testing.T) {
 func newDriverRepository(t *testing.T) string {
 	t.Helper()
 	previousNames := exportInventoryNames
-	exportInventoryNames = slices.DeleteFunc(slices.Clone(previousNames), func(name string) bool { return name == "driver.txt" })
+	exportInventoryNames = slices.DeleteFunc(slices.Clone(previousNames), func(name string) bool {
+		return name == "driver.txt" || name == "peer_driver.txt"
+	})
 	t.Cleanup(func() { exportInventoryNames = previousNames })
 	root := t.TempDir()
 	writeDriverFile(t, root, "go.mod", "module example.test/registry\n\ngo 1.22.0\n")

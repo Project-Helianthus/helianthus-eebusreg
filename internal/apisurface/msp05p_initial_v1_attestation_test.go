@@ -94,7 +94,7 @@ func TestMSP05PPublicAPIAttestationIsInitialV1(t *testing.T) {
 	}
 	root := msp05pRootSurface(t, doc)
 	want := map[string]string{
-		"Config":              "type Config struct{ Enabled bool; StateRoot string; Interface string; ListenAddress netip.AddrPort; DiscoveryEnabled bool; Remotes []Remote; PairingPolicy PairingPolicy; MutationLabProfiles []eebusraw.MutationLabProfileV1 }",
+		"Config":              "type Config struct{ Enabled bool; StateRoot string; Interface string; ListenAddress netip.AddrPort; DiscoveryEnabled bool; Remotes []Remote; PairingPolicy PairingPolicy; MutationLabProfiles []eebusraw.MutationLabProfileV1; OutputPowerLimitFallbacks []OutputPowerLimitFallback }",
 		"New":                 "func New(Config) (Runtime, error)",
 		"PairingPolicy":       "type PairingPolicy string",
 		"PairingPolicyClosed": `const PairingPolicyClosed PairingPolicy = "closed"`,
@@ -194,6 +194,9 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 		if outputBindingSymbol(symbol) {
 			continue
 		}
+		if powerLimitConfigurationSymbol(symbol) {
+			continue
+		}
 		if issue137ParticipationSymbol(symbol) {
 			continue
 		}
@@ -260,7 +263,7 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 	imports := root.Imports[:0]
 	hasEvidence := false
 	for _, imported := range root.Imports {
-		if imported.Path != "net/netip" {
+		if imported.Path != "net/netip" && imported.Path != "github.com/Project-Helianthus/helianthus-semreg/semreg/v1" {
 			imports = append(imports, imported)
 		}
 		hasEvidence = hasEvidence || imported.Path == modulePath+"/eebusevidence"
@@ -298,6 +301,15 @@ func msp05pProjectFrozenV1(t *testing.T, source document) document {
 	}
 	projected.Packages = legacy
 	return projected
+}
+
+func powerLimitConfigurationSymbol(symbol symbol) bool {
+	switch symbol.Name {
+	case "OutputPowerLimitFallback", "PowerLimitDirection", "PowerLimitDirectionConsumption", "PowerLimitDirectionProduction":
+		return true
+	default:
+		return symbol.Receiver != nil && symbol.Receiver.Base == "OutputPowerLimitFallback"
+	}
 }
 
 // issue129NativeV2Symbol is deliberately a closed inventory. It keeps the
