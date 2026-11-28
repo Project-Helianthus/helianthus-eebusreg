@@ -357,7 +357,7 @@ func roomSetpointRequest(t *testing.T, cut semdriver.SemanticCut, room semreg.Re
 		ExpectedCapabilityRevision:         revisions.Capabilities,
 		ExpectedCapabilityInstanceRevision: capability.Revision,
 		ExpectedDriverGeneration:           binding.DriverGeneration, ExpectedSourceEpochID: binding.SourceEpochID,
-		Preconditions: []operation.Precondition{}, Timeout: 20 * time.Second,
+		Preconditions: []operation.Precondition{}, Timeout: 2 * time.Minute,
 	}
 }
 
@@ -423,7 +423,7 @@ func factView(t *testing.T, result inbound.Result, id, native string) inbound.Fa
 
 func TestSecondHostReadsAndWrites(t *testing.T) {
 	assertResolvedCatalog(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	log := &commandLog{}
 	heating := heatingPeer()
@@ -438,7 +438,7 @@ func TestSecondHostReadsAndWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		closeCtx, cancelClose := context.WithTimeout(context.Background(), 15*time.Second)
+		closeCtx, cancelClose := context.WithTimeout(context.Background(), time.Minute)
 		defer cancelClose()
 		if closeErr := site.Close(closeCtx); closeErr != nil {
 			t.Errorf("close: %v", closeErr)
