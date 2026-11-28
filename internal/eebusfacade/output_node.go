@@ -314,6 +314,87 @@ func (n *OutputNode) AddEntity(kind, address, parent string) error {
 	return nil
 }
 
+// RemoveEntity removes an added entity from the local device, including its
+// server features and use-case support. The stored letter can be added again.
+func (n *OutputNode) RemoveEntity(address string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	entity := n.byLetter[address]
+	if entity == nil {
+		return nil
+	}
+	device := n.device()
+	if device == nil {
+		return errOutputNode
+	}
+	n.stopHeartbeatLocked(entity)
+	device.RemoveEntity(entity)
+	delete(n.byLetter, address)
+	if n.useCases != nil {
+		delete(n.useCases, address)
+	}
+	return nil
+}
+
+// EntityOnDevice reports whether the local device still has the entity for address.
+func (n *OutputNode) EntityOnDevice(address string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	device := n.device()
+	if device == nil {
+		return false
+	}
+	if entity := n.byLetter[address]; entity != nil && entity.Address() != nil {
+		return device.Entity(entity.Address().Entity) != nil
+	}
+	number, ok := letterEntityNumber(address)
+	if !ok {
+		return false
+	}
+	for _, entity := range device.Entities() {
+		if entity.Address() == nil {
+			continue
+		}
+		if entityNumberIs(entity.Address().Entity, number) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasUseCaseSupport reports whether the local device still announces the use case for address.
+func (n *OutputNode) HasUseCaseSupport(address string, actor spinemodel.UseCaseActorType, name spinemodel.UseCaseNameType) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	device := n.device()
+	if device == nil || device.NodeManagement() == nil || actor == "" || name == "" {
+		return false
+	}
+	number, ok := letterEntityNumber(address)
+	if !ok {
+		return false
+	}
+	data, err := spine.LocalFeatureDataCopyOfType[*spinemodel.NodeManagementUseCaseDataType](device.NodeManagement(), spinemodel.FunctionTypeNodeManagementUseCaseData)
+	if err != nil || data == nil {
+		return false
+	}
+	for _, info := range data.UseCaseInformation {
+		if info.Actor == nil || *info.Actor != actor || info.Address == nil || !entityNumberIs(info.Address.Entity, number) {
+			continue
+		}
+		for _, support := range info.UseCaseSupport {
+			if support.UseCaseName != nil && *support.UseCaseName == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func entityNumberIs(address []spinemodel.AddressEntityType, number spinemodel.AddressEntityType) bool {
+	return len(address) > 0 && address[len(address)-1] == number
+}
+
 // outputEntityBase is the first entity number an output entity may take. The
 // runtime composes the device information entity and the CEM entity below it.
 const outputEntityBase = 2

@@ -1,0 +1,7 @@
+func New
+func Output.Reason
+func Output.StartOutput
+type AssetGap
+type Output
+type Reason
+type ResourceLine

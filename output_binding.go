@@ -47,6 +47,12 @@ type shipNode interface {
 	AddServerFeatures(address string, names []string) (string, error)
 }
 
+// outputEntityRemover removes one entity from the node, with the features and
+// use-case support that entity carried.
+type outputEntityRemover interface {
+	RemoveEntity(address string) error
+}
+
 // outputNodeSource is a runtime in this package that owns one output node.
 type outputNodeSource interface {
 	outputNode() (*eebusfacade.OutputNode, error)
@@ -106,15 +112,20 @@ type OutputBinding struct {
 	node       shipNode
 	gaps       map[string][]string
 	runtime    Runtime
+	operations interface{}
+	fallbacks  []OutputPowerLimitFallback
 }
 
 type boundEntity struct {
-	kind    string
-	address string
-	parent  string
+	kind      string
+	address   string
+	parent    string
+	withdrawn bool
 }
 
 // LensResult is an admitted lens result. It carries no SPINE type.
+// Facts are the promoted SemReg elements of that resource. MemberSum is the
+// same-cut member sum of an EVSE, when the cut asked for one.
 type LensResult struct {
 	Family           string
 	ResourceID       string
@@ -132,6 +143,8 @@ type LensResult struct {
 	DeviceActor      string
 	MissingElements  []string
 	Overlapping      bool
+	Facts            []LensFact
+	MemberSum        *LensMemberSum
 }
 
 // LensOperation is one operation on a lens result. It carries no SPINE type.
@@ -140,6 +153,55 @@ type LensOperation struct {
 	Unit          string
 	OwnCapability bool
 	Converted     bool
+}
+
+// LensFact is one promoted SemReg element carried on a lens result.
+// Phase and Connector are the dimension values of that element.
+// The quantity stays in its SemReg unit.
+type LensFact struct {
+	Element   string
+	Phase     string
+	Connector string
+	Value     LensValue
+	Unit      string
+	Quality   LensQuality
+}
+
+// LensValue is the typed value of one SemReg element.
+type LensValue struct {
+	Kind        string
+	Coefficient string
+	Exponent    int32
+	Boolean     bool
+	Text        string
+	Symbol      string
+}
+
+// LensQuality keeps the SemReg quality axes as independent strings.
+type LensQuality struct {
+	Assertion     string
+	Qualification string
+	Promotion     string
+	Validity      string
+	Availability  string
+	Freshness     string
+}
+
+// LensMemberSum is the same-cut member sum of one EVSE, or the reason it was withheld.
+type LensMemberSum struct {
+	Withheld         bool
+	Coefficient      string
+	Exponent         int32
+	Unit             string
+	Reason           string
+	NotIncludedCount int
+	NotIncluded      []LensNotIncluded
+}
+
+// LensNotIncluded is one asset a cut did not include, with the reason.
+type LensNotIncluded struct {
+	Asset  string
+	Reason string
 }
 
 // NewOutputBinding binds output onto this runtime's node and loads addresses stored in directory.
@@ -187,11 +249,12 @@ func (b *OutputBinding) liveNodeLocked() shipNode {
 	return node
 }
 
-// Apply adds an Inverter, a PV String whose parent is that Inverter, or an EVSE
-// entity when the publication contract admits the lens result. A use-case text
-// that forbids device type EnergyManagementSystem adds nothing and names that prohibition.
-// Apply also serves the use cases of the entity, and MonitoringLoss returns
-// what that serving did not publish.
+// Apply adds the entity of an admitted lens result. A PV String is added only
+// when its parent is an Inverter already applied from this binding. A use-case
+// text that forbids device type EnergyManagementSystem adds nothing and names
+// that prohibition. Apply also serves the use cases of an inverter, a PV
+// string or a charger, and MonitoringLoss returns what that serving did not
+// publish.
 func (b *OutputBinding) Apply(result LensResult) []string {
 	if b == nil {
 		return applyLoss(errExistingNode)
@@ -214,25 +277,116 @@ func (b *OutputBinding) Apply(result LensResult) []string {
 	}
 	if !result.Overlapping {
 		served := withExtensionElements(result)
-		if result.Family == "charger" {
+		switch result.Family {
+		case "charger":
 			// A rejected charger feature withdraws only the use case or the
 			// operation that needs it, so the entity stays applied and
 			// MonitoringLoss names that feature.
 			b.recordGaps(result.ResourceID, b.serveChargerOutput(served).Loss)
 			return announcementLoss(result)
-		}
-		if err := b.bindFeatures(result); err != nil {
-			return applyLoss(err)
-		}
-		outcome := b.serveInverterMonitoring(served)
-		outcome.Loss = append(outcome.Loss, extensionLoss(result)...)
-		sort.Strings(outcome.Loss)
-		b.recordGaps(result.ResourceID, outcome.Loss)
-		if monitoringFeatureGap(outcome) {
-			return applyLoss(errExistingNode)
+		case "inverter", "pv string":
+			if err := b.bindFeatures(result); err != nil {
+				return applyLoss(err)
+			}
+			outcome := b.serveInverterMonitoring(served)
+			outcome.Loss = append(outcome.Loss, extensionLoss(result)...)
+			sort.Strings(outcome.Loss)
+			b.recordGaps(result.ResourceID, outcome.Loss)
+			if monitoringFeatureGap(outcome) {
+				return applyLoss(errExistingNode)
+			}
+		default:
+			return announcementLoss(result)
 		}
 	}
 	return announcementLoss(result)
+}
+
+// ApplyCut marks overlapping operations across the admitted results and applies
+// each result once, in the order given. The legacy family filter is not used.
+func (b *OutputBinding) ApplyCut(results []LensResult) [][]string {
+	copied := append([]LensResult(nil), results...)
+	selectionMarkConflicts(copied)
+	losses := make([][]string, len(copied))
+	for index := range copied {
+		losses[index] = b.Apply(copied[index])
+	}
+	return losses
+}
+
+// RetainSession keeps the scoped operation port and the detached power-limit
+// fallbacks of this instance. A later handler of this binding reads this port.
+func (b *OutputBinding) RetainSession(operations interface{}, fallbacks []OutputPowerLimitFallback) {
+	if b == nil {
+		return
+	}
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	b.operations = operations
+	b.fallbacks = append([]OutputPowerLimitFallback(nil), fallbacks...)
+}
+
+// Withdraw removes the resource's entity from the node. The stored address
+// remains, so a later cut adds that same entity again.
+func (b *OutputBinding) Withdraw(resourceID string) error {
+	if b == nil {
+		return errExistingNode
+	}
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	node := b.liveNodeLocked()
+	entity, ok := b.byResource[resourceID]
+	if !ok || entity.withdrawn || entity.address == "" {
+		return nil
+	}
+	if node == nil {
+		return errExistingNode
+	}
+	remover, ok := node.(outputEntityRemover)
+	if !ok {
+		return errExistingNode
+	}
+	if err := remover.RemoveEntity(entity.address); err != nil {
+		return err
+	}
+	entity.withdrawn = true
+	b.byResource[resourceID] = entity
+	delete(b.gaps, resourceID)
+	return nil
+}
+
+// EntityPresent reports whether the resource's entity is on the node.
+func (b *OutputBinding) EntityPresent(resourceID string) bool {
+	if b == nil {
+		return false
+	}
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	if b.liveNodeLocked() == nil {
+		return false
+	}
+	entity, ok := b.byResource[resourceID]
+	return ok && !entity.withdrawn && entity.address != ""
+}
+
+// RetainedOperations returns the scoped operation port retained for this binding.
+func (b *OutputBinding) RetainedOperations() interface{} {
+	if b == nil {
+		return nil
+	}
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	return b.operations
+}
+
+// PowerLimitFallbacks returns a copy of the power-limit fallbacks retained for this binding.
+func (b *OutputBinding) PowerLimitFallbacks() []OutputPowerLimitFallback {
+	if b == nil {
+		return nil
+	}
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	return append([]OutputPowerLimitFallback(nil), b.fallbacks...)
 }
 
 // withExtensionElements returns a copy of the result whose elements also list
@@ -386,7 +540,7 @@ func publishedFamily(result LensResult) bool {
 		return false
 	}
 	switch result.Family {
-	case "inverter", "charger":
+	case "inverter", "charger", "ev", "meter", "battery", "heating circuit", "heating zone", "room", "grid":
 		return true
 	case "pv string":
 		return !result.InputDimension
@@ -470,19 +624,25 @@ func wordByte(value byte) bool {
 
 func (b *OutputBinding) ensureEntity(result LensResult) error {
 	kind := entityKind(result.Family)
-	if existing, ok := b.byResource[result.ResourceID]; ok {
+	existing, exists := b.byResource[result.ResourceID]
+	if exists && !existing.withdrawn {
 		if existing.kind != kind {
 			return errMergedResources
 		}
 		return nil
+	}
+	if exists && existing.kind != kind {
+		return errMergedResources
 	}
 	address, err := b.allocate(result.ResourceID)
 	if err != nil {
 		return err
 	}
 	parent := ""
-	if result.Family == "pv string" {
-		parent = b.byResource[result.ParentResourceID].address
+	if result.Family != "meter" && result.ParentResourceID != "" {
+		if cited, ok := b.byResource[result.ParentResourceID]; ok {
+			parent = cited.address
+		}
 	}
 	if b.node == nil {
 		return errExistingNode
@@ -491,7 +651,9 @@ func (b *OutputBinding) ensureEntity(result LensResult) error {
 		return errExistingNode
 	}
 	b.byResource[result.ResourceID] = boundEntity{kind: kind, address: address, parent: parent}
-	b.order = append(b.order, result.ResourceID)
+	if !exists {
+		b.order = append(b.order, result.ResourceID)
+	}
 	return nil
 }
 
@@ -503,6 +665,20 @@ func entityKind(family string) string {
 		return "PV String"
 	case "charger":
 		return "EVSE"
+	case "ev":
+		return "EV"
+	case "meter":
+		return "SubMeterElectricity"
+	case "battery":
+		return "Battery"
+	case "heating circuit":
+		return "HeatingCircuit"
+	case "heating zone":
+		return "HeatingZone"
+	case "room":
+		return "HVACRoom"
+	case "grid":
+		return "GridConnectionPointOfPremises"
 	default:
 		return ""
 	}
