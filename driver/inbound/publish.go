@@ -9,11 +9,14 @@ import (
 
 // Publisher turns paired remote observations into SemReg publications for one instance.
 type Publisher struct {
-	scope   Scope
-	pass    chan struct{} // holds one token: one publication pass runs at a time
-	world   *world
-	nodes   map[string]driver.NodeRef
-	members map[string]struct{}
+	scope    Scope
+	pass     chan struct{} // holds one token: one publication pass runs at a time
+	world    *world
+	nodes    map[string]driver.NodeRef
+	members  map[string]struct{}
+	methods  map[string]struct{}
+	commands map[string]func(kind, operation, feature, entity, value string) error
+	cancels  []func()
 }
 
 // New returns a publisher for one instance. Installation, instance and bridge are required.
@@ -29,6 +32,7 @@ func New(scope Scope) (*Publisher, error) {
 func (p *Publisher) Apply(ctx context.Context, session driver.Session, remotes []Remote) (Result, error) {
 	p.pass <- struct{}{}
 	defer func() { <-p.pass }()
+	p.remember(remotes)
 	return p.publish(ctx, session, func(next *world) error { return next.ingest(remotes) })
 }
 
@@ -47,6 +51,7 @@ func (p *Publisher) StopGeneration(ctx context.Context, session driver.Session, 
 func (p *Publisher) Revoke(ctx context.Context, session driver.Session, ski string) (Result, error) {
 	p.pass <- struct{}{}
 	defer func() { <-p.pass }()
+	delete(p.commands, ski)
 	return p.publish(ctx, session, func(next *world) error {
 		next.revoke(ski)
 		return nil

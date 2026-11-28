@@ -24,6 +24,10 @@ type host struct {
 	serials    []driver.ManufacturerSerialClaim
 	matches    []driver.MatchClaim
 	routes     []driver.SettingRoute
+	executors  []driver.Executor
+	methodKeys map[string]struct{}
+	methods    []driver.MethodSpec
+	methodFns  map[string]driver.NativeMethod
 }
 
 func newHost() *host {
@@ -47,7 +51,8 @@ var (
 func (h *host) ScopedOperations() driver.ScopedOperations { return h }
 func (h *host) Calendar() driver.Calendar                 { return h }
 func (h *host) Publisher() driver.Publisher               { return h }
-func (h *host) RegisterExecutor(driver.SettingRoute, driver.Executor) (func(), error) {
+func (h *host) RegisterExecutor(_ driver.SettingRoute, exec driver.Executor) (func(), error) {
+	h.executors = append(h.executors, exec)
 	return func() {}, nil
 }
 func (h *host) Invoke(context.Context, driver.OperationRequest) (driver.OperationResult, error) {
@@ -83,10 +88,26 @@ func (h *host) ReadMember(ref driver.NodeRef, spec driver.MemberSpec, read drive
 	h.readers[key] = read
 	return nil
 }
-func (h *host) Method(driver.NodeRef, driver.MethodSpec, driver.NativeMethod) error { return nil }
-func (h *host) View(driver.ViewSpec) error                                          { return nil }
-func (h *host) Begin(context.Context) (driver.PublicationTransaction, error)        { return h, nil }
-func (h *host) OperatorLinks([]semreg.NativeBinding) []semreg.IdentityLink          { return nil }
+func (h *host) Method(ref driver.NodeRef, spec driver.MethodSpec, method driver.NativeMethod) error {
+	if err := spec.Validate(); err != nil {
+		return err
+	}
+	if h.methodKeys == nil {
+		h.methodKeys = map[string]struct{}{}
+		h.methodFns = map[string]driver.NativeMethod{}
+	}
+	key := string(ref.ID) + "\n" + string(spec.Local)
+	if _, ok := h.methodKeys[key]; ok {
+		return errors.New("key is already registered")
+	}
+	h.methodKeys[key] = struct{}{}
+	h.methods = append(h.methods, spec)
+	h.methodFns[key] = method
+	return nil
+}
+func (h *host) View(driver.ViewSpec) error                                   { return nil }
+func (h *host) Begin(context.Context) (driver.PublicationTransaction, error) { return h, nil }
+func (h *host) OperatorLinks([]semreg.NativeBinding) []semreg.IdentityLink   { return nil }
 func (h *host) AdmitManufacturerSerial(claim driver.ManufacturerSerialClaim) error {
 	if err := claim.Validate(); err != nil {
 		return err

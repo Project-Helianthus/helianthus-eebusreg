@@ -34,6 +34,14 @@ func stage(ctx context.Context, session driver.Session, publisher *Publisher, cu
 	if err != nil {
 		return fail(ctx, tx, err)
 	}
+	attached, err := publicationRecords(scope, current)
+	if err != nil {
+		return fail(ctx, tx, err)
+	}
+	source, err := sourceDescriptor()
+	if err != nil {
+		return fail(ctx, tx, err)
+	}
 	batch, err := session.Prepare(func(batch *semreg.PublicationBatch) {
 		if len(resources) > 0 {
 			batch.ResourceUpserts = resources
@@ -43,6 +51,12 @@ func stage(ctx context.Context, session driver.Session, publisher *Publisher, cu
 		}
 		if len(withdrawals) > 0 {
 			batch.RelationWithdrawals = withdrawals
+		}
+		attached.apply(batch)
+		if len(batch.ResourceUpserts) > 0 || len(batch.FactUpserts) > 0 || len(batch.BindingUpserts) > 0 || len(batch.RelationUpserts) > 0 {
+			source.SourceID = batch.SourceID
+			source.SourceEpochID = batch.SourceEpochID
+			batch.SourceUpserts = []semreg.SourceDescriptor{source}
 		}
 	})
 	if err != nil {
@@ -69,10 +83,8 @@ func stage(ctx context.Context, session driver.Session, publisher *Publisher, cu
 			}
 		}
 	}
-	for _, route := range result.Routes {
-		if err := tx.DeclareSettingRoute(route); err != nil {
-			return fail(ctx, tx, err)
-		}
+	if err := publisher.bindExecutors(session, tx, result.Routes); err != nil {
+		return fail(ctx, tx, err)
 	}
 	if err := publisher.stageMembers(session.Native(), current, result); err != nil {
 		return fail(ctx, tx, err)
@@ -111,6 +123,9 @@ func (w *world) relations(scope Scope) ([]semreg.RelationInstance, error) {
 	ids := slotIDs(scope, w.nodes)
 	var records []semreg.RelationInstance
 	for _, link := range w.links() {
+		if _, ok := relationClass(link); !ok {
+			continue
+		}
 		if ids[link.from] == "" || ids[link.to] == "" {
 			return nil, errors.New("inbound: a relation names a missing resource")
 		}
@@ -139,6 +154,9 @@ func (w *world) relationWithdrawals(scope Scope) ([]semreg.RelationKey, error) {
 	ids := slotIDs(scope, w.nodes)
 	var keys []semreg.RelationKey
 	for _, link := range w.withdrawn {
+		if _, ok := relationClass(link); !ok {
+			continue
+		}
 		if ids[link.from] == "" || ids[link.to] == "" {
 			return nil, errors.New("inbound: a withdrawn relation names a missing resource")
 		}
@@ -176,11 +194,14 @@ func (w *world) stageFacts(tx driver.PublicationTransaction, scope Scope) error 
 	sort.Strings(paths)
 	for _, path := range paths {
 		fact := w.facts[path]
+		if !admittedSample(fact) {
+			continue
+		}
 		source := w.sourceOf(scope, fact, ids)
 		if err := tx.DeclareSource(source); err != nil {
 			return err
 		}
-		sample, err := sampleOf(scope, fact, source)
+		sample, err := sampleOf(scope, fact, source, ids[fact.slot])
 		if err != nil {
 			return err
 		}
@@ -235,6 +256,9 @@ func (p *Publisher) stageMembers(native driver.NativeRegistry, current *world, r
 				return err
 			}
 		}
+	}
+	if err := p.stageWrites(native, current); err != nil {
+		return err
 	}
 	p.stampMembers(result)
 	return nil
@@ -314,7 +338,7 @@ func (w *world) sourceOf(scope Scope, fact placedFact, ids map[string]semreg.Res
 		producer = ids[w.identitySlot(fact.device)]
 	}
 	return driver.Source{
-		For:      driver.Element{Subject: scope.ref(ids[fact.slot]), Key: factKey(fact.fact)},
+		For:      driver.Element{Subject: scope.ref(ids[fact.slot]), Key: factKey(fact.fact, ids[fact.slot])},
 		Producer: scope.ref(producer),
 		PathKey:  fact.path,
 		Priority: fact.priority,

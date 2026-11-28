@@ -27,6 +27,8 @@ func packOf(id string) (string, string) {
 		return "helianthus.pack.pv", "1.0.0"
 	case strings.HasPrefix(id, "storage."):
 		return "helianthus.pack.storage", "1.1.0"
+	case strings.HasPrefix(id, "energy."):
+		return "helianthus.pack.energy_management", "1.0.0"
 	default:
 		return "helianthus.pack.thermal", "1.0.0"
 	}
@@ -126,6 +128,23 @@ func isSystemMember(kind string) bool {
 	return kind == "resource.zone" || kind == "resource.domestic_hot_water" || kind == "resource.thermal_circuit"
 }
 
+func (w *world) noteUnpublishableRelations(device string) {
+	seen := map[string]struct{}{}
+	for _, link := range w.links() {
+		if deviceFromSlot(link.from) != device {
+			continue
+		}
+		if _, ok := relationClass(link); ok {
+			continue
+		}
+		if _, dup := seen[link.relation]; dup {
+			continue
+		}
+		seen[link.relation] = struct{}{}
+		w.note(device, "configuration_only_relation:"+link.relation)
+	}
+}
+
 func dedupeLinks(links []builtLink) []builtLink {
 	if len(links) == 0 {
 		return nil
@@ -170,12 +189,18 @@ func (w *world) view(scope Scope) (Result, error) {
 		result.Links = append(result.Links, view)
 	}
 	result.Facts = w.factViews()
+	for _, fact := range result.Facts {
+		if fact.Carrier == "notify" {
+			result.LastNotified = append(result.LastNotified, fact)
+		}
+	}
 	result.Members = w.memberViews(scope)
 	serials, matches, gaps, err := w.claims(scope, ids)
 	if err != nil {
 		return Result{}, err
 	}
 	result.Serials, result.Matches = serials, matches
+	w.indexTargets()
 	routes, err := w.routes(scope, ids)
 	if err != nil {
 		return Result{}, err
@@ -327,28 +352,49 @@ func (w *world) routes(scope Scope, ids map[string]semreg.ResourceID) ([]driver.
 		if fact.withdrawn || fact.operation == "" || fact.feature == "" || fact.generation == 0 {
 			continue
 		}
-		sourceID, epoch, _ := deviceBinding(scope, fact.device)
-		element := driver.Element{Subject: scope.ref(ids[fact.slot]), Key: factKey(fact.fact)}
-		producer := scope.ref(ids[deviceSlot(fact.device)])
-		source := driver.SourceRef{For: element, Producer: producer, PathKey: fact.path}
-		routes = append(routes, driver.SettingRoute{
-			For: element, Operation: thermalRef(fact.operation), Owner: source,
-			Route: operation.Route{
-				CapabilityInstance: semreg.CapabilityInstanceID(opaqueID("capability.", fact.operation, fact.slot)),
-				ServiceInstance:    semreg.ServiceInstanceID(opaqueID("service.", fact.slot)),
-				BindingID:          semreg.NativeBindingID(fact.feature),
-				SourceID:           sourceID,
-				SourceEpochID:      epoch,
-				DriverGeneration:   semreg.Uint64(strconv.FormatUint(fact.generation, 10)),
-			},
-		})
+		routes = append(routes, settingRoute(scope, ids, fact.device, fact.slot, fact.fact, fact.operation, fact.feature, fact.path, fact.generation))
+	}
+	for _, command := range w.commands {
+		argument := operationArgument(command.operation)
+		if command.generation == 0 || ids[command.slot] == "" || argument == "" {
+			continue
+		}
+		routes = append(routes, settingRoute(scope, ids, command.device, command.slot, argument, command.operation, command.feature, command.path, command.generation))
 	}
 	return routes, nil
 }
 
-func factKey(id string) semreg.FactKey {
+func settingRoute(scope Scope, ids map[string]semreg.ResourceID, device, slot, elementFact, operationID, feature, path string, generation uint64) driver.SettingRoute {
+	sourceID, epoch, _ := deviceBinding(scope, device)
+	element := driver.Element{Subject: scope.ref(ids[slot]), Key: factKey(elementFact, ids[slot])}
+	producer := scope.ref(ids[deviceSlot(device)])
+	source := driver.SourceRef{For: element, Producer: producer, PathKey: path}
+	return driver.SettingRoute{
+		For: element, Operation: thermalRef(operationID), Owner: source,
+		Route: operation.Route{
+			CapabilityInstance: semreg.CapabilityInstanceID(opaqueID("capability.", operationID, slot)),
+			ServiceInstance:    semreg.ServiceInstanceID(opaqueID("service.", operationID, slot)),
+			BindingID:          featureBinding(scope, device, operationID, feature, slot),
+			SourceID:           sourceID,
+			SourceEpochID:      epoch,
+			DriverGeneration:   semreg.Uint64(strconv.FormatUint(generation, 10)),
+		},
+	}
+}
+
+func factKey(id string, subject semreg.ResourceID) semreg.FactKey {
 	pack, version := packOf(id)
-	return semreg.FactKey{PackID: semreg.DefinitionID(pack), PackVersion: semreg.SemanticVersion(version), FactID: semreg.DefinitionID(id), Dimensions: []semreg.Dimension{}}
+	dimensions := []semreg.Dimension{}
+	if dimension := factDimension(id); dimension != "" && subject != "" {
+		text := string(subject)
+		dimensions = []semreg.Dimension{{
+			ID: semreg.DefinitionID(dimension), Value: semreg.Value{Kind: semreg.ValueText, Text: &text},
+		}}
+	}
+	return semreg.FactKey{
+		PackID: semreg.DefinitionID(pack), PackVersion: semreg.SemanticVersion(version),
+		FactID: semreg.DefinitionID(id), Dimensions: dimensions,
+	}
 }
 
 func (w *world) keepWithdrawals(previous []builtLink) {

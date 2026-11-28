@@ -101,7 +101,9 @@ func (w *world) ingestRemote(remote Remote) error {
 		}
 	}
 	w.noteUnresolved(remote.Device)
+	w.noteUnpublishableRelations(remote.Device)
 	w.omitAbsent(remote.SKI, updated)
+	w.admitCommands(remote)
 	return nil
 }
 
@@ -233,6 +235,7 @@ func (w *world) revoke(ski string) {
 		fact.revision++
 		w.facts[path] = fact
 	}
+	w.dropRemote(ski)
 }
 
 type elementKey struct {

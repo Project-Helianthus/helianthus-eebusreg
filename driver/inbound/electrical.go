@@ -72,6 +72,7 @@ func electricalKind(entityType string) (string, semreg.AnchorClass, bool) {
 }
 
 func (w *world) ingestElectrical(remote Remote) error {
+	w.clearOperations(remote.Device)
 	w.placeElectricalNodes(remote)
 	updated := map[string]struct{}{}
 	opened := w.openSeenSessions(remote)
@@ -84,6 +85,7 @@ func (w *world) ingestElectrical(remote Remote) error {
 	w.noteConfigurationGaps(remote)
 	w.markElectricalIdentity(remote)
 	w.omitAbsent(remote.SKI, updated)
+	w.admitCommands(remote)
 	return nil
 }
 
