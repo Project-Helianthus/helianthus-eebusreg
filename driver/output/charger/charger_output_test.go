@@ -197,6 +197,33 @@ func TestChargerOutputFeatureReject(t *testing.T) {
 	}
 }
 
+func TestChargerOutputPowerMonitoringOrder(t *testing.T) {
+	// Serve gives each EVSE the power-monitoring group in package order.
+	// Sorting that group in place leaves the next binding with measurement
+	// followed by electrical connection.
+	var power [][]string
+	attach := func(features []string) (string, error) {
+		if !listed(features, featureMeasurement) || !listed(features, featureElectrical) {
+			return "", nil
+		}
+		power = append(power, append([]string(nil), features...))
+		sort.Strings(features)
+		return "", nil
+	}
+	Serve(chargerLens("bay"), evsePlacement(), attach)
+	next := evsePlacement()
+	next.Address = "b"
+	Serve(chargerLens("north"), next, attach)
+	if len(power) != 2 {
+		t.Fatalf("power monitoring calls %d", len(power))
+	}
+	for _, group := range power {
+		if len(group) != 2 || group[0] != featureMeasurement || group[1] != featureElectrical {
+			t.Fatalf("power monitoring order %v", group)
+		}
+	}
+}
+
 func TestChargerOutputUnadmitted(t *testing.T) {
 	// Admission fields are lens admitted, runtime enabled, basis, resource, family and overlapping.
 	// Each mutation announces nothing and adds no loss, so an unadmitted result is never served.

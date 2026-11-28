@@ -99,7 +99,9 @@ func Serve(result Result, place Placement, attach func([]string) (string, error)
 		if !listed(outcome.Announced, entry.useCase) {
 			continue
 		}
-		if rejected, ok := acceptGroup(attach, entry.features); !ok {
+		// attach may reorder its argument. The copy keeps this order for the next EVSE.
+		group := append([]string(nil), entry.features...)
+		if rejected, ok := acceptGroup(attach, group); !ok {
 			outcome.Loss = nameLoss(outcome.Loss, rejected)
 			continue
 		}
