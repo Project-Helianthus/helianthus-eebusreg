@@ -25,6 +25,9 @@ func (b *OutputBinding) serveChargerOutput(result LensResult) monitoringOutcome 
 			Address: entity.address,
 			Node:    b.node != nil,
 		}
+		if node, ok := b.node.(*eebusfacade.OutputNode); ok {
+			place.Surface = node
+		}
 	}
 	return chargerOutcome(charger.Serve(chargerResult(result), place, func(features []string) (string, error) {
 		return b.node.AddServerFeatures(place.Address, features)
@@ -57,6 +60,98 @@ func chargerResult(result LensResult) charger.Result {
 		DeviceActor:     result.DeviceActor,
 		MissingElements: append([]string(nil), result.MissingElements...),
 		Overlapping:     result.Overlapping,
+		Facts:           chargerFacts(result.Facts),
+		MemberSum:       chargerMemberSum(result.MemberSum),
+	}
+}
+
+func chargerFacts(facts []LensFact) []struct {
+	Element     string
+	Phase       string
+	Connector   string
+	Kind        string
+	Coefficient string
+	Exponent    int32
+	Boolean     bool
+	Text        string
+	Symbol      string
+	Unit        string
+} {
+	if facts == nil {
+		return nil
+	}
+	copied := make([]struct {
+		Element     string
+		Phase       string
+		Connector   string
+		Kind        string
+		Coefficient string
+		Exponent    int32
+		Boolean     bool
+		Text        string
+		Symbol      string
+		Unit        string
+	}, len(facts))
+	for index, fact := range facts {
+		copied[index] = struct {
+			Element     string
+			Phase       string
+			Connector   string
+			Kind        string
+			Coefficient string
+			Exponent    int32
+			Boolean     bool
+			Text        string
+			Symbol      string
+			Unit        string
+		}{
+			Element: fact.Element, Phase: fact.Phase, Connector: fact.Connector,
+			Kind: fact.Value.Kind, Coefficient: fact.Value.Coefficient, Exponent: fact.Value.Exponent,
+			Boolean: fact.Value.Boolean, Text: fact.Value.Text, Symbol: fact.Value.Symbol, Unit: fact.Unit,
+		}
+	}
+	return copied
+}
+
+func chargerMemberSum(sum *LensMemberSum) *struct {
+	Withheld         bool
+	Coefficient      string
+	Exponent         int32
+	Unit             string
+	Reason           string
+	NotIncludedCount int
+	Gaps             []struct {
+		Asset  string
+		Reason string
+	}
+} {
+	if sum == nil {
+		return nil
+	}
+	gaps := make([]struct {
+		Asset  string
+		Reason string
+	}, len(sum.NotIncluded))
+	for index, gap := range sum.NotIncluded {
+		gaps[index] = struct {
+			Asset  string
+			Reason string
+		}{Asset: gap.Asset, Reason: gap.Reason}
+	}
+	return &struct {
+		Withheld         bool
+		Coefficient      string
+		Exponent         int32
+		Unit             string
+		Reason           string
+		NotIncludedCount int
+		Gaps             []struct {
+			Asset  string
+			Reason string
+		}
+	}{
+		Withheld: sum.Withheld, Coefficient: sum.Coefficient, Exponent: sum.Exponent,
+		Unit: sum.Unit, Reason: sum.Reason, NotIncludedCount: sum.NotIncludedCount, Gaps: gaps,
 	}
 }
 

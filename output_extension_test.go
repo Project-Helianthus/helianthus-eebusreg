@@ -107,12 +107,12 @@ func TestOutputExtensionLineToLineVoltage(t *testing.T) {
 	charger := chargerOutputLens("bay")
 	charger.Elements = append(charger.Elements, "infrastructure.ac.voltage_line_line")
 	binding.Apply(charger)
-	if gaps := binding.MonitoringLoss("bay"); len(gaps) != 1 || gaps[0] != "device classification" {
+	if gaps := binding.MonitoringLoss("bay"); len(gaps) != 2 || gaps[0] != "device classification" || gaps[1] != "total active power" {
 		t.Fatalf("charger loss %v", gaps)
 	}
 	plain := newOutputBinding(t)
 	plain.Apply(chargerOutputLens("bay"))
-	if gaps := plain.MonitoringLoss("bay"); len(gaps) != 1 || gaps[0] != "device classification" {
+	if gaps := plain.MonitoringLoss("bay"); len(gaps) != 2 || gaps[0] != "device classification" || gaps[1] != "total active power" {
 		t.Fatalf("charger loss without the element %v", gaps)
 	}
 }
@@ -159,7 +159,7 @@ func TestOutputExtensionPhaseAllocatedCurrent(t *testing.T) {
 	// evse.operation.set_allocated_current.
 	// element: carried as an element it binds no load control and calls nothing.
 	// operation name: named as an operation it binds no load control.
-	// consumption limit: the write stays the explicit loss with the operation not called.
+	// consumption limit: the allocated current operation is recognized and the refusal is absent.
 	binding := newOutputBinding(t)
 	element := chargerOutputLens("bay")
 	element.Elements = append(element.Elements, "evse.limit.allocated_current_phase")
@@ -184,13 +184,13 @@ func TestOutputExtensionPhaseAllocatedCurrent(t *testing.T) {
 	limit.UseCase = "Limitation of Power Consumption"
 	limit.Elements = append(limit.Elements, "evse.limit.allocated_current_phase")
 	limit.Operations = []LensOperation{{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true}}
-	if loss := binding.Apply(limit); len(loss) != 1 || loss[0] != "consumption_limit_not_applied" {
+	if loss := binding.Apply(limit); len(loss) != 0 {
 		t.Fatalf("limit loss %v", loss)
 	}
 	gaps := binding.MonitoringLoss("third")
-	for _, want := range []string{"missing operation: active power consumption limit", "not called: evse.operation.set_allocated_current"} {
-		if !monitoringListed(gaps, want) {
-			t.Fatalf("monitoring loss omits %s: %v", want, gaps)
+	for _, want := range []string{"consumption_limit_not_applied", "missing operation: active power consumption limit", "not called: evse.operation.set_allocated_current"} {
+		if monitoringListed(gaps, want) {
+			t.Fatalf("monitoring loss still names %s: %v", want, gaps)
 		}
 	}
 }

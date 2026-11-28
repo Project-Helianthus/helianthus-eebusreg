@@ -407,7 +407,7 @@ func extensionLoss(result LensResult) []string {
 // the lens result does not fill, string DC energy for a string and
 // line-to-line voltage for an inverter when the result does not carry them,
 // each server feature the node rejected, and, for a charger, the device
-// classification gap and the loss of an active-power consumption-limit write.
+// classification gap and a total the lens did not fill.
 // It is empty when that Apply published everything, was not admitted, or
 // stopped before serving the entity.
 func (b *OutputBinding) MonitoringLoss(resourceID string) []string {
@@ -925,7 +925,7 @@ func announcementLoss(result LensResult) []string {
 	if len(result.MissingElements) > 0 {
 		return append([]string(nil), result.MissingElements...)
 	}
-	if result.UseCase == useCaseConsumption && !consumptionApplied(result) {
+	if result.UseCase == useCaseConsumption && result.Family != "charger" && !consumptionApplied(result) {
 		return []string{"consumption_limit_not_applied"}
 	}
 	if result.UseCase != "" {
@@ -937,11 +937,12 @@ func announcementLoss(result LensResult) []string {
 }
 
 func consumptionApplied(result LensResult) bool {
-	if result.Family == "charger" || result.Overlapping {
-		return false
+	name, unit := operationActivePower, "W"
+	if result.Family == "charger" {
+		name, unit = operationAllocatedCurrent, "A"
 	}
 	for _, operation := range result.Operations {
-		if operation.OwnCapability && !operation.Converted && operation.Unit == "W" && operation.Name == operationActivePower {
+		if !result.Overlapping && operation.OwnCapability && !operation.Converted && operation.Unit == unit && operation.Name == name {
 			return true
 		}
 	}
