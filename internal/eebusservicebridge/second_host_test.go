@@ -1,3 +1,5 @@
+//go:build eebusreg_second_host
+
 package eebusservicebridge_test
 
 import (
