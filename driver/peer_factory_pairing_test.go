@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -32,6 +33,7 @@ type pairingRuntime struct {
 	reads        int
 	readData     eebusraw.FeatureDataGetDataV1
 	sourceNotice eebusfacade.RemoteSourceFunc
+	node         *eebusfacade.OutputNode
 }
 
 type pairingAdmin struct {
@@ -121,6 +123,16 @@ func (world *pairingWorld) read(t *testing.T, local string) []byte {
 		t.Fatal(err)
 	}
 	return body
+}
+
+// outputNode is the facade node type. The exported method signature names this alias.
+type outputNode = eebusfacade.OutputNode
+
+func (runtime *pairingRuntime) OutputNode() (*outputNode, error) {
+	if runtime == nil || runtime.node == nil {
+		return nil, errors.New("existing node is unavailable")
+	}
+	return runtime.node, nil
 }
 
 func (runtime *pairingRuntime) Start(ctx context.Context) error {

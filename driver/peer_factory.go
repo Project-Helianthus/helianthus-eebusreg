@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"sync"
 
 	eebusruntime "github.com/Project-Helianthus/helianthus-eebusreg"
+	"github.com/Project-Helianthus/helianthus-eebusreg/driver/output/base"
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 	semreg "github.com/Project-Helianthus/helianthus-semreg/semreg/v1"
 	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1/catalog"
 	semdriver "github.com/Project-Helianthus/helianthus-semreg/semreg/v1/driver"
@@ -111,15 +114,25 @@ func (f *Factory) lock() { f.gate <- struct{}{} }
 func (f *Factory) unlock() { <-f.gate }
 
 type peerInstance struct {
-	mu      sync.Mutex
-	key     semdriver.InstanceKey
-	runtime eebusruntime.Runtime
-	admin   eebusruntime.AdminV1
-	config  eebusruntime.Config
-	session semdriver.Session
-	started bool
-	fenced  bool
-	pairing pairingState
+	mu           sync.Mutex
+	key          semdriver.InstanceKey
+	runtime      eebusruntime.Runtime
+	admin        eebusruntime.AdminV1
+	config       eebusruntime.Config
+	session      semdriver.Session
+	started      bool
+	fenced       bool
+	pairing      pairingState
+	binding      *eebusruntime.OutputBinding
+	output       *base.Output
+	outputCancel context.CancelFunc
+	outputDone   chan struct{}
+}
+
+// outputNodeHolder is a runtime double that presents the output node it owns.
+// A real runtime keeps that node unexported and is opened by the binding.
+type outputNodeHolder interface {
+	OutputNode() (*eebusfacade.OutputNode, error)
 }
 
 func (instance *peerInstance) Start(ctx context.Context, session semdriver.Session) error {
@@ -152,21 +165,125 @@ func (instance *peerInstance) Start(ctx context.Context, session semdriver.Sessi
 	if session == nil {
 		return nil
 	}
-	return instance.registerPairingNamespace(ctx, session)
+	if err := instance.registerPairingNamespace(ctx, session); err != nil {
+		return err
+	}
+	return instance.startOutput()
+}
+
+func (instance *peerInstance) startOutput() error {
+	instance.mu.Lock()
+	if instance.fenced || !instance.started || instance.session == nil || !instance.config.Enabled {
+		fenced := instance.fenced
+		instance.mu.Unlock()
+		if fenced {
+			return instance.abortStart(errors.New("instance withdrawn"))
+		}
+		return nil
+	}
+	session := instance.session
+	runtime := instance.runtime
+	root := instance.config.StateRoot
+	enabled := instance.config.Enabled
+	fallbacks := append([]eebusruntime.OutputPowerLimitFallback(nil), instance.config.OutputPowerLimitFallbacks...)
+	instance.mu.Unlock()
+	if holder, ok := runtime.(outputNodeHolder); ok {
+		node, err := holder.OutputNode()
+		if err != nil || node == nil {
+			return nil
+		}
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return instance.abortStart(err)
+	}
+	binding, err := eebusruntime.NewOutputBinding(runtime, root)
+	if err != nil {
+		return instance.abortStart(err)
+	}
+	binding.RetainSession(session.ScopedOperations(), fallbacks)
+	output := base.New(binding, enabled, fallbacks)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	instance.mu.Lock()
+	if instance.fenced || !instance.started {
+		fenced := instance.fenced
+		instance.mu.Unlock()
+		cancel()
+		if fenced {
+			return instance.abortStart(errors.New("instance withdrawn"))
+		}
+		return nil
+	}
+	instance.binding = binding
+	instance.output = output
+	instance.outputCancel = cancel
+	instance.outputDone = done
+	instance.mu.Unlock()
+	input := session.SemanticInput()
+	operations := session.ScopedOperations()
+	go func() {
+		defer close(done)
+		_ = output.StartOutput(ctx, input, operations)
+	}()
+	return nil
+}
+
+func (instance *peerInstance) abortStart(err error) error {
+	instance.mu.Lock()
+	instance.started = false
+	instance.session = nil
+	cancel := instance.outputCancel
+	done := instance.outputDone
+	instance.binding = nil
+	instance.output = nil
+	instance.outputCancel = nil
+	instance.outputDone = nil
+	runtime := instance.runtime
+	instance.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
+	if runtime != nil {
+		_ = runtime.Shutdown()
+	}
+	return err
 }
 
 func (instance *peerInstance) FenceWithdrawal() {
 	instance.mu.Lock()
 	instance.fenced = true
+	cancel := instance.outputCancel
+	done := instance.outputDone
 	instance.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
 }
 
 func (instance *peerInstance) Stop(context.Context) semdriver.CloseReport {
 	instance.mu.Lock()
 	instance.started = false
 	instance.session = nil
+	cancel := instance.outputCancel
+	done := instance.outputDone
+	instance.binding = nil
+	instance.output = nil
+	instance.outputCancel = nil
+	instance.outputDone = nil
 	runtime := instance.runtime
 	instance.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
 	err := runtime.Shutdown()
 	return semdriver.CloseReport{Confirmed: err == nil, Err: err}
 }

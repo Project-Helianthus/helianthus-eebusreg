@@ -15,6 +15,7 @@ import (
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusservicebridge"
+	semreg "github.com/Project-Helianthus/helianthus-semreg/semreg/v1"
 )
 
 func TestOutputBinding(t *testing.T) {
@@ -68,7 +69,8 @@ func TestOutputBindingResourceFields(t *testing.T) {
 	// Resource fields are family, lens admitted, runtime enabled, input dimension,
 	// parent and contains cited.
 	// family: a heating lens adds no entity. The production gate admits inverter,
-	// pv string and charger only.
+	// pv string, charger, ev, meter, battery, heating circuit, heating zone,
+	// room and grid. The family heating is not one of them.
 	// lens admitted: false adds no entity. The production gate returns before allocation.
 	// runtime enabled: false adds no entity. The production gate returns before allocation.
 	// input dimension: true adds no pv string. The production gate treats that fact as not a string.
@@ -118,8 +120,8 @@ func TestOutputBindingResourceFields(t *testing.T) {
 	}
 	if loss := binding.Apply(LensResult{
 		Family: "battery", ResourceID: "pack", LensAdmitted: true, RuntimeEnabled: true,
-	}); len(loss) != 0 || binding.EntityAddress("pack") != "" {
-		t.Fatal("battery published")
+	}); len(loss) != 0 || binding.EntityAddress("pack") == "" || !outputBindingHasType(binding.EntityTypes(), "Battery") {
+		t.Fatal("battery not published")
 	}
 	if loss := binding.Apply(LensResult{
 		Family: "charger", ResourceID: "bay", LensAdmitted: true, RuntimeEnabled: true,
@@ -376,7 +378,7 @@ func TestOutputBindingAnnouncement(t *testing.T) {
 	// Announcement fields are overlapping, device actor, missing elements and use case.
 	// overlapping: true is the conflict loss and does not map the write.
 	// The production gate returns that loss before feature mapping.
-	// device actor: EV is not announced. The production gate returns that actor and adds no EV entity.
+	// device actor: EV is still the loss. The production gate adds the EV entity and returns that actor.
 	// missing elements: the loss names each cited element and does not invent a feature for it.
 	// use case: Limitation of Power Consumption stays unannounced when the watt write is not applied.
 	// The production gate returns that loss for this use case on a charger.
@@ -398,8 +400,8 @@ func TestOutputBindingAnnouncement(t *testing.T) {
 
 	ev := LensResult{Family: "ev", ResourceID: "car", LensAdmitted: true, RuntimeEnabled: true, DeviceActor: "EV", UseCase: "Overload protection"}
 	loss = binding.Apply(ev)
-	if len(loss) != 1 || loss[0] != "EV" || binding.EntityAddress("car") != "" {
-		t.Fatalf("ev loss %v address %q", loss, binding.EntityAddress("car"))
+	if len(loss) != 1 || loss[0] != "EV" || binding.EntityAddress("car") == "" || !outputBindingHasType(binding.EntityTypes(), "EV") {
+		t.Fatalf("ev loss %v address %q types %v", loss, binding.EntityAddress("car"), binding.EntityTypes())
 	}
 
 	partial := outputBindingInverter("south")
@@ -431,6 +433,45 @@ func TestOutputBindingAnnouncement(t *testing.T) {
 	}
 	if !outputBindingHasType(binding.ServerFeatures("bay"), "load control") {
 		t.Fatal("allocated current was dropped")
+	}
+}
+
+func TestOutputBindingRetainsSession(t *testing.T) {
+	// Retained fields are the operation port, resource, direction, coefficient,
+	// exponent and unit. Mutating the caller's slice or the returned slice
+	// leaves the stored copy unchanged.
+	binding := newOutputBinding(t)
+	first := OutputPowerLimitFallback{
+		Resource: "resource.east.heater", Direction: PowerLimitDirectionConsumption,
+		Power: semreg.Quantity{Number: semreg.Decimal{Coefficient: "15", Exponent10: 2}, Unit: "unit.watt"},
+	}
+	second := OutputPowerLimitFallback{
+		Resource: "resource.west.meter", Direction: PowerLimitDirectionProduction,
+		Power: semreg.Quantity{Number: semreg.Decimal{Coefficient: "5", Exponent10: -1}, Unit: "unit.watt"},
+	}
+	fallbacks := []OutputPowerLimitFallback{first, second}
+	marker := &struct{}{}
+	binding.RetainSession(marker, fallbacks)
+	fallbacks[0].Resource = "resource.replaced"
+	fallbacks[0].Direction = PowerLimitDirectionProduction
+	fallbacks[0].Power.Number.Coefficient = "9"
+	fallbacks[0].Power.Number.Exponent10 = 4
+	fallbacks[0].Power.Unit = "unit.volt"
+	if binding.RetainedOperations() != marker {
+		t.Fatal("retained port")
+	}
+	got := binding.PowerLimitFallbacks()
+	if len(got) != 2 || got[0] != first || got[1] != second {
+		t.Fatalf("stored %+v", got)
+	}
+	got[0].Power.Number.Coefficient = "1"
+	got[0].Resource = "resource.alias"
+	again := binding.PowerLimitFallbacks()
+	if again[0] != first || again[1] != second {
+		t.Fatalf("returned slice aliases the store %+v", again)
+	}
+	if (*OutputBinding)(nil).RetainedOperations() != nil || (*OutputBinding)(nil).PowerLimitFallbacks() != nil {
+		t.Fatal("nil binding returned a port")
 	}
 }
 

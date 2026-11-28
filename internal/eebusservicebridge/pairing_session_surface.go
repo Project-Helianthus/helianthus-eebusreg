@@ -14,11 +14,18 @@ import (
 // host receives from the registry call.
 type PairingSessionSurface struct {
 	native semdriver.NativeRegistry
+	input  semdriver.SemanticInput
 }
 
 // NewPairingSessionSurface binds native as the registry returned to the host.
 func NewPairingSessionSurface(native semdriver.NativeRegistry) PairingSessionSurface {
 	return PairingSessionSurface{native: native}
+}
+
+// WithInput returns a surface whose read is input. A nil input keeps the unused read.
+func (surface PairingSessionSurface) WithInput(input semdriver.SemanticInput) PairingSessionSurface {
+	surface.input = input
+	return surface
 }
 
 // Native returns the registry bound by NewPairingSessionSurface.
@@ -29,6 +36,9 @@ func (surface PairingSessionSurface) Native() semdriver.NativeRegistry {
 // SemanticInput returns a read that reports it is unused. Pairing keeps
 // source state on the instance and does not capture through this read.
 func (surface PairingSessionSurface) SemanticInput() semdriver.SemanticInput {
+	if surface.input != nil {
+		return surface.input
+	}
 	return unusedPairingRead{}
 }
 
