@@ -514,25 +514,23 @@ func (acquisition *runtimeAcquisition) startBackend() (Backend, error) {
 		rawFeatures: acquisition.rawFeatures, rawMutations: acquisition.rawMutations, useCases: acquisition.useCases, unsubscribeSPINE: acquisition.unsubscribeSPINE, closeDone: make(chan struct{}),
 	}
 	scoped, ok := acquisition.service.(runtimeScopedService)
-	if !ok {
-		backend.output = acquisition.takeOutput()
-		return backend, nil
+	if ok {
+		if !backend.runtimeStartAuthorized() {
+			acquisition.closeRawMutations()
+			return nil, acquisition.closeRuntimeWithSPINE(errRuntimeTrustEffectsDenied)
+		}
+		if err := scoped.StartWithPolicy(); err != nil {
+			acquisition.closeRawMutations()
+			return nil, acquisition.closeRuntimeWithSPINE(fmt.Errorf("start scoped eebus runtime service: %w", err))
+		}
+		terminal := scoped.ListenerTerminal()
+		if terminal == nil {
+			acquisition.closeRawMutations()
+			return nil, acquisition.closeRuntimeWithSPINE(errors.New("scoped eebus runtime service omitted listener terminal signal"))
+		}
+		backend.listenerTerminal = terminal
+		backend.serviceStarted = true
 	}
-	if !backend.runtimeStartAuthorized() {
-		acquisition.closeRawMutations()
-		return nil, acquisition.closeRuntimeWithSPINE(errRuntimeTrustEffectsDenied)
-	}
-	if err := scoped.StartWithPolicy(); err != nil {
-		acquisition.closeRawMutations()
-		return nil, acquisition.closeRuntimeWithSPINE(fmt.Errorf("start scoped eebus runtime service: %w", err))
-	}
-	terminal := scoped.ListenerTerminal()
-	if terminal == nil {
-		acquisition.closeRawMutations()
-		return nil, acquisition.closeRuntimeWithSPINE(errors.New("scoped eebus runtime service omitted listener terminal signal"))
-	}
-	backend.listenerTerminal = terminal
-	backend.serviceStarted = true
 	backend.output = acquisition.takeOutput()
 	return backend, nil
 }
@@ -926,35 +924,6 @@ func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebu
 		return nil, errors.New("released scoped service construction failed")
 	}
 	return candidate, nil
-}
-
-// NewConfiguredService constructs the local service of one runtime instance.
-func NewConfiguredService(config RuntimeConfig, certificate tls.Certificate, nodeToken string) (*eebusservicebridge.Service, error) {
-	service, err := newEEBusService(config, runtimeMaterial{certificate: certificate, nodeToken: nodeToken}, nil)
-	if err != nil {
-		return nil, err
-	}
-	concrete, ok := service.(*eebusservicebridge.Service)
-	if !ok || concrete == nil {
-		return nil, errors.New("released scoped service construction failed")
-	}
-	return concrete, nil
-}
-
-// NewPreparedOutputService constructs one local service and prepares it for an output node.
-func NewPreparedOutputService(config RuntimeConfig, nodeToken string) (*eebusservicebridge.Service, error) {
-	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "binding")
-	if err != nil {
-		return nil, err
-	}
-	service, err := NewConfiguredService(config, certificate, nodeToken)
-	if err != nil {
-		return nil, err
-	}
-	if err := service.Setup(); err != nil {
-		return nil, err
-	}
-	return service, nil
 }
 
 func validateRuntimeMaterial(material runtimeMaterial) error {

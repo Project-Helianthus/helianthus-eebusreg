@@ -566,33 +566,6 @@ func (backend *facadeRuntimeBackend) Close() error {
 	return backend.backend.Close()
 }
 
-// outputNode returns the node owned by this runtime instance.
-func (runtime *runtimeImplementation) outputNode() (*eebusfacade.OutputNode, error) {
-	if runtime == nil {
-		return nil, errExistingNode
-	}
-	runtime.mu.Lock()
-	backend := runtime.backend
-	runtime.mu.Unlock()
-	source, ok := backend.(outputNodeSource)
-	if !ok {
-		return nil, errExistingNode
-	}
-	return source.outputNode()
-}
-
-// outputNode returns the node stored with this runtime's service backend.
-func (backend *facadeRuntimeBackend) outputNode() (*eebusfacade.OutputNode, error) {
-	if backend == nil || backend.backend == nil {
-		return nil, errExistingNode
-	}
-	node, err := eebusfacade.OpenOutputNode(backend.backend)
-	if err != nil || node == nil {
-		return nil, errExistingNode
-	}
-	return node, nil
-}
-
 func (backend *facadeRuntimeBackend) TerminalSnapshot() (SnapshotV1, bool) {
 	backend.mu.Lock()
 	defer backend.mu.Unlock()

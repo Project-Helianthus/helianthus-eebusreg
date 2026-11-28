@@ -8,6 +8,7 @@ import (
 
 	"github.com/Project-Helianthus/helianthus-eebus-go/features/server"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusservicebridge"
+	shipcert "github.com/Project-Helianthus/helianthus-ship-go/cert"
 	spineapi "github.com/Project-Helianthus/helianthus-spine-go/api"
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 	"github.com/Project-Helianthus/helianthus-spine-go/spine"
@@ -173,6 +174,26 @@ func (acquisition *runtimeAcquisition) takeOutput() *outputSession {
 	session := acquisition.output
 	acquisition.output = nil
 	return session
+}
+
+// NewPreparedOutputService constructs one local service and prepares it for an output node.
+func NewPreparedOutputService(config RuntimeConfig, nodeToken string) (*eebusservicebridge.Service, error) {
+	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "binding")
+	if err != nil {
+		return nil, err
+	}
+	service, err := newEEBusService(config, runtimeMaterial{certificate: certificate, nodeToken: nodeToken}, nil)
+	if err != nil {
+		return nil, err
+	}
+	concrete, ok := service.(*eebusservicebridge.Service)
+	if !ok || concrete == nil {
+		return nil, errors.New("released scoped service construction failed")
+	}
+	if err := concrete.Setup(); err != nil {
+		return nil, err
+	}
+	return concrete, nil
 }
 
 func nodeReady(service *eebusservicebridge.Service) bool {
