@@ -58,12 +58,14 @@ func Monitor(result Result) Outcome {
 	} else {
 		outcome.Loss = append(outcome.Loss, elementState)
 	}
-	if fillsTotal(result) || hasMeasurement(result) {
+	// The free-text total name still selects the use case. It does not count as a served total.
+	if listed(admittedElements(result), elementTotalPower) || fillsTotal(result) || hasMeasurement(result) {
 		outcome.Announced = append(outcome.Announced, useCasePowerMonitoring)
 	}
 	if !fillsTotal(result) {
 		outcome.Loss = append(outcome.Loss, totalLoss(result)...)
 	}
+	outcome.Loss = append(outcome.Loss, energyLosses(result)...)
 	outcome.Loss = append(outcome.Loss, "device classification")
 	for _, operation := range result.Operations {
 		if recognizedCurrent(operation) {
@@ -81,6 +83,10 @@ func Serve(result Result, place Placement, attach func([]string) (string, error)
 	outcome := Monitor(result)
 	operations := operationFeatures(result)
 	if !place.Binding || (len(outcome.Announced) == 0 && len(operations) == 0) {
+		if err := clearStaleDiagnosis(result, place); err != nil {
+			outcome.Loss = nameLoss(outcome.Loss, featureDiagnosis)
+			sort.Strings(outcome.Loss)
+		}
 		return outcome
 	}
 	if !place.Node || !place.Found || place.Kind != kindEVSE || !letterAddress(place.Address) {
@@ -112,6 +118,17 @@ func Serve(result Result, place Placement, attach func([]string) (string, error)
 	}
 	sort.Strings(outcome.Loss)
 	return outcome
+}
+
+func clearStaleDiagnosis(result Result, place Placement) error {
+	if !admitted(result) || !place.Node || !place.Found || place.Kind != kindEVSE || !letterAddress(place.Address) {
+		return nil
+	}
+	node, ok := place.Surface.(*eebusfacade.OutputNode)
+	if !ok {
+		return nil
+	}
+	return publishUnknownDiagnosis(node, place.Address, result)
 }
 
 func acceptGroup(attach func([]string) (string, error), features []string) (string, bool) {

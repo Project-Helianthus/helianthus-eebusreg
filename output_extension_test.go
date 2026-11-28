@@ -107,12 +107,12 @@ func TestOutputExtensionLineToLineVoltage(t *testing.T) {
 	charger := chargerOutputLens("bay")
 	charger.Elements = append(charger.Elements, "infrastructure.ac.voltage_line_line")
 	binding.Apply(charger)
-	if gaps := binding.MonitoringLoss("bay"); len(gaps) != 1 || gaps[0] != "device classification" {
+	if gaps := binding.MonitoringLoss("bay"); len(gaps) != 2 || gaps[0] != "device classification" || gaps[1] != "total active power" {
 		t.Fatalf("charger loss %v", gaps)
 	}
 	plain := newOutputBinding(t)
 	plain.Apply(chargerOutputLens("bay"))
-	if gaps := plain.MonitoringLoss("bay"); len(gaps) != 1 || gaps[0] != "device classification" {
+	if gaps := plain.MonitoringLoss("bay"); len(gaps) != 2 || gaps[0] != "device classification" || gaps[1] != "total active power" {
 		t.Fatalf("charger loss without the element %v", gaps)
 	}
 }

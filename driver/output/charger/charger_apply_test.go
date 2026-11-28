@@ -18,8 +18,8 @@ func TestChargerOutputServedOnEVSE(t *testing.T) {
 	// Apply adds the EVSE entity and serves it. It attaches measurement and electrical
 	// connection for Monitoring of Power Consumption and device diagnosis for EVSE
 	// Commissioning and Configuration on that entity. The monitored unit is the EVSE
-	// entity, so the CEM entity gains no feature. The caller of Apply reads the device
-	// classification gap from MonitoringLoss.
+	// entity, so the CEM entity gains no feature. MonitoringLoss names device
+	// classification and the free-text total, which is not a measurement row.
 	binding, node, _ := newChargerBinding(t)
 	result := chargerApplyLens("bay")
 	if loss := binding.Apply(result); len(loss) != 0 {
@@ -40,8 +40,9 @@ func TestChargerOutputServedOnEVSE(t *testing.T) {
 	if !chargerHas(binding.EntityTypes(), "EVSE") {
 		t.Fatalf("entities %v", binding.EntityTypes())
 	}
+	// The free-text total name is not a measurement row, so the total stays a loss.
 	gaps := binding.MonitoringLoss("bay")
-	if len(gaps) != 1 || gaps[0] != "device classification" {
+	if len(gaps) != 2 || gaps[0] != "device classification" || gaps[1] != "total active power" {
 		t.Fatalf("monitoring loss %v", gaps)
 	}
 }

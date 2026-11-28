@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Project-Helianthus/helianthus-eebusreg/driver/output/charger"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 )
 
@@ -348,6 +349,9 @@ func (b *OutputBinding) Withdraw(resourceID string) error {
 	}
 	if err := remover.RemoveEntity(entity.address); err != nil {
 		return err
+	}
+	if typed, ok := node.(*eebusfacade.OutputNode); ok {
+		charger.ForgetPublication(typed, entity.address)
 	}
 	entity.withdrawn = true
 	b.byResource[resourceID] = entity

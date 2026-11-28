@@ -62,6 +62,7 @@ type publishedIDs struct {
 
 type publishedEntity struct {
 	connection bool
+	diagnosis  bool
 	rows       map[string]publishedIDs
 }
 
@@ -83,21 +84,31 @@ func publishCharger(node *eebusfacade.OutputNode, address string, result Result,
 		if err := publishDiagnosis(node, address, result); err != nil {
 			return featureDiagnosis, err
 		}
+		noteDiagnosis(node, address)
+		return "", nil
+	}
+	if err := publishUnknownDiagnosis(node, address, result); err != nil {
+		return featureDiagnosis, err
 	}
 	return "", nil
 }
 
 func publishMeasurements(node *eebusfacade.OutputNode, address string, result Result) error {
-	if err := registerChargerUseCase(node, address, powerSupport()); err != nil {
-		return err
-	}
 	rows := chargerRows(result)
-	if len(rows) == 0 {
-		return nil
-	}
 	publicationMu.Lock()
 	defer publicationMu.Unlock()
 	entity := entityPublication(node, address)
+	if publicationStale(node, address, entity, rows) {
+		if err := retireMeasurementTable(node, address, entity); err != nil {
+			return err
+		}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	if err := registerChargerUseCase(node, address, powerSupport()); err != nil {
+		return err
+	}
 	if err := ensureConnection(node, address, entity); err != nil {
 		return err
 	}
@@ -107,6 +118,81 @@ func publishMeasurements(node *eebusfacade.OutputNode, address string, result Re
 		}
 	}
 	return nil
+}
+
+// ForgetPublication drops cached ids for an entity the node has removed.
+// The next add at that address builds a new table.
+func ForgetPublication(node *eebusfacade.OutputNode, address string) {
+	if node == nil || address == "" {
+		return
+	}
+	publicationMu.Lock()
+	defer publicationMu.Unlock()
+	byAddress := publications[node]
+	if byAddress == nil {
+		return
+	}
+	delete(byAddress, address)
+	if len(byAddress) == 0 {
+		delete(publications, node)
+	}
+}
+
+func publicationStale(node *eebusfacade.OutputNode, address string, entity *publishedEntity, rows []wireRow) bool {
+	if len(entity.rows) == 0 && !entity.connection {
+		return false
+	}
+	support := powerSupport()
+	if !node.HasUseCaseSupport(address, support.Actor, support.Name) {
+		return true
+	}
+	present := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		present[row.key] = struct{}{}
+	}
+	for key := range entity.rows {
+		if _, ok := present[key]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
+// retireMeasurementTable removes a published measurement table. Server helpers
+// only add and update rows, so a cut that omits a row replaces the table.
+func retireMeasurementTable(node *eebusfacade.OutputNode, address string, entity *publishedEntity) error {
+	support := powerSupport()
+	if node.HasUseCaseSupport(address, support.Actor, support.Name) {
+		if err := node.WithdrawUseCase(address, support.Actor, support.Name); err != nil {
+			return err
+		}
+	}
+	entity.connection = false
+	entity.rows = map[string]publishedIDs{}
+	return nil
+}
+
+func noteDiagnosis(node *eebusfacade.OutputNode, address string) {
+	publicationMu.Lock()
+	defer publicationMu.Unlock()
+	entityPublication(node, address).diagnosis = true
+}
+
+func diagnosisNoted(node *eebusfacade.OutputNode, address string) bool {
+	publicationMu.Lock()
+	defer publicationMu.Unlock()
+	byAddress := publications[node]
+	if byAddress == nil || byAddress[address] == nil {
+		return false
+	}
+	return byAddress[address].diagnosis
+}
+
+func publishUnknownDiagnosis(node *eebusfacade.OutputNode, address string, result Result) error {
+	if _, known := commissioningState(result); known || !diagnosisNoted(node, address) {
+		return nil
+	}
+	return node.SetDeviceDiagnosisState(address, &spinemodel.DeviceDiagnosisStateDataType{})
 }
 
 func publishDiagnosis(node *eebusfacade.OutputNode, address string, result Result) error {
@@ -482,15 +568,49 @@ func fillsOperatingState(result Result) bool {
 }
 
 func fillsTotal(result Result) bool {
-	if listed(admittedElements(result), elementTotalPower) {
-		return true
-	}
-	_, reported := reportedTotal(result)
-	if reported {
+	if _, reported := reportedTotal(result); reported {
 		return true
 	}
 	_, derived := derivedTotal(result)
 	return derived
+}
+
+func energyLosses(result Result) []string {
+	var loss []string
+	for _, fact := range result.Facts {
+		name, ok := inexactEnergy(fact, result.MissingElements)
+		if !ok || listed(loss, name) {
+			continue
+		}
+		loss = append(loss, name)
+	}
+	return loss
+}
+
+func inexactEnergy(fact quantityFact, missing []string) (string, bool) {
+	produced := false
+	switch fact.Element {
+	case elementLifetime:
+	case elementExported:
+		produced = true
+	default:
+		return "", false
+	}
+	if listed(missing, fact.Element) || fact.Kind != kindQuantity || fact.Unit != unitJoule {
+		return "", false
+	}
+	rat, ok := decimalRat(fact.Coefficient, fact.Exponent)
+	if !ok || (produced && rat.Sign() < 0) {
+		return "", false
+	}
+	rat.Quo(rat, big.NewRat(3600, 1))
+	if produced {
+		rat.Neg(rat)
+	}
+	if _, _, exact := ratToScaled(rat); exact {
+		return "", false
+	}
+	return fact.Element, true
 }
 
 func hasMeasurement(result Result) bool {

@@ -193,6 +193,133 @@ func TestChargerOutputCommissioningState(t *testing.T) {
 	}
 }
 
+func TestChargerOutputPartialCutDropsPublishedTotal(t *testing.T) {
+	// A calculated total is published. The next cut changes phase a and withholds the sum.
+	// acPowerTotal: the previous calculated total is not left beside the new phase.
+	// phase b: a phase the cut omits is not left in the table.
+	binding, _, service := newChargerBinding(t)
+	result := eebusruntime.LensResult{
+		Family: "charger", ResourceID: "bay", LensAdmitted: true, RuntimeEnabled: true,
+		Facts: []eebusruntime.LensFact{
+			lensQuantity("evse.ac.active_power", "a", "15", 2, "unit.watt"),
+			lensQuantity("evse.ac.active_power", "b", "25", 2, "unit.watt"),
+		},
+		MemberSum: &eebusruntime.LensMemberSum{Coefficient: "4", Exponent: 3, Unit: "unit.watt"},
+	}
+	if loss := binding.Apply(result); len(loss) != 0 {
+		t.Fatalf("apply loss %v", loss)
+	}
+	entity := entityAt(t, service, []spinemodel.AddressEntityType{2})
+	if !rowScope(readRows(t, entity), "acPowerTotal") {
+		t.Fatal("calculated total was not published")
+	}
+	result.Facts = []eebusruntime.LensFact{lensQuantity("evse.ac.active_power", "a", "18", 2, "unit.watt")}
+	result.MemberSum = &eebusruntime.LensMemberSum{
+		Withheld: true, Reason: "partial_cut", NotIncludedCount: 1,
+		NotIncluded: []eebusruntime.LensNotIncluded{{Asset: "asset-phase-b", Reason: "source_unavailable"}},
+	}
+	binding.Apply(result)
+	rows := readRows(t, entity)
+	if rowScope(rows, "acPowerTotal") {
+		t.Fatalf("previous total remained %+v", rows)
+	}
+	if !hasRow(rows, wantRow{scope: "acPower", measure: "power", unit: "W", number: 18, scale: 2, acType: "real", variant: "rms", phase: "a", reference: "neutral"}) {
+		t.Fatalf("new phase %+v", rows)
+	}
+	if hasRow(rows, wantRow{scope: "acPower", measure: "power", unit: "W", number: 25, scale: 2, acType: "real", variant: "rms", phase: "b", reference: "neutral"}) {
+		t.Fatalf("omitted phase remained %+v", rows)
+	}
+}
+
+func TestChargerOutputReapplyAfterWithdraw(t *testing.T) {
+	// Withdraw removes the entity. The same resource is applied again at its stored address.
+	// The new entity gets a measurement table. Reused ids from the deleted entity would leave it empty.
+	binding, node, service := newChargerBinding(t)
+	result := measurementLens()
+	if loss := binding.Apply(result); len(loss) != 0 {
+		t.Fatalf("apply loss %v", loss)
+	}
+	if err := binding.Withdraw("bay"); err != nil {
+		t.Fatal(err)
+	}
+	if loss := binding.Apply(result); len(loss) != 0 {
+		t.Fatalf("reapply loss %v", loss)
+	}
+	if gaps := binding.MonitoringLoss("bay"); chargerHas(gaps, "measurement") || chargerHas(gaps, "electrical connection") {
+		t.Fatalf("reapply gaps %v", gaps)
+	}
+	entity := entityAt(t, service, []spinemodel.AddressEntityType{2})
+	assertConnection(t, entity)
+	assertRows(t, entity, fullRows())
+	if !node.HasUseCaseSupport("a", spinemodel.UseCaseActorTypeMonitoredUnit, spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption) {
+		t.Fatal("power monitoring was not registered on the new entity")
+	}
+}
+
+func TestChargerOutputInexactLifetimeLoss(t *testing.T) {
+	// 3601 J is 3601/3600 Wh. That quotient is not an exact scaled number, so the row is omitted
+	// and the loss names the admitted counter. An exact 3600000 J counter stays 1000 Wh.
+	binding, _, service := newChargerBinding(t)
+	result := eebusruntime.LensResult{
+		Family: "charger", ResourceID: "bay", LensAdmitted: true, RuntimeEnabled: true,
+		Facts: []eebusruntime.LensFact{
+			lensQuantity("evse.ac.active_power", "a", "15", 0, "unit.watt"),
+			lensQuantity("evse.energy.lifetime", "", "3601", 0, "unit.joule"),
+		},
+	}
+	binding.Apply(result)
+	rows := readRows(t, entityAt(t, service, []spinemodel.AddressEntityType{2}))
+	if rowScope(rows, "acEnergyConsumed") {
+		t.Fatalf("inexact lifetime was served %+v", rows)
+	}
+	if !hasRow(rows, wantRow{scope: "acPower", measure: "power", unit: "W", number: 15, acType: "real", variant: "rms", phase: "a", reference: "neutral"}) {
+		t.Fatalf("phase %+v", rows)
+	}
+	if !chargerHas(binding.MonitoringLoss("bay"), "evse.energy.lifetime") {
+		t.Fatalf("loss %v", binding.MonitoringLoss("bay"))
+	}
+}
+
+func TestChargerOutputFreeTextTotalUnregistered(t *testing.T) {
+	// A result whose only element is the free-text name total active power has no measurement row.
+	// Monitoring of Power Consumption is not registered, and the total loss is not hidden.
+	binding, node, _ := newChargerBinding(t)
+	result := eebusruntime.LensResult{
+		Family: "charger", ResourceID: "bay", LensAdmitted: true, RuntimeEnabled: true,
+		Elements: []string{"total active power"},
+	}
+	binding.Apply(result)
+	if node.HasUseCaseSupport("a", spinemodel.UseCaseActorTypeMonitoredUnit, spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption) {
+		t.Fatal("power monitoring was registered without a measurement row")
+	}
+	if !chargerHas(binding.MonitoringLoss("bay"), "total active power") {
+		t.Fatalf("total loss %v", binding.MonitoringLoss("bay"))
+	}
+}
+
+func TestChargerOutputUnknownFaultClearsFailure(t *testing.T) {
+	// A fault publishes failure. A later admitted cut with no fault fact and no operating-state
+	// label leaves that state unknown, so the previous failure is not what a peer reads.
+	binding, _, service := newChargerBinding(t)
+	result := eebusruntime.LensResult{
+		Family: "charger", ResourceID: "bay", LensAdmitted: true, RuntimeEnabled: true,
+		Facts: []eebusruntime.LensFact{lensSymbol("evse.status.fault", "present")},
+	}
+	binding.Apply(result)
+	entity := entityAt(t, service, []spinemodel.AddressEntityType{2})
+	state := diagnosisState(t, entity)
+	if state.OperatingState == nil || *state.OperatingState != spinemodel.DeviceDiagnosisOperatingStateTypeFailure {
+		t.Fatalf("failure %+v", state)
+	}
+	result.Facts = nil
+	result.Elements = nil
+	binding.Apply(result)
+	state = diagnosisState(t, entity)
+	if state == nil || state.OperatingState != nil || state.LastErrorCode != nil {
+		t.Fatalf("cleared state %+v", state)
+	}
+}
+
 func measurementLens() eebusruntime.LensResult {
 	return eebusruntime.LensResult{
 		Family: "charger", ResourceID: "bay", LensAdmitted: true, RuntimeEnabled: true,
