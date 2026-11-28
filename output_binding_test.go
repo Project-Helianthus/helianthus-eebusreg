@@ -752,9 +752,17 @@ func TestRootOutputAPIDoesNotExposeTheInternalNode(t *testing.T) {
 		case strings.HasPrefix(path, "github.com/Project-Helianthus/helianthus-ship-go"),
 			strings.HasPrefix(path, "github.com/Project-Helianthus/helianthus-eebus-go"),
 			strings.HasPrefix(path, "github.com/Project-Helianthus/helianthus-spine-go"),
-			strings.HasPrefix(path, "github.com/enbility/"):
+			strings.HasPrefix(path, "github.com/"+"enbility/"):
 			t.Errorf("protocol import %s", path)
 		}
+	}
+	// The public import boundary greps this contiguous module path outside internal/.
+	source, err := os.ReadFile("output_binding_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(source), "github.com/"+"enbility") {
+		t.Fatal("root output test names a direct protocol module")
 	}
 }
 
