@@ -202,7 +202,7 @@ func (o *Output) record(prepared preparedCut, losses [][]string) {
 			if index < len(losses) {
 				line.Losses = append([]string(nil), losses[index]...)
 			}
-			if o.binding != nil && o.binding.EntityAddress(result.ResourceID) != "" {
+			if o.binding != nil && o.binding.EntityPresent(result.ResourceID) {
 				line.Announced = true
 				state.applied[result.ResourceID] = prepared.assets[result.ResourceID]
 			}
@@ -223,6 +223,12 @@ func (o *Output) record(prepared preparedCut, losses [][]string) {
 				}
 				if omissionHas(prepared.omissions, asset) {
 					continue
+				}
+				if o.binding != nil {
+					if err := o.binding.Withdraw(id); err != nil {
+						lines = append(lines, ResourceLine{ResourceID: id, Losses: []string{"existing_node"}})
+						continue
+					}
 				}
 				lines = append(lines, ResourceLine{ResourceID: id, Withdrawn: true, Losses: []string{"withdrawn"}})
 				delete(state.applied, id)

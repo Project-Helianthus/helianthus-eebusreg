@@ -5,9 +5,11 @@ import (
 	"testing"
 
 	eebusruntime "github.com/Project-Helianthus/helianthus-eebusreg"
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 	semreg "github.com/Project-Helianthus/helianthus-semreg/semreg/v1"
 	semdriver "github.com/Project-Helianthus/helianthus-semreg/semreg/v1/driver"
 	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1/graph"
+	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 // TestOutputFeedMemberSum varies every field carried from one same-cut member sum.
@@ -81,6 +83,20 @@ func TestOutputFeedPartialCutKeepsLastKnown(t *testing.T) {
 	run := startFeed(t, binding, true, script)
 	keep := waitAddress(t, binding, "inv-keep")
 	drop := waitAddress(t, binding, "inv-drop")
+	if _, err := node.RegisterUseCase(drop, eebusfacade.OutputUseCase{
+		Actor:       spinemodel.UseCaseActorTypeInverter,
+		Name:        spinemodel.UseCaseNameTypeMonitoringOfInverter,
+		Version:     "1.0.0",
+		SubRevision: spinemodel.UseCaseDocumentSubRevisionRelease,
+		Available:   true,
+		Scenarios:   []spinemodel.UseCaseScenarioSupportType{1},
+		Features:    []string{"measurement", "device diagnosis"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !node.EntityOnDevice(drop) || !node.HasUseCaseSupport(drop, spinemodel.UseCaseActorTypeInverter, spinemodel.UseCaseNameTypeMonitoringOfInverter) || len(node.ServerFeatures(drop)) == 0 || len(node.ObservedServerFeatures(drop)) == 0 {
+		t.Fatal("inverter was not on the node before withdrawal")
+	}
 
 	partialRef, partialPage := inverterPage("cut-partial", graph.CutPartial, []graph.NotIncludedAsset{
 		{AssetID: "asset-inv-drop", Reason: graph.NotIncludedSourceUnavailable},
@@ -90,7 +106,7 @@ func TestOutputFeedPartialCutKeepsLastKnown(t *testing.T) {
 	waitUntil(t, func() bool {
 		return omissionHas(run.output.Reason().Omissions, "asset-inv-drop")
 	})
-	if !gapReason(run.output.Reason(), "asset-inv-drop", "source_unavailable") || withdrawn(run.output.Reason(), "inv-drop") || binding.EntityAddress("inv-hidden") != "" || binding.EntityAddress("inv-keep") != keep || binding.EntityAddress("inv-drop") != drop {
+	if !gapReason(run.output.Reason(), "asset-inv-drop", "source_unavailable") || withdrawn(run.output.Reason(), "inv-drop") || binding.EntityAddress("inv-hidden") != "" || binding.EntityAddress("inv-keep") != keep || binding.EntityAddress("inv-drop") != drop || !node.EntityOnDevice(drop) || !node.HasUseCaseSupport(drop, spinemodel.UseCaseActorTypeInverter, spinemodel.UseCaseNameTypeMonitoringOfInverter) {
 		t.Fatalf("partial cut changed last known state: %+v hidden %q", run.output.Reason(), binding.EntityAddress("inv-hidden"))
 	}
 	if run.output.Reason().Published != 2 {
@@ -137,6 +153,16 @@ func TestOutputFeedPartialCutKeepsLastKnown(t *testing.T) {
 	waitUntil(t, func() bool { return withdrawn(run.output.Reason(), "inv-drop") })
 	if binding.EntityAddress("inv-drop") != drop || binding.EntityAddress("inv-keep") != keep {
 		t.Fatal("withdrawal removed the stored address")
+	}
+	if node.EntityOnDevice(drop) || !node.EntityOnDevice(keep) || len(node.ServerFeatures(drop)) != 0 || len(node.ObservedServerFeatures(drop)) != 0 || node.HasUseCaseSupport(drop, spinemodel.UseCaseActorTypeInverter, spinemodel.UseCaseNameTypeMonitoringOfInverter) || run.output.Reason().Published != 1 {
+		t.Fatalf("withdrawn inverter stayed on the node: features %v observed %v published %d", node.ServerFeatures(drop), node.ObservedServerFeatures(drop), run.output.Reason().Published)
+	}
+
+	backRef, backPage := inverterPage("cut-back", graph.CutComplete, nil, "inv-keep", "inv-drop")
+	pushPage(script, backRef, backPage)
+	waitUntil(t, func() bool { return node.EntityOnDevice(drop) && run.output.Reason().Published == 2 })
+	if binding.EntityAddress("inv-drop") != drop || !node.EntityOnDevice(keep) || len(node.ServerFeatures(drop)) != 0 || node.HasUseCaseSupport(drop, spinemodel.UseCaseActorTypeInverter, spinemodel.UseCaseNameTypeMonitoringOfInverter) {
+		t.Fatal("returned inverter kept the withdrawn entity")
 	}
 }
 

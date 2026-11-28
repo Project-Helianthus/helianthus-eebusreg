@@ -36,6 +36,7 @@ func OutputBinding.ApplyCut
 func OutputBinding.DeviceType
 func OutputBinding.EntityAddress
 func OutputBinding.EntityAddresses
+func OutputBinding.EntityPresent
 func OutputBinding.EntityTypes
 func OutputBinding.MonitoringLoss
 func OutputBinding.ParentAddress
@@ -44,6 +45,7 @@ func OutputBinding.RetainSession
 func OutputBinding.RetainedOperations
 func OutputBinding.ServerFeatures
 func OutputBinding.ServiceCount
+func OutputBinding.Withdraw
 func ParticipationApplyResultV1.Validate
 func ParticipationConfigurationV1.Validate
 func ParticipationContributionV1.Validate

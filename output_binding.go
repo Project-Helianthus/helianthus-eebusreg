@@ -47,6 +47,12 @@ type shipNode interface {
 	AddServerFeatures(address string, names []string) (string, error)
 }
 
+// outputEntityRemover removes one entity from the node, with the features and
+// use-case support that entity carried.
+type outputEntityRemover interface {
+	RemoveEntity(address string) error
+}
+
 // outputNodeSource is a runtime in this package that owns one output node.
 type outputNodeSource interface {
 	outputNode() (*eebusfacade.OutputNode, error)
@@ -111,9 +117,10 @@ type OutputBinding struct {
 }
 
 type boundEntity struct {
-	kind    string
-	address string
-	parent  string
+	kind      string
+	address   string
+	parent    string
+	withdrawn bool
 }
 
 // LensResult is an admitted lens result. It carries no SPINE type.
@@ -317,6 +324,49 @@ func (b *OutputBinding) RetainSession(operations interface{}, fallbacks []Output
 	defer outputBindingGate.Unlock()
 	b.operations = operations
 	b.fallbacks = append([]OutputPowerLimitFallback(nil), fallbacks...)
+}
+
+// Withdraw removes the resource's entity from the node. The stored address
+// remains, so a later cut adds that same entity again.
+func (b *OutputBinding) Withdraw(resourceID string) error {
+	if b == nil {
+		return errExistingNode
+	}
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	node := b.liveNodeLocked()
+	entity, ok := b.byResource[resourceID]
+	if !ok || entity.withdrawn || entity.address == "" {
+		return nil
+	}
+	if node == nil {
+		return errExistingNode
+	}
+	remover, ok := node.(outputEntityRemover)
+	if !ok {
+		return errExistingNode
+	}
+	if err := remover.RemoveEntity(entity.address); err != nil {
+		return err
+	}
+	entity.withdrawn = true
+	b.byResource[resourceID] = entity
+	delete(b.gaps, resourceID)
+	return nil
+}
+
+// EntityPresent reports whether the resource's entity is on the node.
+func (b *OutputBinding) EntityPresent(resourceID string) bool {
+	if b == nil {
+		return false
+	}
+	outputBindingGate.Lock()
+	defer outputBindingGate.Unlock()
+	if b.liveNodeLocked() == nil {
+		return false
+	}
+	entity, ok := b.byResource[resourceID]
+	return ok && !entity.withdrawn && entity.address != ""
 }
 
 // RetainedOperations returns the scoped operation port retained for this binding.
@@ -574,11 +624,15 @@ func wordByte(value byte) bool {
 
 func (b *OutputBinding) ensureEntity(result LensResult) error {
 	kind := entityKind(result.Family)
-	if existing, ok := b.byResource[result.ResourceID]; ok {
+	existing, exists := b.byResource[result.ResourceID]
+	if exists && !existing.withdrawn {
 		if existing.kind != kind {
 			return errMergedResources
 		}
 		return nil
+	}
+	if exists && existing.kind != kind {
+		return errMergedResources
 	}
 	address, err := b.allocate(result.ResourceID)
 	if err != nil {
@@ -597,7 +651,9 @@ func (b *OutputBinding) ensureEntity(result LensResult) error {
 		return errExistingNode
 	}
 	b.byResource[result.ResourceID] = boundEntity{kind: kind, address: address, parent: parent}
-	b.order = append(b.order, result.ResourceID)
+	if !exists {
+		b.order = append(b.order, result.ResourceID)
+	}
 	return nil
 }
 
