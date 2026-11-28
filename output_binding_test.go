@@ -2,16 +2,19 @@ package eebusruntime
 
 import (
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusservicebridge"
-	shipcert "github.com/Project-Helianthus/helianthus-ship-go/cert"
 )
 
 func TestOutputBinding(t *testing.T) {
@@ -712,6 +715,49 @@ func TestOutputBindingTwoRuntimes(t *testing.T) {
 	}
 }
 
+func TestRootOutputAPIDoesNotExposeTheInternalNode(t *testing.T) {
+	// Exported signatures in this package must not name the internal node, and
+	// this test must not import a protocol implementation package.
+	fset := token.NewFileSet()
+	for _, name := range []string{"runtime.go", "output_binding.go"} {
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			function, ok := decl.(*ast.FuncDecl)
+			if !ok || function.Name == nil || !function.Name.IsExported() || function.Type == nil {
+				continue
+			}
+			ast.Inspect(function.Type, func(node ast.Node) bool {
+				selector, ok := node.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				ident, ok := selector.X.(*ast.Ident)
+				if ok && ident.Name == "eebusfacade" {
+					t.Errorf("%s exports %s with an internal node type", name, function.Name.Name)
+				}
+				return true
+			})
+		}
+	}
+	file, err := parser.ParseFile(fset, "output_binding_test.go", nil, parser.ImportsOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range file.Imports {
+		path := strings.Trim(spec.Path.Value, `"`)
+		switch {
+		case strings.HasPrefix(path, "github.com/Project-Helianthus/helianthus-ship-go"),
+			strings.HasPrefix(path, "github.com/Project-Helianthus/helianthus-eebus-go"),
+			strings.HasPrefix(path, "github.com/Project-Helianthus/helianthus-spine-go"),
+			strings.HasPrefix(path, "github.com/enbility/"):
+			t.Errorf("protocol import %s", path)
+		}
+	}
+}
+
 func newOwnedOutputRuntime(t *testing.T, port int, token string) (*runtimeImplementation, eebusfacade.Backend) {
 	t.Helper()
 	service := newConfiguredOutputService(t, port, token)
@@ -726,19 +772,12 @@ func newOwnedOutputRuntime(t *testing.T, port int, token string) (*runtimeImplem
 
 func newConfiguredOutputService(t *testing.T, port int, token string) *eebusservicebridge.Service {
 	t.Helper()
-	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "binding")
-	if err != nil {
-		t.Fatal(err)
-	}
-	service, err := eebusfacade.NewConfiguredService(eebusfacade.RuntimeConfig{
+	service, err := eebusfacade.NewPreparedOutputService(eebusfacade.RuntimeConfig{
 		Interface:     "fixture-interface",
 		ListenPort:    port,
 		ListenAddress: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(port)),
-	}, certificate, token)
+	}, token)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := service.Setup(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { service.Shutdown() })

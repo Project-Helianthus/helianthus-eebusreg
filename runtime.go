@@ -566,8 +566,8 @@ func (backend *facadeRuntimeBackend) Close() error {
 	return backend.backend.Close()
 }
 
-// OutputNode returns the node owned by this runtime instance.
-func (runtime *runtimeImplementation) OutputNode() (*eebusfacade.OutputNode, error) {
+// outputNode returns the node owned by this runtime instance.
+func (runtime *runtimeImplementation) outputNode() (*eebusfacade.OutputNode, error) {
 	if runtime == nil {
 		return nil, errExistingNode
 	}
@@ -578,11 +578,11 @@ func (runtime *runtimeImplementation) OutputNode() (*eebusfacade.OutputNode, err
 	if !ok {
 		return nil, errExistingNode
 	}
-	return source.OutputNode()
+	return source.outputNode()
 }
 
-// OutputNode returns the node stored with this runtime's service backend.
-func (backend *facadeRuntimeBackend) OutputNode() (*eebusfacade.OutputNode, error) {
+// outputNode returns the node stored with this runtime's service backend.
+func (backend *facadeRuntimeBackend) outputNode() (*eebusfacade.OutputNode, error) {
 	if backend == nil || backend.backend == nil {
 		return nil, errExistingNode
 	}

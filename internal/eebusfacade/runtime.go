@@ -941,6 +941,22 @@ func NewConfiguredService(config RuntimeConfig, certificate tls.Certificate, nod
 	return concrete, nil
 }
 
+// NewPreparedOutputService constructs one local service and prepares it for an output node.
+func NewPreparedOutputService(config RuntimeConfig, nodeToken string) (*eebusservicebridge.Service, error) {
+	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "binding")
+	if err != nil {
+		return nil, err
+	}
+	service, err := NewConfiguredService(config, certificate, nodeToken)
+	if err != nil {
+		return nil, err
+	}
+	if err := service.Setup(); err != nil {
+		return nil, err
+	}
+	return service, nil
+}
+
 func validateRuntimeMaterial(material runtimeMaterial) error {
 	material.localSKI = strings.ToLower(strings.TrimSpace(material.localSKI))
 	if !validRuntimeSKI(material.localSKI) {

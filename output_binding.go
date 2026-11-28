@@ -47,17 +47,27 @@ type shipNode interface {
 	AddServerFeatures(address string, names []string) (string, error)
 }
 
-// outputNodeSource is the runtime that owns one output node.
+// outputNodeSource is a runtime in this package that owns one output node.
 type outputNodeSource interface {
+	outputNode() (*eebusfacade.OutputNode, error)
+}
+
+// outputNodeCarrier is a runtime from another package that presents the node it owns.
+type outputNodeCarrier interface {
 	OutputNode() (*eebusfacade.OutputNode, error)
 }
 
 func outputNodeOfRuntime(runtime Runtime) (*eebusfacade.OutputNode, error) {
-	source, ok := runtime.(outputNodeSource)
-	if !ok {
-		return nil, errExistingNode
+	if source, ok := runtime.(outputNodeSource); ok {
+		return openedOutputNode(source.outputNode())
 	}
-	node, err := source.OutputNode()
+	if source, ok := runtime.(outputNodeCarrier); ok {
+		return openedOutputNode(source.OutputNode())
+	}
+	return nil, errExistingNode
+}
+
+func openedOutputNode(node *eebusfacade.OutputNode, err error) (*eebusfacade.OutputNode, error) {
 	if err != nil || node == nil {
 		return nil, errExistingNode
 	}
