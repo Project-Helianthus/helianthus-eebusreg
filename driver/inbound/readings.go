@@ -57,7 +57,7 @@ func (w *world) ingestReading(remote Remote, entityType, entity string, reading 
 
 func (w *world) observation(remote Remote, row heatingRow, reading Reading, slot, kind, entity string, generation uint64, priority int32) (placedFact, error) {
 	fact := placedFact{
-		path: sourcePath(reading.Rank, remote.Device, entity, row.Fact), ski: remote.SKI, device: remote.Device, slot: slot, kind: kind,
+		path: sourcePath(reading.Rank, remote.Device, entity, row.Fact, ""), ski: remote.SKI, device: remote.Device, slot: slot, kind: kind,
 		fact: row.Fact, rank: rankName(reading.Rank), priority: priority, generation: generation, carrier: reading.Carrier,
 		native: reading.Text, unit: reading.Unit, availability: semreg.AvailabilityAvailable, freshness: semreg.FreshnessFresh,
 		observed: reading.ObservedUnix, revision: 1,
@@ -123,7 +123,22 @@ func sameObservation(previous, next placedFact) bool {
 		previous.generation == next.generation && previous.observed == next.observed &&
 		previous.availability == next.availability && previous.freshness == next.freshness &&
 		previous.withdrawn == next.withdrawn && previous.operation == next.operation && previous.feature == next.feature &&
-		sameQuantity(previous.quantity, next.quantity) && sameSymbol(previous.symbol, next.symbol)
+		sameQuantity(previous.quantity, next.quantity) && sameSymbol(previous.symbol, next.symbol) &&
+		sameBool(previous.boolean, next.boolean) && sameText(previous.text, next.text)
+}
+
+func sameBool(left, right *bool) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func sameText(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func sameQuantity(left, right *semreg.Quantity) bool {

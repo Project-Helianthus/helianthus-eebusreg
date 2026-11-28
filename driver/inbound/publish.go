@@ -7,7 +7,7 @@ import (
 	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1/driver"
 )
 
-// Publisher turns paired heating observations into SemReg publications for one instance.
+// Publisher turns paired remote observations into SemReg publications for one instance.
 type Publisher struct {
 	scope   Scope
 	pass    chan struct{} // holds one token: one publication pass runs at a time
@@ -54,10 +54,12 @@ func (p *Publisher) Revoke(ctx context.Context, session driver.Session, ski stri
 }
 
 func (p *Publisher) publish(ctx context.Context, session driver.Session, mutate func(*world) error) (Result, error) {
+	previous := p.world.links()
 	next := p.world.clone()
 	if err := mutate(next); err != nil {
 		return Result{}, err
 	}
+	next.keepWithdrawals(previous)
 	result, err := next.view(p.scope)
 	if err != nil {
 		return Result{}, err

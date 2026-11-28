@@ -21,7 +21,7 @@ type Scope struct {
 	Bridge       string
 }
 
-// Remote is one paired heating device and the entities it publishes.
+// Remote is one paired device and the entities it publishes.
 type Remote struct {
 	Device        string
 	SKI           string
@@ -50,9 +50,11 @@ type Entity struct {
 // Reading is one native observation. Rank is producer, secondary, relayed,
 // or empty for a value the remote itself produces. Carrier is reply or
 // notify and is not part of the source path. Unit degC is converted to
-// kelvin; unit K is already kelvin.
+// kelvin; unit K is already kelvin. Phase is the electrical phase name when
+// the observation is per phase, otherwise empty.
 type Reading struct {
 	Field        string
+	Phase        string
 	Rank         string
 	Generation   uint64
 	Carrier      string
@@ -63,7 +65,7 @@ type Reading struct {
 	Feature      string
 }
 
-// Result is one publication of the current heating graph.
+// Result is one publication of the current graph.
 type Result struct {
 	Nodes   []NodeView
 	Links   []LinkView
@@ -76,9 +78,11 @@ type Result struct {
 }
 
 // NodeView is one published node. The key is the durable identity.
+// State is current or retired.
 type NodeView struct {
-	Key driver.NodeKey
-	ID  semreg.ResourceID
+	Key   driver.NodeKey
+	ID    semreg.ResourceID
+	State string
 }
 
 // LinkView is one published relation.
@@ -110,6 +114,9 @@ type FactView struct {
 	Withdrawn       bool
 	Generation      uint64
 	ObservedUnix    int64
+	Text            string
+	Flagged         bool
+	Flag            bool
 }
 
 // MemberView is one namespace member and the text it reads.

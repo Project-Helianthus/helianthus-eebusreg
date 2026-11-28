@@ -3,6 +3,7 @@ package inbound
 import (
 	"sort"
 	"strconv"
+	"strings"
 
 	semreg "github.com/Project-Helianthus/helianthus-semreg/semreg/v1"
 	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1/driver"
@@ -13,13 +14,30 @@ type builtLink struct {
 	relation string
 	from     string
 	to       string
+	basis    string
+}
+
+func packOf(id string) (string, string) {
+	switch {
+	case strings.HasPrefix(id, "infrastructure."):
+		return "helianthus.pack.infrastructure", "1.0.0"
+	case strings.HasPrefix(id, "evse."):
+		return "helianthus.pack.evse", "1.0.0"
+	case strings.HasPrefix(id, "pv."):
+		return "helianthus.pack.pv", "1.0.0"
+	case strings.HasPrefix(id, "storage."):
+		return "helianthus.pack.storage", "1.1.0"
+	default:
+		return "helianthus.pack.thermal", "1.0.0"
+	}
 }
 
 func thermalRef(id string) semreg.DefinitionRef {
+	pack, version := packOf(id)
 	return semreg.DefinitionRef{
-		Pack:    semreg.PackRef{ID: "helianthus.pack.thermal", Version: "1.0.0"},
+		Pack:    semreg.PackRef{ID: semreg.DefinitionID(pack), Version: semreg.SemanticVersion(version)},
 		ID:      semreg.DefinitionID(id),
-		Version: "1.0.0",
+		Version: semreg.SemanticVersion(version),
 	}
 }
 
@@ -65,6 +83,7 @@ func (w *world) links() []builtLink {
 	for _, node := range w.nodes {
 		out = append(out, membership(node, systems, entities)...)
 	}
+	out = append(out, electricalLinks(w.nodes)...)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].relation != out[j].relation {
 			return out[i].relation < out[j].relation
@@ -83,7 +102,7 @@ func membership(node placedNode, systems, entities map[string]placedNode) []buil
 	}
 	var out []builtLink
 	if system, ok := systems[node.device]; ok && isSystemMember(node.kind) {
-		out = append(out, builtLink{"thermal.relation.system_member", system.slot, node.slot})
+		out = append(out, builtLink{relation: "thermal.relation.system_member", from: system.slot, to: node.slot})
 	}
 	if node.parent == "" {
 		return out
@@ -94,11 +113,11 @@ func membership(node placedNode, systems, entities map[string]placedNode) []buil
 	}
 	switch {
 	case node.kind == "resource.zone" && parent.kind == "resource.thermal_circuit":
-		out = append(out, builtLink{"thermal.relation.circuit_zone", parent.slot, node.slot})
+		out = append(out, builtLink{relation: "thermal.relation.circuit_zone", from: parent.slot, to: node.slot})
 	case node.kind == "resource.room" && parent.kind == "resource.thermal_circuit":
-		out = append(out, builtLink{"thermal.relation.circuit_room", parent.slot, node.slot})
+		out = append(out, builtLink{relation: "thermal.relation.circuit_room", from: parent.slot, to: node.slot})
 	case node.kind == "resource.room" && parent.kind == "resource.zone":
-		out = append(out, builtLink{"thermal.relation.zone_room", parent.slot, node.slot})
+		out = append(out, builtLink{relation: "thermal.relation.zone_room", from: parent.slot, to: node.slot})
 	}
 	return out
 }
@@ -131,7 +150,11 @@ func (w *world) view(scope Scope) (Result, error) {
 		}
 		id := scope.nodeID(node)
 		ids[node.slot] = id
-		result.Nodes = append(result.Nodes, NodeView{Key: scope.nodeKey(node), ID: id})
+		state := string(semreg.ResourceCurrent)
+		if node.retired {
+			state = string(semreg.ResourceRetired)
+		}
+		result.Nodes = append(result.Nodes, NodeView{Key: scope.nodeKey(node), ID: id, State: state})
 	}
 	sort.Slice(result.Nodes, func(i, j int) bool {
 		if result.Nodes[i].Key.Kind != result.Nodes[j].Key.Kind {
@@ -188,6 +211,13 @@ func factView(fact placedFact, best map[elementKey]int32) FactView {
 		Path: fact.path, Carrier: fact.carrier, Withdrawn: fact.withdrawn, Generation: fact.generation, ObservedUnix: fact.observed,
 		Authoritative: !fact.withdrawn && fact.priority == best[elementKey{fact.slot, fact.fact}],
 	}
+	if fact.text != nil {
+		view.Text = *fact.text
+	}
+	if fact.boolean != nil {
+		view.Flagged = true
+		view.Flag = *fact.boolean
+	}
 	if fact.quantity != nil {
 		view.Coefficient = fact.quantity.Number.Coefficient
 		view.Exponent = fact.quantity.Number.Exponent10
@@ -234,7 +264,7 @@ func (w *world) claims(scope Scope, ids map[string]semreg.ResourceID) ([]driver.
 	sort.Strings(slots)
 	for _, slot := range slots {
 		node := w.nodes[slot]
-		if node.kind != "resource.thermal_system" || node.incomplete {
+		if !node.identity || node.incomplete {
 			continue
 		}
 		gaps = append(gaps, identityGaps(node)...)
@@ -317,7 +347,39 @@ func (w *world) routes(scope Scope, ids map[string]semreg.ResourceID) ([]driver.
 }
 
 func factKey(id string) semreg.FactKey {
-	return semreg.FactKey{PackID: "helianthus.pack.thermal", PackVersion: "1.0.0", FactID: semreg.DefinitionID(id), Dimensions: []semreg.Dimension{}}
+	pack, version := packOf(id)
+	return semreg.FactKey{PackID: semreg.DefinitionID(pack), PackVersion: semreg.SemanticVersion(version), FactID: semreg.DefinitionID(id), Dimensions: []semreg.Dimension{}}
+}
+
+func (w *world) keepWithdrawals(previous []builtLink) {
+	w.withdrawn = disappeared(previous, w.links())
+}
+
+func disappeared(previous, current []builtLink) []builtLink {
+	seen := map[string]struct{}{}
+	for _, link := range current {
+		seen[linkID(link)] = struct{}{}
+	}
+	var gone []builtLink
+	for _, link := range previous {
+		if _, ok := seen[linkID(link)]; !ok {
+			gone = append(gone, link)
+		}
+	}
+	sort.Slice(gone, func(i, j int) bool {
+		if gone[i].relation != gone[j].relation {
+			return gone[i].relation < gone[j].relation
+		}
+		if gone[i].from != gone[j].from {
+			return gone[i].from < gone[j].from
+		}
+		return gone[i].to < gone[j].to
+	})
+	return gone
+}
+
+func linkID(link builtLink) string {
+	return link.relation + "\n" + link.from + "\n" + link.to
 }
 
 func (w *world) noteGaps() []string {

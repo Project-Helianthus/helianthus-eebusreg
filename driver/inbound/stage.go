@@ -30,12 +30,19 @@ func stage(ctx context.Context, session driver.Session, publisher *Publisher, cu
 	if err != nil {
 		return fail(ctx, tx, err)
 	}
+	withdrawals, err := current.relationWithdrawals(scope)
+	if err != nil {
+		return fail(ctx, tx, err)
+	}
 	batch, err := session.Prepare(func(batch *semreg.PublicationBatch) {
 		if len(resources) > 0 {
 			batch.ResourceUpserts = resources
 		}
 		if len(relations) > 0 {
 			batch.RelationUpserts = relations
+		}
+		if len(withdrawals) > 0 {
+			batch.RelationWithdrawals = withdrawals
 		}
 	})
 	if err != nil {
@@ -84,12 +91,13 @@ func fail(ctx context.Context, tx driver.PublicationTransaction, err error) erro
 }
 
 func (w *world) resources(scope Scope) ([]semreg.Resource, error) {
+	ids := slotIDs(scope, w.nodes)
 	var records []semreg.Resource
 	for _, node := range w.nodes {
 		if node.incomplete || node.kind == "" {
 			continue
 		}
-		record, err := resourceRecord(scope, node)
+		record, err := resourceRecord(scope, node, ids[node.parentSlot])
 		if err != nil {
 			return nil, err
 		}
@@ -124,6 +132,30 @@ func (w *world) relations(scope Scope) ([]semreg.RelationInstance, error) {
 	return records, nil
 }
 
+func (w *world) relationWithdrawals(scope Scope) ([]semreg.RelationKey, error) {
+	if len(w.withdrawn) == 0 {
+		return nil, nil
+	}
+	ids := slotIDs(scope, w.nodes)
+	var keys []semreg.RelationKey
+	for _, link := range w.withdrawn {
+		if ids[link.from] == "" || ids[link.to] == "" {
+			return nil, errors.New("inbound: a withdrawn relation names a missing resource")
+		}
+		keys = append(keys, semreg.RelationKey{Definition: thermalRef(link.relation), From: ids[link.from], To: ids[link.to]})
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Definition.ID != keys[j].Definition.ID {
+			return keys[i].Definition.ID < keys[j].Definition.ID
+		}
+		if keys[i].From != keys[j].From {
+			return keys[i].From < keys[j].From
+		}
+		return keys[i].To < keys[j].To
+	})
+	return keys, nil
+}
+
 func slotIDs(scope Scope, nodes map[string]placedNode) map[string]semreg.ResourceID {
 	ids := make(map[string]semreg.ResourceID, len(nodes))
 	for slot, node := range nodes {
@@ -144,7 +176,7 @@ func (w *world) stageFacts(tx driver.PublicationTransaction, scope Scope) error 
 	sort.Strings(paths)
 	for _, path := range paths {
 		fact := w.facts[path]
-		source := sourceOf(scope, fact, ids)
+		source := w.sourceOf(scope, fact, ids)
 		if err := tx.DeclareSource(source); err != nil {
 			return err
 		}
@@ -276,10 +308,14 @@ func (p *Publisher) stampMembers(result *Result) {
 	}
 }
 
-func sourceOf(scope Scope, fact placedFact, ids map[string]semreg.ResourceID) driver.Source {
+func (w *world) sourceOf(scope Scope, fact placedFact, ids map[string]semreg.ResourceID) driver.Source {
+	producer := ids[deviceSlot(fact.device)]
+	if producer == "" {
+		producer = ids[w.identitySlot(fact.device)]
+	}
 	return driver.Source{
 		For:      driver.Element{Subject: scope.ref(ids[fact.slot]), Key: factKey(fact.fact)},
-		Producer: scope.ref(ids[deviceSlot(fact.device)]),
+		Producer: scope.ref(producer),
 		PathKey:  fact.path,
 		Priority: fact.priority,
 	}

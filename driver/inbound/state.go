@@ -3,12 +3,13 @@ package inbound
 import semreg "github.com/Project-Helianthus/helianthus-semreg/semreg/v1"
 
 type world struct {
-	nodes   map[string]placedNode
-	facts   map[string]placedFact
-	extras  map[string]map[string]string
-	notes   []note
-	stopped map[string]map[uint64]struct{}
-	revoked map[string]struct{}
+	nodes     map[string]placedNode
+	facts     map[string]placedFact
+	extras    map[string]map[string]string
+	notes     []note
+	stopped   map[string]map[uint64]struct{}
+	revoked   map[string]struct{}
+	withdrawn []builtLink
 }
 
 type note struct {
@@ -32,6 +33,10 @@ type placedNode struct {
 	identityToken string
 	incomplete    bool
 	missing       string
+	anchor        semreg.AnchorClass
+	parentSlot    string
+	retired       bool
+	identity      bool
 }
 
 type placedFact struct {
@@ -56,6 +61,9 @@ type placedFact struct {
 	operation    string
 	feature      string
 	revision     uint64
+	boolean      *bool
+	text         *string
+	policy       string
 }
 
 func freshWorld() *world {
@@ -103,6 +111,14 @@ func copyFact(fact placedFact) placedFact {
 	if fact.symbol != nil {
 		symbol := *fact.symbol
 		fact.symbol = &symbol
+	}
+	if fact.boolean != nil {
+		value := *fact.boolean
+		fact.boolean = &value
+	}
+	if fact.text != nil {
+		value := *fact.text
+		fact.text = &value
 	}
 	return fact
 }
