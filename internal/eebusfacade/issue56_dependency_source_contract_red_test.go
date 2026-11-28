@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	issue56EEBusGoVersion = "v0.7.1-helianthus.21.0.20261126050215-85efea1f3fc6"
+	issue56EEBusGoVersion = "v0.7.1-helianthus.21.0.20261126075621-2afa66c19440"
 	issue56SHIPGoVersion  = "v0.6.1-helianthus.19"
 )
 
