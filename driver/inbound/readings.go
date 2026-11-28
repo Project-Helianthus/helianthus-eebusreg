@@ -7,12 +7,18 @@ func (w *world) ingestReading(remote Remote, entityType, entity string, reading 
 		if slot := w.memberSlot(remote, entity); slot != "" && reading.Text != "" {
 			w.extra(slot, local, reading.Text)
 		}
+		if reading.Writable {
+			w.addWrite(w.memberSlot(remote, entity), remote, reading, entity)
+		}
 		return nil
 	}
 	row, ok := findRow(entityType, reading.Field)
 	if !ok {
 		if reading.Field != "" {
 			w.note(remote.Device, "field:"+reading.Field)
+			if reading.Writable {
+				w.addWrite(w.memberSlot(remote, entity), remote, reading, entity)
+			}
 		}
 		return nil
 	}
@@ -80,7 +86,10 @@ func (w *world) observation(remote Remote, row heatingRow, reading Reading, slot
 		fact.feature = reading.Feature
 		if reading.Feature == "" {
 			w.note(remote.Device, "feature_missing:"+row.Operation)
+			w.addWrite(slot, remote, reading, entity)
 		}
+	} else if reading.Writable {
+		w.addWrite(slot, remote, reading, entity)
 	}
 	return fact, nil
 }

@@ -6,6 +6,7 @@ import (
 
 	semreg "github.com/Project-Helianthus/helianthus-semreg/semreg/v1"
 	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1/driver"
+	"github.com/Project-Helianthus/helianthus-semreg/semreg/v1/graph"
 )
 
 func resourceRecord(scope Scope, node placedNode, parent semreg.ResourceID) (semreg.Resource, error) {
@@ -57,10 +58,46 @@ func relationRecord(scope Scope, link builtLink, from, to semreg.ResourceID) (se
 }
 
 func linkBasis(link builtLink) semreg.RelationBasis {
+	if class, ok := relationClass(link); ok {
+		return class
+	}
 	if link.basis == "" {
 		return semreg.RelationNativeObservation
 	}
 	return semreg.RelationBasis(link.basis)
+}
+
+func relationClass(link builtLink) (semreg.RelationBasis, bool) {
+	catalog, err := graph.Embedded()
+	if err != nil {
+		return "", false
+	}
+	definition, ok := catalog.RelationDefinition(thermalRef(link.relation))
+	if !ok || definition.Membership.Disposition != semreg.GraphMember {
+		return "", false
+	}
+	admitted := map[semreg.RelationBasis]struct{}{}
+	for _, class := range definition.BasisClasses {
+		admitted[class] = struct{}{}
+	}
+	if link.basis != "" {
+		class := semreg.RelationBasis(link.basis)
+		if _, ok := admitted[class]; ok && nativeRelationClass(class) {
+			return class, true
+		}
+		return "", false
+	}
+	if _, ok := admitted[semreg.RelationNativeObservation]; ok {
+		return semreg.RelationNativeObservation, true
+	}
+	if _, ok := admitted[semreg.RelationGateRule]; ok {
+		return semreg.RelationGateRule, true
+	}
+	return "", false
+}
+
+func nativeRelationClass(class semreg.RelationBasis) bool {
+	return class == semreg.RelationNativeObservation || class == semreg.RelationGateRule
 }
 
 func deviceFromSlot(slot string) string {
@@ -84,12 +121,16 @@ func nativeOrigin(id semreg.OriginID, source semreg.SourceID, epoch semreg.Sourc
 	}
 }
 
-func sampleOf(scope Scope, fact placedFact, source driver.Source) (driver.Sample, error) {
+func sampleOf(scope Scope, fact placedFact, source driver.Source, subject semreg.ResourceID) (driver.Sample, error) {
 	proof, err := proofFor(fact.native, fact.unit)
 	if err != nil {
 		return driver.Sample{}, err
 	}
-	_, epoch, binding := deviceBinding(scope, fact.device)
+	_, epoch, _ := deviceBinding(scope, fact.device)
+	binding := subjectBinding(scope, fact.device, fact.slot)
+	if fact.feature != "" && fact.operation != "" {
+		binding = featureBinding(scope, fact.device, fact.operation, fact.feature, fact.slot)
+	}
 	generation := semreg.Uint64(strconv.FormatUint(fact.generation, 10))
 	point := timePoint(fact.observed)
 	var phenomenon, sourceAt *semreg.TimePoint
@@ -109,7 +150,7 @@ func sampleOf(scope Scope, fact placedFact, source driver.Source) (driver.Sample
 	}
 	candidate := semreg.FactCandidate{
 		CandidateID: semreg.CandidateID(opaqueID("candidate.", scope.Installation, scope.Instance, fact.path)),
-		Key:         factKey(fact.fact),
+		Key:         factKey(fact.fact, subject),
 		Value:       value,
 		Quality: semreg.Quality{
 			Assertion: semreg.AssertionObserved, Qualification: semreg.QualificationQualified, Promotion: semreg.PromotionPromoted,
@@ -134,6 +175,13 @@ func sampleOf(scope Scope, fact placedFact, source driver.Source) (driver.Sample
 func sourceIDOf(scope Scope, device string) semreg.SourceID {
 	source, _, _ := deviceBinding(scope, device)
 	return source
+}
+
+func admittedSample(fact placedFact) bool {
+	if fact.symbol != nil && !fact.symbol.Known {
+		return false
+	}
+	return catalogFact(fact.fact)
 }
 
 func factValue(fact placedFact) *semreg.Value {

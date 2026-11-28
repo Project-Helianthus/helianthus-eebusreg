@@ -34,6 +34,12 @@ type Remote struct {
 	Generation    uint64
 	Entities      []Entity
 	Readings      []Reading
+	// Commands names CEM use cases this trusted remote offers:
+	// overload_protection, self_consumption, coordinated_charging.
+	Commands []string
+	// Command is called only when a registered operation is invoked.
+	// kind is semreg or namespace. A nil Command sends nothing.
+	Command func(kind, operation, feature, entity, value string) error
 }
 
 // Entity is one native entity of a remote. Address is the native entity
@@ -75,6 +81,9 @@ type Result struct {
 	Matches []driver.MatchClaim
 	Routes  []driver.SettingRoute
 	Gaps    []string
+	// LastNotified lists facts whose carrier is notify.
+	// A reply-only publication leaves it empty.
+	LastNotified []FactView
 }
 
 // NodeView is one published node. The key is the durable identity.

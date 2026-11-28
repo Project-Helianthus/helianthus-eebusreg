@@ -10,6 +10,9 @@ type world struct {
 	stopped   map[string]map[uint64]struct{}
 	revoked   map[string]struct{}
 	withdrawn []builtLink
+	writes    map[string]writeCall
+	commands  []commandRoute
+	targets   map[string]callTarget
 }
 
 type note struct {
@@ -73,6 +76,8 @@ func freshWorld() *world {
 		extras:  map[string]map[string]string{},
 		stopped: map[string]map[uint64]struct{}{},
 		revoked: map[string]struct{}{},
+		writes:  map[string]writeCall{},
+		targets: map[string]callTarget{},
 	}
 }
 
@@ -99,6 +104,13 @@ func (w *world) clone() *world {
 	}
 	for ski := range w.revoked {
 		next.revoked[ski] = struct{}{}
+	}
+	for key, call := range w.writes {
+		next.writes[key] = call
+	}
+	next.commands = append([]commandRoute(nil), w.commands...)
+	for path, target := range w.targets {
+		next.targets[path] = target
 	}
 	return next
 }
@@ -151,4 +163,5 @@ func (w *world) clearDevice(device string) {
 		}
 	}
 	w.notes = append([]note(nil), kept...)
+	w.clearOperations(device)
 }

@@ -41,13 +41,13 @@ func heatingRows() []heatingRow {
 	overrun["false"] = "inactive"
 	return []heatingRow{
 		{Entity: "DHWCircuit", Field: "dhw_temperature", Subject: "self", Fact: "thermal.measurement.dhw_temperature", Kelvin: true, Affine: celsius},
-		{Entity: "DHWCircuit", Field: "dhw_temperature_setpoint", Subject: "self", Fact: "thermal.setpoint.dhw_temperature_setpoint", Kelvin: true, Affine: celsius},
-		{Entity: "DHWCircuit", Field: "dhw_mode", Subject: "self", Fact: "thermal.mode.dhw", Symbols: dhwMode},
+		{Entity: "DHWCircuit", Field: "dhw_temperature_setpoint", Subject: "self", Fact: "thermal.setpoint.dhw_temperature_setpoint", Kelvin: true, Affine: celsius, Operation: "thermal.operation.set_dhw_temperature"},
+		{Entity: "DHWCircuit", Field: "dhw_mode", Subject: "self", Fact: "thermal.mode.dhw", Symbols: dhwMode, Operation: "thermal.operation.set_dhw_mode"},
 		{Entity: "TemperatureSensor", Field: "outdoor_air_temperature", Subject: "system", Fact: "thermal.measurement.outdoor_air_temperature", Kelvin: true, Affine: celsius},
-		{Entity: "", Field: "one_time_dhw", Subject: "system", Fact: "thermal.overrun.one_time_dhw", Symbols: overrun},
+		{Entity: "", Field: "one_time_dhw", Subject: "system", Fact: "thermal.overrun.one_time_dhw", Symbols: overrun, Operation: "thermal.operation.set_overrun_one_time_dhw"},
 		{Entity: "HeatingZone", Field: "air_temperature", Subject: "self", Fact: "thermal.measurement.air_temperature", Kelvin: true, Affine: celsius},
-		{Entity: "HeatingZone", Field: "temperature_setpoint", Subject: "self", Fact: "thermal.setpoint.temperature_setpoint", Kelvin: true, Affine: celsius},
-		{Entity: "HeatingZone", Field: "zone_mode", Subject: "self", Fact: "thermal.mode.zone", Symbols: zoneMode},
+		{Entity: "HeatingZone", Field: "temperature_setpoint", Subject: "self", Fact: "thermal.setpoint.temperature_setpoint", Kelvin: true, Affine: celsius, Operation: "thermal.operation.set_temperature"},
+		{Entity: "HeatingZone", Field: "zone_mode", Subject: "self", Fact: "thermal.mode.zone", Symbols: zoneMode, Operation: "thermal.operation.set_zone_mode"},
 		{Entity: "HVACRoom", Field: "room_air_temperature", Subject: "self", Fact: "thermal.room.measurement_air_temperature", Kelvin: true, Affine: celsius},
 		{Entity: "HVACRoom", Field: "room_temperature_setpoint", Subject: "self", Fact: "thermal.room.setpoint_temperature_setpoint", Kelvin: true, Affine: celsius, Operation: "thermal.room.operation_set_temperature"},
 		{Entity: "HVACRoom", Field: "room_mode", Subject: "self", Fact: "thermal.room.mode_zone", Symbols: roomMode, Operation: "thermal.room.operation_set_zone_mode"},

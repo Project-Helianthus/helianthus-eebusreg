@@ -105,6 +105,9 @@ func (w *world) applyRow(remote Remote, entity Entity, row elecRow, reading Read
 		phasePath = phase
 	}
 	w.storeObservation(remote, reading, node, row.fact, pathEntity, phasePath, generation, priority, value, updated)
+	if reading.Writable {
+		w.addWrite(node.slot, remote, reading, entityText(entity.Address))
+	}
 	noteSign(w, remote.Device, row.fact)
 	return nil
 }
