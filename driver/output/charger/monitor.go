@@ -3,17 +3,16 @@ package charger
 import (
 	"sort"
 	"strings"
+
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
 )
 
 const (
 	useCaseEVSECommissioning  = "EVSE Commissioning and Configuration"
 	useCasePowerMonitoring    = "Monitoring of Power Consumption"
-	useCaseConsumption        = "Limitation of Power Consumption"
 	elementTotalPower         = "total active power"
 	elementState              = "operating state"
 	lossEV                    = "EV"
-	lossPowerLimit            = "missing operation: active power consumption limit"
-	lossCurrentCall           = "not called: evse.operation.set_allocated_current"
 	operationAllocatedCurrent = "evse.operation.set_allocated_current"
 	featureDiagnosis          = "device diagnosis"
 	featureMeasurement        = "measurement"
@@ -45,8 +44,7 @@ var useCaseFeatures = []struct {
 }
 
 // Monitor decides which use cases an admitted charger lens announces.
-// Limitation of Power Consumption is never announced. A result naming it
-// carries the same loss as a peer write of an active-power limit.
+// Limitation of Power Consumption is never announced.
 func Monitor(result Result) Outcome {
 	if !admitted(result) {
 		return Outcome{}
@@ -54,32 +52,26 @@ func Monitor(result Result) Outcome {
 	if evActor(result) {
 		return Outcome{Loss: []string{lossEV}}
 	}
-	present := admittedElements(result)
 	var outcome Outcome
-	if listed(present, elementState) {
+	if fillsOperatingState(result) {
 		outcome.Announced = append(outcome.Announced, useCaseEVSECommissioning)
 	} else {
 		outcome.Loss = append(outcome.Loss, elementState)
 	}
-	if listed(present, elementTotalPower) {
+	if fillsTotal(result) || hasMeasurement(result) {
 		outcome.Announced = append(outcome.Announced, useCasePowerMonitoring)
-	} else {
-		outcome.Loss = append(outcome.Loss, elementTotalPower)
+	}
+	if !fillsTotal(result) {
+		outcome.Loss = append(outcome.Loss, totalLoss(result)...)
 	}
 	outcome.Loss = append(outcome.Loss, "device classification")
-	if result.UseCase == useCaseConsumption {
-		outcome.Loss = append(outcome.Loss, "consumption_limit_not_applied")
-		outcome.Loss = append(outcome.Loss, consumptionLimitWrite(result).Loss...)
+	for _, operation := range result.Operations {
+		if recognizedCurrent(operation) {
+			outcome.Operations = append(outcome.Operations, operation.Name)
+		}
 	}
 	sort.Strings(outcome.Loss)
 	return outcome
-}
-
-// consumptionLimitWrite answers a peer write of an active-power consumption
-// limit. The charger exposes no active-power operation, and a watt limit is
-// never converted to allocated current, so the write calls nothing.
-func consumptionLimitWrite(Result) Outcome {
-	return Outcome{Loss: []string{lossPowerLimit, lossCurrentCall}}
 }
 
 // Serve attaches the server features of each announced use case, then the
@@ -113,6 +105,11 @@ func Serve(result Result, place Placement, attach func([]string) (string, error)
 		}
 	}
 	outcome.Announced = announced
+	if node, ok := place.Surface.(*eebusfacade.OutputNode); ok {
+		if rejected, err := publishCharger(node, place.Address, result, announced); err != nil {
+			outcome.Loss = nameLoss(outcome.Loss, rejected)
+		}
+	}
 	sort.Strings(outcome.Loss)
 	return outcome
 }
@@ -148,14 +145,15 @@ func operationFeatures(result Result) [][]string {
 	return features
 }
 
+func recognizedCurrent(operation Operation) bool {
+	return operation.OwnCapability && !operation.Converted && operation.Name == operationAllocatedCurrent && operation.Unit == "A"
+}
+
 func featuresForOperation(operation Operation) []string {
-	if !operation.OwnCapability || operation.Converted {
+	if !recognizedCurrent(operation) {
 		return nil
 	}
-	if operation.Name == operationAllocatedCurrent && operation.Unit == "A" {
-		return []string{featureElectrical, featureLoad}
-	}
-	return nil
+	return []string{featureElectrical, featureLoad}
 }
 
 func admitted(result Result) bool {

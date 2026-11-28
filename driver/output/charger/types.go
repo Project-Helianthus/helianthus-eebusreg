@@ -14,6 +14,30 @@ type Result struct {
 	DeviceActor     string
 	MissingElements []string
 	Overlapping     bool
+	Facts           []struct {
+		Element     string
+		Phase       string
+		Connector   string
+		Kind        string
+		Coefficient string
+		Exponent    int32
+		Boolean     bool
+		Text        string
+		Symbol      string
+		Unit        string
+	}
+	MemberSum *struct {
+		Withheld         bool
+		Coefficient      string
+		Exponent         int32
+		Unit             string
+		Reason           string
+		NotIncludedCount int
+		Gaps             []struct {
+			Asset  string
+			Reason string
+		}
+	}
 }
 
 // Operation is one operation carried on a charger lens result.
@@ -40,4 +64,5 @@ type Placement struct {
 	Kind    string
 	Address string
 	Node    bool
+	Surface any
 }

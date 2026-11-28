@@ -9,6 +9,7 @@ import (
 	eebusruntime "github.com/Project-Helianthus/helianthus-eebusreg"
 	"github.com/Project-Helianthus/helianthus-eebusreg/eebusraw"
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusservicebridge"
 )
 
 const chargerNodeToken = "00112233445566778899aabbccddeeff"
@@ -19,7 +20,7 @@ func TestChargerOutputServedOnEVSE(t *testing.T) {
 	// Commissioning and Configuration on that entity. The monitored unit is the EVSE
 	// entity, so the CEM entity gains no feature. The caller of Apply reads the device
 	// classification gap from MonitoringLoss.
-	binding, node := newChargerBinding(t)
+	binding, node, _ := newChargerBinding(t)
 	result := chargerApplyLens("bay")
 	if loss := binding.Apply(result); len(loss) != 0 {
 		t.Fatalf("apply loss %v", loss)
@@ -68,7 +69,7 @@ func TestChargerOutputApplyMandatoryElement(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			binding, _ := newChargerBinding(t)
+			binding, _, _ := newChargerBinding(t)
 			result := chargerApplyLens("bay")
 			tc.mutate(&result)
 			binding.Apply(result)
@@ -92,42 +93,55 @@ func TestChargerOutputApplyMandatoryElement(t *testing.T) {
 }
 
 func TestChargerOutputApplyConsumptionLimit(t *testing.T) {
-	// A Limitation of Power Consumption result applied on a charger keeps its returned
-	// loss, and MonitoringLoss gives the caller both write entries: the missing active-power
-	// operation and the allocated current operation that was not called.
-	binding, _ := newChargerBinding(t)
-	result := chargerApplyLens("bay")
-	result.UseCase = "Limitation of Power Consumption"
-	result.Operations = []eebusruntime.LensOperation{{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true}}
-	loss := binding.Apply(result)
-	if len(loss) != 1 || loss[0] != "consumption_limit_not_applied" {
-		t.Fatalf("apply loss %v", loss)
+	// Operation fields are name, unit, own capability and converted.
+	// admitted: load control is attached and the three refusal strings are absent.
+	// name: featuresForOperation compares the name, so active power attaches no load control.
+	// unit: featuresForOperation compares the unit, so watts attach no load control.
+	// own capability: featuresForOperation requires it.
+	// converted: featuresForOperation rejects it.
+	// none: a charger without operations attaches no load control.
+	// Every case leaves the three refusal strings absent.
+	cases := []struct {
+		name        string
+		operation   *eebusruntime.LensOperation
+		loadControl bool
+	}{
+		{"admitted", &eebusruntime.LensOperation{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true}, true},
+		{"name", &eebusruntime.LensOperation{Name: "active power", Unit: "W", OwnCapability: true}, false},
+		{"unit", &eebusruntime.LensOperation{Name: "evse.operation.set_allocated_current", Unit: "W", OwnCapability: true}, false},
+		{"own capability", &eebusruntime.LensOperation{Name: "evse.operation.set_allocated_current", Unit: "A"}, false},
+		{"converted", &eebusruntime.LensOperation{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true, Converted: true}, false},
+		{"none", nil, false},
 	}
-	gaps := binding.MonitoringLoss("bay")
-	for _, want := range []string{
-		"missing operation: active power consumption limit",
-		"not called: evse.operation.set_allocated_current",
-		"device classification",
-	} {
-		if !chargerHas(gaps, want) {
-			t.Fatalf("monitoring loss omits %s: %v", want, gaps)
-		}
-	}
-	if chargerHas(gaps, "Limitation of Power Consumption") {
-		t.Fatalf("monitoring loss %v", gaps)
-	}
-
-	plain := chargerApplyLens("other")
-	binding.Apply(plain)
-	if gaps := binding.MonitoringLoss("other"); chargerHas(gaps, "not called: evse.operation.set_allocated_current") {
-		t.Fatalf("write loss without a write %v", gaps)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			binding, _, _ := newChargerBinding(t)
+			result := chargerApplyLens("bay")
+			result.UseCase = "Limitation of Power Consumption"
+			if tc.operation != nil {
+				result.Operations = []eebusruntime.LensOperation{*tc.operation}
+			}
+			loss := binding.Apply(result)
+			for _, refused := range []string{
+				"consumption_limit_not_applied",
+				"missing operation: active power consumption limit",
+				"not called: evse.operation.set_allocated_current",
+			} {
+				if chargerHas(loss, refused) || chargerHas(binding.MonitoringLoss("bay"), refused) {
+					t.Fatalf("refusal %s apply %v monitoring %v", refused, loss, binding.MonitoringLoss("bay"))
+				}
+			}
+			if chargerHas(binding.ServerFeatures("bay"), "load control") != tc.loadControl {
+				t.Fatalf("load control=%v features %v", tc.loadControl, binding.ServerFeatures("bay"))
+			}
+		})
 	}
 }
 
 func TestChargerOutputApplyEVActor(t *testing.T) {
 	// A charger result whose actor is the EV adds the EVSE entity but serves no use case on it.
 	// MonitoringLoss names the EV.
-	binding, _ := newChargerBinding(t)
+	binding, _, _ := newChargerBinding(t)
 	result := chargerApplyLens("bay")
 	result.Actor = "EV"
 	binding.Apply(result)
@@ -175,7 +189,7 @@ func (runtime *chargerRuntime) FeaturesDataGet(context.Context, eebusraw.ReadAut
 
 var chargerListenPort = 4791
 
-func newChargerBinding(t *testing.T) (*eebusruntime.OutputBinding, *eebusfacade.OutputNode) {
+func newChargerBinding(t *testing.T) (*eebusruntime.OutputBinding, *eebusfacade.OutputNode, *eebusservicebridge.Service) {
 	t.Helper()
 	port := chargerListenPort
 	chargerListenPort++
@@ -198,7 +212,7 @@ func newChargerBinding(t *testing.T) (*eebusruntime.OutputBinding, *eebusfacade.
 	if err != nil {
 		t.Fatal(err)
 	}
-	return binding, node
+	return binding, node, service
 }
 
 func chargerApplyLens(resourceID string) eebusruntime.LensResult {
@@ -207,7 +221,7 @@ func chargerApplyLens(resourceID string) eebusruntime.LensResult {
 		Elements: []string{
 			"total active power", "phase active power", "phase current", "phase voltage", "frequency",
 			"session energy", "lifetime energy", "operating state", "charging status", "connection status",
-			"fault status", "interlock status", "readiness status",
+			"fault status", "readiness status",
 		},
 	}
 }

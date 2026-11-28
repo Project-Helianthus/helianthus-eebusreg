@@ -4,6 +4,8 @@ import (
 	"errors"
 	"sort"
 	"testing"
+
+	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 func TestChargerOutputEVActor(t *testing.T) {
@@ -50,44 +52,44 @@ func TestChargerOutputEVActor(t *testing.T) {
 
 func TestChargerOutputConsumptionLimitWrite(t *testing.T) {
 	// Operation fields are name, unit, own capability and converted.
-	// admitted: the allocated current operation is admitted and still not called for a watt limit.
-	// name: an active-power operation on a charger is not called. No watt operation is admitted.
-	// unit: a watt unit on the current operation is not called. Watts are not converted to amperes.
-	// own capability: visibility without it is not called.
-	// converted: a converted value is not called.
-	// none: a charger without operations still names both gaps.
-	cases := map[string][]Operation{
-		"admitted":       {{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true}},
-		"name":           {{Name: "active power", Unit: "W", OwnCapability: true}},
-		"unit":           {{Name: "evse.operation.set_allocated_current", Unit: "W", OwnCapability: true}},
-		"own capability": {{Name: "evse.operation.set_allocated_current", Unit: "A"}},
-		"converted":      {{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true, Converted: true}},
-		"none":           nil,
+	// admitted: the allocated current operation is recognized. The refusal strings are absent.
+	// name: recognizedCurrent compares the operation name, so active power is not recognized.
+	// unit: recognizedCurrent compares the unit, so watts are not recognized.
+	// own capability: recognizedCurrent requires it, so visibility alone is not recognized.
+	// converted: recognizedCurrent rejects it, so a converted value is not recognized.
+	// none: a charger without operations recognizes nothing.
+	// Every case leaves the three refusal strings absent. Limitation of Power Consumption stays unannounced.
+	cases := map[string]struct {
+		operations []Operation
+		recognized bool
+	}{
+		"admitted":       {[]Operation{{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true}}, true},
+		"name":           {[]Operation{{Name: "active power", Unit: "W", OwnCapability: true}}, false},
+		"unit":           {[]Operation{{Name: "evse.operation.set_allocated_current", Unit: "W", OwnCapability: true}}, false},
+		"own capability": {[]Operation{{Name: "evse.operation.set_allocated_current", Unit: "A"}}, false},
+		"converted":      {[]Operation{{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true, Converted: true}}, false},
+		"none":           {nil, false},
 	}
-	for name, operations := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			result := chargerLens("bay")
 			result.UseCase = "Limitation of Power Consumption"
-			result.Operations = operations
-			outcome := consumptionLimitWrite(result)
-			if len(outcome.Operations) != 0 || listed(outcome.Operations, "evse.operation.set_allocated_current") {
-				t.Fatalf("called %v", outcome.Operations)
-			}
-			if len(outcome.Announced) != 0 {
+			result.Operations = tc.operations
+			outcome := Monitor(result)
+			if listed(outcome.Announced, "Limitation of Power Consumption") {
 				t.Fatalf("announced %v", outcome.Announced)
 			}
-			if !listed(outcome.Loss, "missing operation: active power consumption limit") || !listed(outcome.Loss, "not called: evse.operation.set_allocated_current") {
-				t.Fatalf("loss %v", outcome.Loss)
+			for _, refused := range []string{
+				"consumption_limit_not_applied",
+				"missing operation: active power consumption limit",
+				"not called: evse.operation.set_allocated_current",
+			} {
+				if listed(outcome.Loss, refused) {
+					t.Fatalf("loss still names %s: %v", refused, outcome.Loss)
+				}
 			}
-			monitored := Monitor(result)
-			if listed(monitored.Announced, "Limitation of Power Consumption") || !listed(monitored.Loss, "consumption_limit_not_applied") {
-				t.Fatalf("monitoring announced %v loss %v", monitored.Announced, monitored.Loss)
-			}
-			if !listed(monitored.Loss, "missing operation: active power consumption limit") || !listed(monitored.Loss, "not called: evse.operation.set_allocated_current") {
-				t.Fatalf("monitoring loss omits the write gaps %v", monitored.Loss)
-			}
-			if len(monitored.Operations) != 0 {
-				t.Fatalf("monitoring operations %v", monitored.Operations)
+			if listed(outcome.Operations, "evse.operation.set_allocated_current") != tc.recognized {
+				t.Fatalf("recognized=%v operations %v", tc.recognized, outcome.Operations)
 			}
 		})
 	}
@@ -98,7 +100,7 @@ func TestChargerOutputMandatoryScenarios(t *testing.T) {
 	// total active power: absent leaves Monitoring of Power Consumption unannounced and named.
 	// phase active power: alone it does not fill the total. The gate does not sum phases.
 	// operating state: absent leaves EVSE Commissioning and Configuration unannounced and named.
-	// charger statuses: charging, connection, fault, interlock and readiness do not fill the operating state.
+	// charger statuses: charging, connection, fault and readiness do not fill the operating state.
 	// missing element: an element the lens also names as missing is not admitted.
 	// Each case keeps the other use case announced, so the gate withdraws only the unfilled one.
 	noTotal := chargerLens("bay")
@@ -298,6 +300,64 @@ func TestChargerOutputRejectedOperationFeature(t *testing.T) {
 	}
 }
 
+func TestChargerOutputEnergyScale(t *testing.T) {
+	// Coefficient, exponent and produced select the watt-hour scale.
+	// coefficient: 3600000 J is 1000 Wh. A doubled coefficient is 2000 Wh.
+	// exponent: 36 * 10^5 J is the same 1000 Wh. Ignoring the exponent leaves 36 J.
+	// produced: the same 3600000 J is -1000 Wh. A negative export counter is not served.
+	consumed, scale, ok := jouleToWattHour("3600000", 0, false)
+	if !ok || consumed != 1000 || scale != 0 {
+		t.Fatalf("consumed %d scale %d ok %v", consumed, scale, ok)
+	}
+	doubled, scale, ok := jouleToWattHour("7200000", 0, false)
+	if !ok || doubled != 2000 || scale != 0 {
+		t.Fatalf("doubled coefficient %d scale %d", doubled, scale)
+	}
+	shifted, scale, ok := jouleToWattHour("36", 5, false)
+	if !ok || shifted != 1000 || scale != 0 {
+		t.Fatalf("exponent %d scale %d", shifted, scale)
+	}
+	produced, scale, ok := jouleToWattHour("3600000", 0, true)
+	if !ok || produced != -1000 || scale != 0 {
+		t.Fatalf("produced %d scale %d", produced, scale)
+	}
+	if _, _, ok := jouleToWattHour("-3600000", 0, true); ok {
+		t.Fatal("negative export counter was served")
+	}
+	if _, _, ok := jouleToWattHour("1000", 0, false); ok {
+		t.Fatal("inexact joule became a watt hour")
+	}
+}
+
+func TestChargerOutputGenericOperatingState(t *testing.T) {
+	// Table rows are fault, readiness and charging, in that order.
+	// fault: present wins over not ready and idle, so the state is failure.
+	// readiness: not ready wins over charging, so the state is temporarilyNotReady.
+	// charging: charging is normalOperation when fault is clear and readiness is ready.
+	// idle: idle is standby when fault is clear and readiness is ready.
+	// A clear, ready, complete combination matches none of the four rows.
+	cases := []struct {
+		name                 string
+		fault, ready, charge string
+		want                 spinemodel.DeviceDiagnosisOperatingStateType
+		known                bool
+	}{
+		{"fault", symbolPresent, symbolNotReady, symbolIdle, spinemodel.DeviceDiagnosisOperatingStateTypeFailure, true},
+		{"readiness", "clear", symbolNotReady, symbolCharging, spinemodel.DeviceDiagnosisOperatingStateTypeTemporarilyNotReady, true},
+		{"charging", "clear", "ready", symbolCharging, spinemodel.DeviceDiagnosisOperatingStateTypeNormalOperation, true},
+		{"idle", "clear", "ready", symbolIdle, spinemodel.DeviceDiagnosisOperatingStateTypeStandby, true},
+		{"unknown", "clear", "ready", "complete", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, known := genericOperatingState(tc.fault, tc.ready, tc.charge)
+			if known != tc.known || got != tc.want {
+				t.Fatalf("state %s known %v", got, known)
+			}
+		})
+	}
+}
+
 func evsePlacement() Placement {
 	return Placement{Binding: true, Found: true, Kind: "EVSE", Address: "a", Node: true}
 }
@@ -328,7 +388,7 @@ func chargerLens(resourceID string) Result {
 		Elements: []string{
 			"total active power", "phase active power", "phase current", "phase voltage", "frequency",
 			"session energy", "lifetime energy", "operating state", "charging status", "connection status",
-			"fault status", "interlock status", "readiness status",
+			"fault status", "readiness status",
 		},
 	}
 }

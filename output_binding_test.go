@@ -380,8 +380,8 @@ func TestOutputBindingAnnouncement(t *testing.T) {
 	// The production gate returns that loss before feature mapping.
 	// device actor: EV is still the loss. The production gate adds the EV entity and returns that actor.
 	// missing elements: the loss names each cited element and does not invent a feature for it.
-	// use case: Limitation of Power Consumption stays unannounced when the watt write is not applied.
-	// The production gate returns that loss for this use case on a charger.
+	// use case: Limitation of Power Consumption on a charger is not refused.
+	// The production gate recognizes the admitted allocated-current operation.
 	binding := newOutputBinding(t)
 	overlap := outputBindingInverter("north")
 	overlap.Overlapping = true
@@ -425,7 +425,7 @@ func TestOutputBindingAnnouncement(t *testing.T) {
 		Operations: []LensOperation{{Name: "evse.operation.set_allocated_current", Unit: "A", OwnCapability: true}},
 	}
 	loss = binding.Apply(charger)
-	if len(loss) != 1 || loss[0] != "consumption_limit_not_applied" {
+	if len(loss) != 0 {
 		t.Fatalf("loss %v", loss)
 	}
 	if !outputBindingHasType(binding.EntityTypes(), "EVSE") {

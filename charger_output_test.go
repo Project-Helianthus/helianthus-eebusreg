@@ -6,7 +6,7 @@ func chargerOutputLens(resourceID string) LensResult {
 		Elements: []string{
 			"total active power", "phase active power", "phase current", "phase voltage", "frequency",
 			"session energy", "lifetime energy", "operating state", "charging status", "connection status",
-			"fault status", "interlock status", "readiness status",
+			"fault status", "readiness status",
 		},
 	}
 }
