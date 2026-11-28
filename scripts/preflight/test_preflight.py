@@ -213,6 +213,20 @@ def move_driver():
     shutil.move(str(path), str(sink / ("driver-" + str(len(list(sink.iterdir()))))))
 
 
+def keep_charger_package():
+    # The root file imports driver/output/charger. Relocating every driver
+    # package leaves that import unloadable, and the lint baseline rejects
+    # the resulting diagnostic. This package stays; the rest stays relocated.
+    if ORIGINAL_DRIVER is None:
+        return
+    source = ORIGINAL_DRIVER / "output" / "charger"
+    destination = REPO / "driver" / "output" / "charger"
+    if not source.is_dir() or destination.exists():
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, destination)
+
+
 def write_inbound(name, text):
     directory = REPO / "driver" / "rows" / "inbound"
     directory.mkdir(parents=True, exist_ok=True)
@@ -230,6 +244,7 @@ def package_file(function, body):
 
 
 def run_preflight(manifest, donor):
+    keep_charger_package()
     return subprocess.run(
         [
             sys.executable,
