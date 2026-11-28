@@ -22,6 +22,7 @@ type OutputNode struct {
 	mu       sync.Mutex
 	service  *eebusservicebridge.Service
 	byLetter map[string]spineapi.EntityLocalInterface
+	useCases map[string]map[outputUseCaseKey][]string
 }
 
 // outputSession is the output node owned by one runtime instance.
@@ -38,6 +39,7 @@ func (session *outputSession) adopt(service *eebusservicebridge.Service) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if session.node != nil && (service == nil || session.node.service != service) {
+		session.node.stopHeartbeats()
 		session.node = nil
 	}
 	session.service = service
@@ -52,6 +54,9 @@ func (session *outputSession) release(service runtimeService) {
 	defer session.mu.Unlock()
 	if concrete == nil || session.service != concrete {
 		return
+	}
+	if session.node != nil {
+		session.node.stopHeartbeats()
 	}
 	session.service = nil
 	session.node = nil
@@ -275,8 +280,9 @@ func (n *OutputNode) ObservedEntityTypes() []string {
 	return types
 }
 
-// AddEntity adds an Inverter, PV String or EVSE entity on the local device,
-// nested under the parent entity when one is named.
+// AddEntity adds an entity of kind on the local device, nested under the parent
+// entity when one is named. The same address and kind adds nothing. A different
+// kind at that address is rejected. The parent entity is added before its child.
 func (n *OutputNode) AddEntity(kind, address, parent string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -432,6 +438,11 @@ func (n *OutputNode) AddServerFeature(address, name string) error {
 func (n *OutputNode) AddServerFeatures(address string, names []string) (string, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	return n.addServerFeaturesLocked(address, names)
+}
+
+// addServerFeaturesLocked adds features while n.mu is held.
+func (n *OutputNode) addServerFeaturesLocked(address string, names []string) (string, error) {
 	entity := n.byLetter[address]
 	if entity == nil {
 		return "", errOutputNode
@@ -460,6 +471,7 @@ func (n *OutputNode) AddServerFeatures(address string, names []string) (string, 
 	for _, feature := range staged.staged {
 		entity.AddFeature(feature)
 	}
+	n.ensureHeartbeatLocked(address)
 	return "", nil
 }
 
@@ -493,6 +505,13 @@ func attachServerFeature(entity spineapi.EntityLocalInterface, featureType spine
 			return errOutputNode
 		}
 		return nil
+	case spinemodel.FeatureTypeTypeDeviceClassification:
+		if entity.FeatureOfTypeAndRole(featureType, spinemodel.RoleTypeServer) == nil {
+			return errOutputNode
+		}
+		return nil
+	case spinemodel.FeatureTypeTypeDeviceConfiguration:
+		_, err = server.NewDeviceConfiguration(entity)
 	default:
 		return errOutputNode
 	}
@@ -518,30 +537,46 @@ func (n *OutputNode) lettersLocked() []string {
 	return letters
 }
 
+// outputEntityKinds maps each public entity name to its SPINE entity type.
+// HVACRoom's constant is EntityTypeTypeHvacRoom; its type value is HVACRoom.
+var outputEntityKinds = []struct {
+	name  string
+	spine spinemodel.EntityTypeType
+}{
+	{"Inverter", spinemodel.EntityTypeTypeInverter},
+	{"PV String", spinemodel.EntityTypeTypePVString},
+	{"EVSE", spinemodel.EntityTypeTypeEVSE},
+	{"PV", spinemodel.EntityTypeTypePV},
+	{"PVESHybrid", spinemodel.EntityTypeTypePVESHybrid},
+	{"ElectricalStorage", spinemodel.EntityTypeTypeElectricalStorage},
+	{"Battery", spinemodel.EntityTypeTypeBattery},
+	{"HVACRoom", spinemodel.EntityTypeTypeHvacRoom},
+	{"HeatingCircuit", spinemodel.EntityTypeTypeHeatingCircuit},
+	{"HeatingZone", spinemodel.EntityTypeTypeHeatingZone},
+	{"DHWCircuit", spinemodel.EntityTypeTypeDHWCircuit},
+	{"TemperatureSensor", spinemodel.EntityTypeTypeTemperatureSensor},
+	{"GridConnectionPointOfPremises", spinemodel.EntityTypeTypeGridConnectionPointOfPremises},
+	{"SubMeterElectricity", spinemodel.EntityTypeTypeSubMeterElectricity},
+	{"HeatPumpAppliance", spinemodel.EntityTypeTypeHeatPumpAppliance},
+	{"EV", spinemodel.EntityTypeTypeEV},
+}
+
 func publicEntityName(entityType spinemodel.EntityTypeType) string {
-	switch entityType {
-	case spinemodel.EntityTypeTypeInverter:
-		return "Inverter"
-	case spinemodel.EntityTypeTypePVString:
-		return "PV String"
-	case spinemodel.EntityTypeTypeEVSE:
-		return "EVSE"
-	default:
-		return ""
+	for _, kind := range outputEntityKinds {
+		if kind.spine == entityType {
+			return kind.name
+		}
 	}
+	return ""
 }
 
 func spineEntityType(kind string) (spinemodel.EntityTypeType, bool) {
-	switch kind {
-	case "Inverter":
-		return spinemodel.EntityTypeTypeInverter, true
-	case "PV String":
-		return spinemodel.EntityTypeTypePVString, true
-	case "EVSE":
-		return spinemodel.EntityTypeTypeEVSE, true
-	default:
-		return "", false
+	for _, item := range outputEntityKinds {
+		if item.name == kind {
+			return item.spine, true
+		}
 	}
+	return "", false
 }
 
 func publicFeatureName(featureType spinemodel.FeatureTypeType) string {
@@ -554,6 +589,10 @@ func publicFeatureName(featureType spinemodel.FeatureTypeType) string {
 		return "electrical connection"
 	case spinemodel.FeatureTypeTypeLoadControl:
 		return "load control"
+	case spinemodel.FeatureTypeTypeDeviceClassification:
+		return "device classification"
+	case spinemodel.FeatureTypeTypeDeviceConfiguration:
+		return "device configuration"
 	default:
 		return ""
 	}
@@ -569,6 +608,10 @@ func serverFeatureType(name string) (spinemodel.FeatureTypeType, bool) {
 		return spinemodel.FeatureTypeTypeElectricalConnection, true
 	case "load control":
 		return spinemodel.FeatureTypeTypeLoadControl, true
+	case "device classification":
+		return spinemodel.FeatureTypeTypeDeviceClassification, true
+	case "device configuration":
+		return spinemodel.FeatureTypeTypeDeviceConfiguration, true
 	default:
 		return "", false
 	}
