@@ -383,7 +383,11 @@ func invokeRequest(t *testing.T, ctx context.Context, site *host.Site, request *
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cut.Close()
+	defer func() {
+		if closeErr := cut.Close(); closeErr != nil {
+			t.Errorf("cut close: %v", closeErr)
+		}
+	}()
 	prepared, err := cut.Prepare(ctx, host.MethodSelection{Method: method, Input: tree.Input{Request: request}})
 	if err != nil {
 		t.Fatal(err)
