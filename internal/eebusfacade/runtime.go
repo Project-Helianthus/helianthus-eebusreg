@@ -86,6 +86,7 @@ type serviceBackend struct {
 	outgoingAttempts *firstTrustOutgoingAttemptBridge
 	unsubscribeSPINE func() error
 	useCases         *remoteUseCases
+	output           *outputSession
 	listenerTerminal <-chan error
 	runClaimed       bool
 	serviceStarted   bool
@@ -201,6 +202,7 @@ type runtimeAcquisition struct {
 	useCases                 *remoteUseCases
 	operatorAdmin            *operatorAdminV1Bridge
 	rawMutations             *eebusmutation.Coordinator
+	output                   *outputSession
 }
 
 // acquireRuntimeWithSnapshotSerializer runs the startup steps in order. A failing
@@ -375,12 +377,13 @@ func (acquisition *runtimeAcquisition) openService(serializer runtimeSnapshotSer
 	acquisition.handler = handler
 	acquisition.reader = reader
 	acquisition.service = service
+	acquisition.adoptOutput(service)
 	acquisition.outgoingAttemptBridge.bindLifecycle(service)
 	return nil
 }
 
 func (acquisition *runtimeAcquisition) closeRuntime(cause error) error {
-	releaseOutputService(acquisition.service)
+	acquisition.releaseOutput()
 	acquisition.service.Shutdown()
 	subscriptionErr := acquisition.rawFeatures.closeRemoteSubscriptions()
 	attemptErr := acquisition.outgoingAttemptBridge.shutdown()
@@ -512,6 +515,7 @@ func (acquisition *runtimeAcquisition) startBackend() (Backend, error) {
 	}
 	scoped, ok := acquisition.service.(runtimeScopedService)
 	if !ok {
+		backend.output = acquisition.takeOutput()
 		return backend, nil
 	}
 	if !backend.runtimeStartAuthorized() {
@@ -529,6 +533,7 @@ func (acquisition *runtimeAcquisition) startBackend() (Backend, error) {
 	}
 	backend.listenerTerminal = terminal
 	backend.serviceStarted = true
+	backend.output = acquisition.takeOutput()
 	return backend, nil
 }
 
@@ -856,7 +861,7 @@ func (backend *serviceBackend) Close() error {
 		backend.handler.waitForSPINEEvents()
 	}
 	if backend.service != nil {
-		releaseOutputService(backend.service)
+		backend.releaseOutput()
 		backend.service.Shutdown()
 	}
 	subscriptionErr := backend.closeRemoteSubscriptions()
@@ -920,8 +925,20 @@ func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebu
 	if candidate == nil {
 		return nil, errors.New("released scoped service construction failed")
 	}
-	adoptOutputService(candidate)
 	return candidate, nil
+}
+
+// NewConfiguredService constructs the local service of one runtime instance.
+func NewConfiguredService(config RuntimeConfig, certificate tls.Certificate, nodeToken string) (*eebusservicebridge.Service, error) {
+	service, err := newEEBusService(config, runtimeMaterial{certificate: certificate, nodeToken: nodeToken}, nil)
+	if err != nil {
+		return nil, err
+	}
+	concrete, ok := service.(*eebusservicebridge.Service)
+	if !ok || concrete == nil {
+		return nil, errors.New("released scoped service construction failed")
+	}
+	return concrete, nil
 }
 
 func validateRuntimeMaterial(material runtimeMaterial) error {

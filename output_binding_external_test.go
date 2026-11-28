@@ -27,7 +27,7 @@ func TestOutputBindingAcceptsExportedLensResult(t *testing.T) {
 	}
 	// No runtime service runs in this process, so the binding has no node to
 	// attach to and composes none of its own.
-	if binding, err := eebusruntime.NewOutputBinding(t.TempDir()); err == nil || binding != nil {
+	if binding, err := eebusruntime.NewOutputBinding(nil, t.TempDir()); err == nil || binding != nil {
 		t.Fatal("binding opened without the runtime node")
 	}
 }

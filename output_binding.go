@@ -35,7 +35,7 @@ var (
 // apply lens results and read entities from different goroutines.
 var outputBindingGate sync.Mutex
 
-// shipNode is the node of the running runtime service.
+// shipNode is the node of one runtime service.
 type shipNode interface {
 	AdvertisementCount() int
 	ServiceCount() int
@@ -47,10 +47,26 @@ type shipNode interface {
 	AddServerFeatures(address string, names []string) (string, error)
 }
 
-// openShipNode attaches to the node of the running runtime service. It never
-// composes a second service.
-var openShipNode = func() (shipNode, error) {
-	node, err := eebusfacade.OpenOutputNode()
+// outputNodeSource is the runtime that owns one output node.
+type outputNodeSource interface {
+	OutputNode() (*eebusfacade.OutputNode, error)
+}
+
+func outputNodeOfRuntime(runtime Runtime) (*eebusfacade.OutputNode, error) {
+	source, ok := runtime.(outputNodeSource)
+	if !ok {
+		return nil, errExistingNode
+	}
+	node, err := source.OutputNode()
+	if err != nil || node == nil {
+		return nil, errExistingNode
+	}
+	return node, nil
+}
+
+// openShipNode attaches to the node of this runtime. It never composes a second service.
+var openShipNode = func(runtime Runtime) (shipNode, error) {
+	node, err := outputNodeOfRuntime(runtime)
 	if err != nil || node == nil {
 		return nil, errExistingNode
 	}
@@ -79,6 +95,7 @@ type OutputBinding struct {
 	order      []string
 	node       shipNode
 	gaps       map[string][]string
+	runtime    Runtime
 }
 
 type boundEntity struct {
@@ -115,8 +132,8 @@ type LensOperation struct {
 	Converted     bool
 }
 
-// NewOutputBinding binds output onto the existing node and loads addresses stored in directory.
-func NewOutputBinding(directory string) (*OutputBinding, error) {
+// NewOutputBinding binds output onto this runtime's node and loads addresses stored in directory.
+func NewOutputBinding(runtime Runtime, directory string) (*OutputBinding, error) {
 	info, err := os.Stat(directory)
 	if err != nil || !info.IsDir() {
 		return nil, errAddressStore
@@ -125,7 +142,7 @@ func NewOutputBinding(directory string) (*OutputBinding, error) {
 	if err != nil {
 		return nil, err
 	}
-	node, err := openShipNode()
+	node, err := openShipNode(runtime)
 	if err != nil || node == nil {
 		return nil, errExistingNode
 	}
@@ -135,18 +152,19 @@ func NewOutputBinding(directory string) (*OutputBinding, error) {
 		byResource: map[string]boundEntity{},
 		node:       node,
 		gaps:       map[string][]string{},
+		runtime:    runtime,
 	}, nil
 }
 
-// liveNodeLocked resolves the node of the running runtime service on every
-// call. When the runtime replaced its service, the binding forgets the entities
-// it added on the old node, keeps the stored addresses, and adds each entity
-// again when a lens result names it. Without a running service it has no node.
+// liveNodeLocked resolves this runtime's node on every call. When that runtime
+// replaced its service, the binding forgets the entities it added on the old
+// node, keeps the stored addresses, and adds each entity again when a lens
+// result names it. Without that service it has no node.
 func (b *OutputBinding) liveNodeLocked() shipNode {
 	if b == nil {
 		return nil
 	}
-	node, err := openShipNode()
+	node, err := openShipNode(b.runtime)
 	if err != nil || node == nil {
 		node = nil
 	}

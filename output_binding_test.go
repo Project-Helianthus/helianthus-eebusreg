@@ -2,11 +2,16 @@ package eebusruntime
 
 import (
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"testing"
+
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusfacade"
+	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusservicebridge"
+	shipcert "github.com/Project-Helianthus/helianthus-ship-go/cert"
 )
 
 func TestOutputBinding(t *testing.T) {
@@ -440,21 +445,19 @@ func newOutputBindingAt(t *testing.T, directory string) *OutputBinding {
 	return binding
 }
 
-// openOutputBindingOnFakeNode builds a binding on an injected node. The root
-// package cannot prepare the runtime service; the facade package tests the
-// binding on the real node. The binding resolves the node on every call, so the
-// injected node stays the running node until the test ends.
+// openOutputBindingOnFakeNode builds a binding on an injected node. The binding
+// resolves that node on every call until the test ends.
 func openOutputBindingOnFakeNode(t *testing.T, directory string, node *outputBindingFakeNode) (*OutputBinding, error) {
 	t.Helper()
 	useOutputBindingNode(t, func() (shipNode, error) { return node, nil })
-	return NewOutputBinding(directory)
+	return NewOutputBinding(nil, directory)
 }
 
 // useOutputBindingNode makes open the running node until the test ends.
 func useOutputBindingNode(t *testing.T, open func() (shipNode, error)) {
 	t.Helper()
 	original := openShipNode
-	openShipNode = open
+	openShipNode = func(Runtime) (shipNode, error) { return open() }
 	t.Cleanup(func() { openShipNode = original })
 }
 
@@ -520,11 +523,14 @@ func TestOutputBindingObservesNodeCounts(t *testing.T) {
 
 func TestOutputBindingRequiresExistingNode(t *testing.T) {
 	// Without a running runtime service the binding is refused and nothing is composed.
-	if _, err := NewOutputBinding(t.TempDir()); !errors.Is(err, errExistingNode) {
+	if _, err := NewOutputBinding(nil, t.TempDir()); !errors.Is(err, errExistingNode) {
 		t.Fatalf("binding without a runtime node err=%v", err)
 	}
+	if _, err := NewOutputBinding(&runtimeImplementation{}, t.TempDir()); !errors.Is(err, errExistingNode) {
+		t.Fatalf("binding on a runtime without a backend err=%v", err)
+	}
 	useOutputBindingNode(t, func() (shipNode, error) { return nil, errors.New("absent") })
-	if _, err := NewOutputBinding(t.TempDir()); !errors.Is(err, errExistingNode) {
+	if _, err := NewOutputBinding(nil, t.TempDir()); !errors.Is(err, errExistingNode) {
 		t.Fatalf("binding on an absent node err=%v", err)
 	}
 }
@@ -540,7 +546,7 @@ func TestOutputBindingFollowsReplacedNode(t *testing.T) {
 		}
 		return current, nil
 	})
-	binding, err := NewOutputBinding(t.TempDir())
+	binding, err := NewOutputBinding(nil, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,6 +627,122 @@ func TestOutputBindingConcurrentReaders(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+}
+
+func TestOutputBindingTwoRuntimes(t *testing.T) {
+	// Two runtime instances each own a node. Replacing or stopping one leaves
+	// the other serving, and a binding follows only the runtime it was given.
+	firstRuntime, firstBackend := newOwnedOutputRuntime(t, 4711, "0123456789abcdef0123456789abcdef")
+	secondRuntime, secondBackend := newOwnedOutputRuntime(t, 4712, "fedcba9876543210fedcba9876543210")
+	if _, err := NewOutputBinding(nil, t.TempDir()); !errors.Is(err, errExistingNode) {
+		t.Fatalf("binding without a runtime used another instance err=%v", err)
+	}
+	if _, err := NewOutputBinding(&runtimeImplementation{backend: &facadeRuntimeBackend{}}, t.TempDir()); !errors.Is(err, errExistingNode) {
+		t.Fatalf("binding without a service backend err=%v", err)
+	}
+	bindingA, err := NewOutputBinding(firstRuntime, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindingB, err := NewOutputBinding(secondRuntime, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bindingA.AdvertisementCount() != 1 || bindingB.AdvertisementCount() != 1 {
+		t.Fatalf("ads A=%d B=%d", bindingA.AdvertisementCount(), bindingB.AdvertisementCount())
+	}
+	if loss := bindingA.Apply(outputBindingInverter("north")); len(loss) != 0 {
+		t.Fatalf("inverter loss %v", loss)
+	}
+	charger := LensResult{Family: "charger", ResourceID: "south", LensAdmitted: true, RuntimeEnabled: true}
+	if loss := bindingB.Apply(charger); len(loss) != 0 {
+		t.Fatalf("charger loss %v", loss)
+	}
+	addressA := bindingA.EntityAddress("north")
+	addressB := bindingB.EntityAddress("south")
+	if addressA == "" || addressB == "" {
+		t.Fatalf("addresses A=%q B=%q", addressA, addressB)
+	}
+	if outputBindingHasType(bindingA.EntityTypes(), "EVSE") || !outputBindingHasType(bindingA.EntityTypes(), "Inverter") {
+		t.Fatalf("runtime A types %v", bindingA.EntityTypes())
+	}
+	if outputBindingHasType(bindingB.EntityTypes(), "Inverter") || !outputBindingHasType(bindingB.EntityTypes(), "EVSE") {
+		t.Fatalf("runtime B types %v", bindingB.EntityTypes())
+	}
+	if bindingA.EntityAddress("south") != "" || bindingB.EntityAddress("north") != "" {
+		t.Fatal("a binding read the other runtime's resource")
+	}
+	replacement := newConfiguredOutputService(t, 4713, "00112233445566778899aabbccddeeff")
+	eebusfacade.ReplaceOutputService(firstBackend, replacement)
+	if types := bindingA.EntityTypes(); len(types) != 1 || types[0] != "CEM" {
+		t.Fatalf("replaced runtime A types %v", types)
+	}
+	if bindingB.EntityAddress("south") != addressB || !outputBindingHasType(bindingB.EntityTypes(), "EVSE") {
+		t.Fatal("replacing runtime A changed runtime B")
+	}
+	if loss := bindingA.Apply(outputBindingInverter("north")); len(loss) != 0 {
+		t.Fatalf("loss on the replaced node %v", loss)
+	}
+	if bindingA.EntityAddress("north") != addressA {
+		t.Fatalf("stored address %q became %q", addressA, bindingA.EntityAddress("north"))
+	}
+	if outputBindingHasType(bindingA.EntityTypes(), "EVSE") {
+		t.Fatal("replaced runtime A received runtime B's entity")
+	}
+	if err := firstBackend.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if loss := bindingA.Apply(outputBindingInverter("north")); len(loss) != 1 || loss[0] != "existing_node" {
+		t.Fatalf("loss after runtime A stopped %v", loss)
+	}
+	if bindingA.AdvertisementCount() != 0 || bindingA.ServiceCount() != 0 {
+		t.Fatal("stopped runtime A still reports a service")
+	}
+	if bindingB.AdvertisementCount() != 1 || bindingB.ServiceCount() != 1 || bindingB.EntityAddress("south") != addressB {
+		t.Fatal("stopping runtime A stopped runtime B")
+	}
+	if loss := bindingB.Apply(charger); len(loss) != 0 {
+		t.Fatalf("runtime B loss after runtime A stopped %v", loss)
+	}
+	if _, err := eebusfacade.OpenOutputNode(firstBackend); err == nil {
+		t.Fatal("stopped runtime A still opened a node")
+	}
+	if _, err := eebusfacade.OpenOutputNode(secondBackend); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func newOwnedOutputRuntime(t *testing.T, port int, token string) (*runtimeImplementation, eebusfacade.Backend) {
+	t.Helper()
+	service := newConfiguredOutputService(t, port, token)
+	backend := eebusfacade.NewOutputServiceBackend(service)
+	t.Cleanup(func() { _ = backend.Close() })
+	return &runtimeImplementation{
+		enabled: true,
+		started: true,
+		backend: &facadeRuntimeBackend{backend: backend},
+	}, backend
+}
+
+func newConfiguredOutputService(t *testing.T, port int, token string) *eebusservicebridge.Service {
+	t.Helper()
+	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "binding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := eebusfacade.NewConfiguredService(eebusfacade.RuntimeConfig{
+		Interface:     "fixture-interface",
+		ListenPort:    port,
+		ListenAddress: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(port)),
+	}, certificate, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Setup(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { service.Shutdown() })
+	return service
 }
 
 type outputBindingFakeEntity struct {

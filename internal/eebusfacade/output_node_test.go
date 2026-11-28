@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/Project-Helianthus/helianthus-eebusreg/internal/eebusservicebridge"
 	shipcert "github.com/Project-Helianthus/helianthus-ship-go/cert"
@@ -11,8 +12,13 @@ import (
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
+const (
+	outputNodeSecondToken = "fedcba9876543210fedcba9876543210"
+	outputNodeThirdToken  = "00112233445566778899aabbccddeeff"
+)
+
 func TestOutputNodeCountsFollowTheService(t *testing.T) {
-	service, concrete := newOutputNodeRuntime(t)
+	service, concrete, _ := newOutputNodeRuntime(t)
 	node := &OutputNode{service: concrete, byLetter: map[string]spineapi.EntityLocalInterface{}}
 	if node.AdvertisementCount() != 0 || node.ServiceCount() != 0 || node.DeviceType() != "" {
 		t.Fatalf("unready ads=%d services=%d type=%q", node.AdvertisementCount(), node.ServiceCount(), node.DeviceType())
@@ -32,14 +38,14 @@ func TestOutputNodeCountsFollowTheService(t *testing.T) {
 }
 
 func TestOutputNodeUsesRuntimeService(t *testing.T) {
-	service, concrete := newOutputNodeRuntime(t)
-	if _, err := OpenOutputNode(); err == nil {
+	service, concrete, backend := newOutputNodeRuntime(t)
+	if _, err := OpenOutputNode(backend); err == nil {
 		t.Fatal("node opened before the runtime service was prepared")
 	}
 	if err := service.Setup(); err != nil {
 		t.Fatal(err)
 	}
-	node, err := OpenOutputNode()
+	node, err := OpenOutputNode(backend)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,18 +73,20 @@ func TestOutputNodeUsesRuntimeService(t *testing.T) {
 	if node.AdvertisementCount() != 1 || node.ServiceCount() != 1 || node.DeviceType() != "EnergyManagementSystem" {
 		t.Fatalf("ads=%d services=%d type=%q", node.AdvertisementCount(), node.ServiceCount(), node.DeviceType())
 	}
-	releaseOutputService(service)
-	if _, err := OpenOutputNode(); err == nil {
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenOutputNode(backend); err == nil {
 		t.Fatal("node opened after the runtime service was released")
 	}
 }
 
 func TestOutputNodeFailedAttachLeavesNoFeature(t *testing.T) {
-	service, _ := newOutputNodeRuntime(t)
+	service, _, backend := newOutputNodeRuntime(t)
 	if err := service.Setup(); err != nil {
 		t.Fatal(err)
 	}
-	node, err := OpenOutputNode()
+	node, err := OpenOutputNode(backend)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,11 +126,11 @@ func TestOutputNodeAddsAllFeaturesOrNone(t *testing.T) {
 	// The node accepts measurement and rejects electrical connection. The batch names the
 	// rejected feature and leaves the entity without measurement. A later batch the node
 	// accepts adds both, and asking again for a present feature adds no duplicate.
-	service, _ := newOutputNodeRuntime(t)
+	service, _, backend := newOutputNodeRuntime(t)
 	if err := service.Setup(); err != nil {
 		t.Fatal(err)
 	}
-	node, err := OpenOutputNode()
+	node, err := OpenOutputNode(backend)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,11 +174,11 @@ func TestOutputNodeEntityAddressFollowsLetter(t *testing.T) {
 	// The SPINE entity address comes from the stored letter, not from the
 	// apply order, so a restart that applies in another order keeps it.
 	addresses := func(order []string) map[string][]spinemodel.AddressEntityType {
-		service, _ := newOutputNodeRuntime(t)
+		service, _, backend := newOutputNodeRuntime(t)
 		if err := service.Setup(); err != nil {
 			t.Fatal(err)
 		}
-		node, err := OpenOutputNode()
+		node, err := OpenOutputNode(backend)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -219,18 +227,43 @@ func RejectOutputServerFeatureForTest(t *testing.T, name string) {
 	t.Cleanup(func() { attachOutputServerFeature = original })
 }
 
-// PrepareOutputNodeRuntimeForTest prepares the runtime service without
+// PrepareOutputNodeRuntimeForTest prepares one runtime service without
 // listening or announcing, for the external binding test.
 func PrepareOutputNodeRuntimeForTest(t *testing.T) *eebusservicebridge.Service {
 	t.Helper()
-	service, concrete := newOutputNodeRuntime(t)
+	service, _ := OpenPreparedOutputNodeForTest(t)
+	return service
+}
+
+// OpenPreparedOutputNodeForTest prepares one runtime service and returns the
+// node that runtime owns.
+func OpenPreparedOutputNodeForTest(t *testing.T) (*eebusservicebridge.Service, *OutputNode) {
+	t.Helper()
+	service, concrete, backend := newOutputNodeRuntime(t)
 	if err := service.Setup(); err != nil {
 		t.Fatal(err)
 	}
-	return concrete
+	node, err := OpenOutputNode(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return concrete, node
 }
 
-func newOutputNodeRuntime(t *testing.T) (runtimeService, *eebusservicebridge.Service) {
+func newOutputNodeRuntime(t *testing.T) (runtimeService, *eebusservicebridge.Service, Backend) {
+	t.Helper()
+	return newOutputNodeRuntimeOn(t, 4711, runtimeTestNodeToken)
+}
+
+func newOutputNodeRuntimeOn(t *testing.T, port int, token string) (runtimeService, *eebusservicebridge.Service, Backend) {
+	t.Helper()
+	service, concrete := newOutputNodeService(t, port, token)
+	backend := NewOutputServiceBackend(concrete)
+	t.Cleanup(func() { _ = backend.Close() })
+	return service, concrete, backend
+}
+
+func newOutputNodeService(t *testing.T, port int, token string) (runtimeService, *eebusservicebridge.Service) {
 	t.Helper()
 	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "binding")
 	if err != nil {
@@ -238,12 +271,12 @@ func newOutputNodeRuntime(t *testing.T) (runtimeService, *eebusservicebridge.Ser
 	}
 	service, err := newEEBusService(RuntimeConfig{
 		Interface:     "fixture-interface",
-		ListenPort:    4711,
-		ListenAddress: netip.MustParseAddrPort("127.0.0.1:4711"),
+		ListenPort:    port,
+		ListenAddress: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(port)),
 	}, runtimeMaterial{
 		certificate: certificate,
 		localSKI:    certificateSKI(t, certificate),
-		nodeToken:   runtimeTestNodeToken,
+		nodeToken:   token,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -252,11 +285,186 @@ func newOutputNodeRuntime(t *testing.T) (runtimeService, *eebusservicebridge.Ser
 	if !ok || concrete == nil {
 		t.Fatal("runtime service is not the bridge service")
 	}
-	t.Cleanup(func() {
-		adoptOutputService(nil)
-		service.Shutdown()
-	})
+	t.Cleanup(func() { concrete.Shutdown() })
 	return service, concrete
+}
+
+func TestOutputNodeOneInstanceReplacedOtherServes(t *testing.T) {
+	// Replacing or stopping one runtime releases only that instance's node.
+	serviceA, concreteA, backendA := newOutputNodeRuntimeOn(t, 4711, runtimeTestNodeToken)
+	serviceB, concreteB, backendB := newOutputNodeRuntimeOn(t, 4712, outputNodeSecondToken)
+	if err := serviceA.Setup(); err != nil {
+		t.Fatal(err)
+	}
+	if err := serviceB.Setup(); err != nil {
+		t.Fatal(err)
+	}
+	nodeA, err := OpenOutputNode(backendA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeB, err := OpenOutputNode(backendB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodeA == nodeB || nodeA.service == nodeB.service {
+		t.Fatal("two instances share a node")
+	}
+	if err := nodeA.AddEntity("Inverter", "na", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := nodeB.AddEntity("EVSE", "nb", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !outputNodeHasEntity(concreteA, spinemodel.EntityTypeTypeInverter) || outputNodeHasEntity(concreteA, spinemodel.EntityTypeTypeEVSE) {
+		t.Fatal("instance A has the wrong entities")
+	}
+	if !outputNodeHasEntity(concreteB, spinemodel.EntityTypeTypeEVSE) || outputNodeHasEntity(concreteB, spinemodel.EntityTypeTypeInverter) {
+		t.Fatal("instance B has the wrong entities")
+	}
+	_, replacement := newOutputNodeService(t, 4713, outputNodeThirdToken)
+	if err := replacement.Setup(); err != nil {
+		t.Fatal(err)
+	}
+	ReplaceOutputService(backendA, replacement)
+	replaced, err := OpenOutputNode(backendA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced == nodeA || replaced.service != replacement {
+		t.Fatal("replacement kept the old node")
+	}
+	if outputNodeHasEntity(replacement, spinemodel.EntityTypeTypeInverter) {
+		t.Fatal("the new service kept the old entity")
+	}
+	if !outputNodeHasEntity(concreteA, spinemodel.EntityTypeTypeInverter) {
+		t.Fatal("replacing the node removed the old service's entity")
+	}
+	stillB, err := OpenOutputNode(backendB)
+	if err != nil || stillB != nodeB || stillB.service != concreteB {
+		t.Fatal("replacing instance A replaced instance B")
+	}
+	if err := nodeB.AddEntity("Inverter", "nc", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := backendA.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenOutputNode(backendA); err == nil {
+		t.Fatal("closed instance A still opened a node")
+	}
+	stillB, err = OpenOutputNode(backendB)
+	if err != nil || stillB != nodeB {
+		t.Fatal("closing instance A released instance B")
+	}
+	if err := nodeB.AddEntity("PV String", "nd", "nc"); err != nil {
+		t.Fatal(err)
+	}
+	if !nodeB.NestedUnder("nd", "nc") || !outputNodeHasEntity(concreteB, spinemodel.EntityTypeTypePVString) {
+		t.Fatal("instance B stopped serving")
+	}
+}
+
+func TestOutputNodeAcquisitionFailureReleasesOnlyThatInstance(t *testing.T) {
+	// A failed acquisition releases the node it adopted and leaves the other instance.
+	serviceB, concreteB, backendB := newOutputNodeRuntimeOn(t, 4712, outputNodeSecondToken)
+	if err := serviceB.Setup(); err != nil {
+		t.Fatal(err)
+	}
+	nodeB, err := OpenOutputNode(backendB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nodeB.AddEntity("EVSE", "nb", ""); err != nil {
+		t.Fatal(err)
+	}
+	acquisition := newOutputNodeAcquisition(t, 4711, runtimeTestNodeToken)
+	if err := acquisition.openService(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := acquisition.service.Setup(); err != nil {
+		t.Fatal(err)
+	}
+	nodeA, err := acquisition.output.open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodeA == nodeB || nodeA.service == concreteB {
+		t.Fatal("the acquisition adopted the other instance")
+	}
+	if err := nodeA.AddEntity("Inverter", "na", ""); err != nil {
+		t.Fatal(err)
+	}
+	concreteA, ok := acquisition.service.(*eebusservicebridge.Service)
+	if !ok || !outputNodeHasEntity(concreteA, spinemodel.EntityTypeTypeInverter) || outputNodeHasEntity(concreteB, spinemodel.EntityTypeTypeInverter) {
+		t.Fatal("the acquisition wrote the other instance")
+	}
+	if err := acquisition.closeRuntime(errOutputNode); err == nil {
+		t.Fatal("acquisition failure reported success")
+	}
+	if _, err := acquisition.output.open(); err == nil {
+		t.Fatal("the released acquisition still opened a node")
+	}
+	stillB, err := OpenOutputNode(backendB)
+	if err != nil || stillB != nodeB || !outputNodeHasEntity(concreteB, spinemodel.EntityTypeTypeEVSE) {
+		t.Fatal("the failed acquisition released the other instance")
+	}
+	if err := nodeB.AddEntity("Inverter", "nc", ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOutputNodeStartMovesOutputOntoTheBackend(t *testing.T) {
+	// Starting one acquisition moves only that acquisition's output onto its backend.
+	kept := &fakeRuntimeService{started: make(chan struct{})}
+	moved := &fakeRuntimeService{started: make(chan struct{})}
+	keptSession := &outputSession{}
+	movedSession := &outputSession{}
+	staying := &runtimeAcquisition{service: kept, output: keptSession}
+	leaving := &runtimeAcquisition{service: moved, output: movedSession}
+	backend, err := leaving.startBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+	if leaving.output != nil {
+		t.Fatal("the started acquisition kept the output session")
+	}
+	owner, ok := backend.(*serviceBackend)
+	if !ok || owner.output != movedSession || owner.service != moved {
+		t.Fatal("the backend did not receive the started acquisition's output session")
+	}
+	if staying.output != keptSession || staying.service != kept {
+		t.Fatal("another acquisition lost its output session")
+	}
+}
+
+func newOutputNodeAcquisition(t *testing.T, port int, token string) *runtimeAcquisition {
+	t.Helper()
+	certificate, err := shipcert.CreateCertificate("", "Helianthus", "RO", "binding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquisition := &runtimeAcquisition{
+		config: RuntimeConfig{
+			Interface:     "fixture-interface",
+			ListenPort:    port,
+			ListenAddress: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(port)),
+		},
+		material: runtimeMaterial{
+			certificate: certificate,
+			localSKI:    certificateSKI(t, certificate),
+			nodeToken:   token,
+		},
+		dependencies:          runtimeDependencies{now: time.Now, newService: newEEBusService},
+		outgoingAttemptBridge: newFirstTrustOutgoingAttemptBridge(nil),
+	}
+	t.Cleanup(func() {
+		if acquisition.service != nil {
+			acquisition.service.Shutdown()
+		}
+	})
+	return acquisition
 }
 
 func outputNodeHasEntity(service *eebusservicebridge.Service, entityType spinemodel.EntityTypeType) bool {

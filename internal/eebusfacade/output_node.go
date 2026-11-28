@@ -15,65 +15,164 @@ import (
 
 var errOutputNode = errors.New("existing node is unavailable")
 
-var (
-	outputNodeAdoptMu sync.Mutex
-	outputNodeAdopted *eebusservicebridge.Service
-	outputNodeLive    *OutputNode
-)
-
-// OutputNode is the node of the running runtime service. It adds entities and
-// server features on that node and never composes a second service.
+// OutputNode is the node of one runtime service. It adds entities and server
+// features on that service and never composes a second service.
 type OutputNode struct {
 	mu       sync.Mutex
 	service  *eebusservicebridge.Service
 	byLetter map[string]spineapi.EntityLocalInterface
 }
 
-func adoptOutputService(service *eebusservicebridge.Service) {
-	outputNodeAdoptMu.Lock()
-	defer outputNodeAdoptMu.Unlock()
-	if outputNodeLive != nil && (service == nil || outputNodeLive.service != service) {
-		outputNodeLive = nil
-	}
-	outputNodeAdopted = service
+// outputSession is the output node owned by one runtime instance.
+type outputSession struct {
+	mu      sync.Mutex
+	service *eebusservicebridge.Service
+	node    *OutputNode
 }
 
-// releaseOutputService forgets the adopted service when the runtime shuts it down.
-func releaseOutputService(service runtimeService) {
-	concrete, _ := service.(*eebusservicebridge.Service)
-	outputNodeAdoptMu.Lock()
-	defer outputNodeAdoptMu.Unlock()
-	if concrete == nil || outputNodeAdopted != concrete {
+func (session *outputSession) adopt(service *eebusservicebridge.Service) {
+	if session == nil {
 		return
 	}
-	outputNodeAdopted = nil
-	outputNodeLive = nil
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.node != nil && (service == nil || session.node.service != service) {
+		session.node = nil
+	}
+	session.service = service
 }
 
-// OpenOutputNode returns the node of the running runtime service once that
+func (session *outputSession) release(service runtimeService) {
+	if session == nil {
+		return
+	}
+	concrete, _ := service.(*eebusservicebridge.Service)
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if concrete == nil || session.service != concrete {
+		return
+	}
+	session.service = nil
+	session.node = nil
+}
+
+func (session *outputSession) open() (*OutputNode, error) {
+	if session == nil {
+		return nil, errOutputNode
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	adopted := session.service
+	if session.node != nil && session.node.service == adopted && nodeReady(adopted) {
+		return session.node, nil
+	}
+	node, err := NewOutputNode(adopted)
+	if err != nil {
+		return nil, err
+	}
+	session.node = node
+	return session.node, nil
+}
+
+// OpenOutputNode returns the node stored for this runtime backend once its
 // service is prepared. Without one it fails and composes nothing.
-func OpenOutputNode() (*OutputNode, error) {
-	if node := currentAdoptedNode(); node != nil {
-		return node, nil
+func OpenOutputNode(backend Backend) (*OutputNode, error) {
+	owner, ok := backend.(*serviceBackend)
+	if !ok || owner == nil {
+		return nil, errOutputNode
 	}
-	return nil, errOutputNode
+	return owner.openOutput()
 }
 
-func currentAdoptedNode() *OutputNode {
-	outputNodeAdoptMu.Lock()
-	defer outputNodeAdoptMu.Unlock()
-	adopted := outputNodeAdopted
-	if outputNodeLive != nil && outputNodeLive.service == adopted && nodeReady(adopted) {
-		return outputNodeLive
+// NewOutputNode returns the node of a prepared service.
+func NewOutputNode(service *eebusservicebridge.Service) (*OutputNode, error) {
+	if !nodeReady(service) {
+		return nil, errOutputNode
 	}
-	if !nodeReady(adopted) {
-		return nil
-	}
-	outputNodeLive = &OutputNode{
-		service:  adopted,
+	return &OutputNode{
+		service:  service,
 		byLetter: map[string]spineapi.EntityLocalInterface{},
+	}, nil
+}
+
+// NewOutputServiceBackend owns the output node of one prepared service.
+func NewOutputServiceBackend(service *eebusservicebridge.Service) Backend {
+	backend := &serviceBackend{
+		service:   service,
+		output:    &outputSession{},
+		closeDone: make(chan struct{}),
 	}
-	return outputNodeLive
+	backend.output.adopt(service)
+	return backend
+}
+
+// ReplaceOutputService releases the old node of this backend and adopts service.
+func ReplaceOutputService(backend Backend, service *eebusservicebridge.Service) {
+	owner, ok := backend.(*serviceBackend)
+	if !ok || owner == nil {
+		return
+	}
+	owner.replaceOutput(service)
+}
+
+func (backend *serviceBackend) openOutput() (*OutputNode, error) {
+	if backend == nil {
+		return nil, errOutputNode
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if backend.closed || backend.output == nil {
+		return nil, errOutputNode
+	}
+	return backend.output.open()
+}
+
+func (backend *serviceBackend) releaseOutput() {
+	if backend == nil {
+		return
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if backend.output == nil {
+		return
+	}
+	backend.output.release(backend.service)
+	backend.output = nil
+}
+
+func (backend *serviceBackend) replaceOutput(service runtimeService) {
+	concrete, _ := service.(*eebusservicebridge.Service)
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if backend.output == nil {
+		backend.output = &outputSession{}
+	}
+	backend.service = service
+	backend.output.adopt(concrete)
+}
+
+func (acquisition *runtimeAcquisition) adoptOutput(service runtimeService) {
+	concrete, _ := service.(*eebusservicebridge.Service)
+	if concrete == nil {
+		return
+	}
+	if acquisition.output == nil {
+		acquisition.output = &outputSession{}
+	}
+	acquisition.output.adopt(concrete)
+}
+
+func (acquisition *runtimeAcquisition) releaseOutput() {
+	if acquisition == nil || acquisition.output == nil {
+		return
+	}
+	acquisition.output.release(acquisition.service)
+}
+
+func (acquisition *runtimeAcquisition) takeOutput() *outputSession {
+	session := acquisition.output
+	acquisition.output = nil
+	return session
 }
 
 func nodeReady(service *eebusservicebridge.Service) bool {
