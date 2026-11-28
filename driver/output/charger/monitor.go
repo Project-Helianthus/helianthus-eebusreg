@@ -87,6 +87,10 @@ func Serve(result Result, place Placement, attach func([]string) (string, error)
 			outcome.Loss = nameLoss(outcome.Loss, featureDiagnosis)
 			sort.Strings(outcome.Loss)
 		}
+		if err := clearStaleMeasurements(result, place); err != nil {
+			outcome.Loss = nameLoss(outcome.Loss, featureMeasurement)
+			sort.Strings(outcome.Loss)
+		}
 		return outcome
 	}
 	if !place.Node || !place.Found || place.Kind != kindEVSE || !letterAddress(place.Address) {
@@ -129,6 +133,17 @@ func clearStaleDiagnosis(result Result, place Placement) error {
 		return nil
 	}
 	return publishUnknownDiagnosis(node, place.Address, result)
+}
+
+func clearStaleMeasurements(result Result, place Placement) error {
+	if !admitted(result) || !place.Node || !place.Found || place.Kind != kindEVSE || !letterAddress(place.Address) {
+		return nil
+	}
+	node, ok := place.Surface.(*eebusfacade.OutputNode)
+	if !ok {
+		return nil
+	}
+	return retireUnannouncedMeasurements(node, place.Address)
 }
 
 func acceptGroup(attach func([]string) (string, error), features []string) (string, bool) {

@@ -9,7 +9,8 @@
 // sum, marked calculated. A withheld sum stays the named total loss. The
 // free-text total name does not register the use case and does not hide that
 // loss when no total row is served. A later cut drops a measurement it does
-// not serve. An unknown fault clears a published failure. A lifetime counter
+// not serve, and a cut that no longer announces power monitoring withdraws
+// that table. An unknown fault clears a published failure. A lifetime counter
 // that is not an exact number of watt-hours is a named loss. EVSE
 // Commissioning and Configuration is announced for the operating state or an
 // admitted fault status. A rejected server feature withdraws only the use

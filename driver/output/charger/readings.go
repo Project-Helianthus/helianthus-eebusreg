@@ -79,6 +79,8 @@ func publishCharger(node *eebusfacade.OutputNode, address string, result Result,
 		if err := publishMeasurements(node, address, result); err != nil {
 			return featureMeasurement, err
 		}
+	} else if err := retireUnannouncedMeasurements(node, address); err != nil {
+		return featureMeasurement, err
 	}
 	if listed(announced, useCaseEVSECommissioning) {
 		if err := publishDiagnosis(node, address, result); err != nil {
@@ -106,6 +108,9 @@ func publishMeasurements(node *eebusfacade.OutputNode, address string, result Re
 	if len(rows) == 0 {
 		return nil
 	}
+	if err := replaceDeadMeasurementCache(node, address, entity, rows); err != nil {
+		return err
+	}
 	if err := registerChargerUseCase(node, address, powerSupport()); err != nil {
 		return err
 	}
@@ -120,22 +125,41 @@ func publishMeasurements(node *eebusfacade.OutputNode, address string, result Re
 	return nil
 }
 
-// ForgetPublication drops cached ids for an entity the node has removed.
-// The next add at that address builds a new table.
-func ForgetPublication(node *eebusfacade.OutputNode, address string) {
-	if node == nil || address == "" {
-		return
-	}
+// retireUnannouncedMeasurements withdraws a measurement table when this cut
+// does not announce power monitoring. The previous total would otherwise stay
+// readable.
+func retireUnannouncedMeasurements(node *eebusfacade.OutputNode, address string) error {
 	publicationMu.Lock()
 	defer publicationMu.Unlock()
 	byAddress := publications[node]
 	if byAddress == nil {
-		return
+		return nil
 	}
-	delete(byAddress, address)
-	if len(byAddress) == 0 {
-		delete(publications, node)
+	entity := byAddress[address]
+	if entity == nil || (len(entity.rows) == 0 && !entity.connection) {
+		return nil
 	}
+	return retireMeasurementTable(node, address, entity)
+}
+
+// replaceDeadMeasurementCache rebuilds ids after the entity at this address
+// was removed. A cached id that the new measurement server does not hold is
+// not a row that can be updated.
+func replaceDeadMeasurementCache(node *eebusfacade.OutputNode, address string, entity *publishedEntity, rows []wireRow) error {
+	if len(entity.rows) == 0 {
+		return nil
+	}
+	for _, row := range rows {
+		ids, ok := entity.rows[row.key]
+		if !ok {
+			continue
+		}
+		if node.UpdateMeasurementValue(address, ids.measurement, row.measurementValue(ids.measurement), row.clearSource()) == nil {
+			return nil
+		}
+		return retireMeasurementTable(node, address, entity)
+	}
+	return nil
 }
 
 func publicationStale(node *eebusfacade.OutputNode, address string, entity *publishedEntity, rows []wireRow) bool {
@@ -658,7 +682,7 @@ func commissioningState(result Result) (spinemodel.DeviceDiagnosisOperatingState
 	if !ok {
 		return "", false
 	}
-	if symbol == symbolPresent {
+	if symbol == symbolPresent || symbol == elementFault+"."+symbolPresent {
 		return spinemodel.DeviceDiagnosisOperatingStateTypeFailure, true
 	}
 	return spinemodel.DeviceDiagnosisOperatingStateTypeNormalOperation, true

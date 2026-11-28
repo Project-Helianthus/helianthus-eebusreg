@@ -231,6 +231,94 @@ func TestChargerOutputPartialCutDropsPublishedTotal(t *testing.T) {
 	}
 }
 
+func TestChargerOutputWithheldCutRetiresMeasurements(t *testing.T) {
+	// A published total and phase stay readable only while power monitoring is announced.
+	// A later admitted cut with a withheld sum and no measurement row withdraws that table.
+	// no commissioning: nothing else is announced, and the previous total is not readable.
+	// commissioning: a present fault is still failure, and the previous total is not readable.
+	published := eebusruntime.LensResult{
+		Family: "charger", ResourceID: "bay", LensAdmitted: true, RuntimeEnabled: true,
+		Facts: []eebusruntime.LensFact{
+			lensQuantity("evse.ac.total_active_power", "", "9000", 0, "unit.watt"),
+			lensQuantity("evse.ac.active_power", "a", "15", 2, "unit.watt"),
+		},
+	}
+	withheld := &eebusruntime.LensMemberSum{
+		Withheld: true, Reason: "partial_cut", NotIncludedCount: 1,
+		NotIncluded: []eebusruntime.LensNotIncluded{{Asset: "asset-phase-b", Reason: "source_unavailable"}},
+	}
+	cases := []struct {
+		name  string
+		facts []eebusruntime.LensFact
+		state string
+	}{
+		{"no commissioning", nil, ""},
+		{"commissioning", []eebusruntime.LensFact{lensSymbol("evse.status.fault", "present")}, "failure"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			binding, node, service := newChargerBinding(t)
+			if loss := binding.Apply(published); len(loss) != 0 {
+				t.Fatalf("apply loss %v", loss)
+			}
+			entity := entityAt(t, service, []spinemodel.AddressEntityType{2})
+			if !rowScope(readRows(t, entity), "acPowerTotal") {
+				t.Fatal("total was not published")
+			}
+			next := published
+			next.Facts = tc.facts
+			next.Elements = nil
+			next.MemberSum = withheld
+			binding.Apply(next)
+			if node.HasUseCaseSupport("a", spinemodel.UseCaseActorTypeMonitoredUnit, spinemodel.UseCaseNameTypeMonitoringOfPowerConsumption) {
+				t.Fatal("power monitoring stayed registered")
+			}
+			if feature := entity.FeatureOfTypeAndRole(spinemodel.FeatureTypeTypeMeasurement, spinemodel.RoleTypeServer); feature != nil {
+				rows := readRows(t, entity)
+				if rowScope(rows, "acPowerTotal") || rowScope(rows, "acPower") {
+					t.Fatalf("previous readings remained %+v", rows)
+				}
+			}
+			loss := binding.MonitoringLoss("bay")
+			if !chargerHas(loss, "partial_cut") || !chargerHas(loss, "asset-phase-b source_unavailable") {
+				t.Fatalf("loss %v", loss)
+			}
+			if tc.state == "" {
+				return
+			}
+			state := diagnosisState(t, entity)
+			if state == nil || state.OperatingState == nil || string(*state.OperatingState) != tc.state {
+				t.Fatalf("state %+v", state)
+			}
+		})
+	}
+}
+
+func TestChargerOutputQualifiedFaultToken(t *testing.T) {
+	// The EVSE pack accepts the fully qualified fault token as well as the short token.
+	// present: failure. clear: normalOperation. lastErrorCode stays unset.
+	cases := []struct {
+		name, token, state string
+	}{
+		{"present", "evse.status.fault.present", "failure"},
+		{"clear", "evse.status.fault.clear", "normalOperation"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			binding, _, service := newChargerBinding(t)
+			result := eebusruntime.LensResult{
+				Family: "charger", ResourceID: "bay", LensAdmitted: true, RuntimeEnabled: true,
+				Facts: []eebusruntime.LensFact{lensSymbol("evse.status.fault", tc.token)},
+			}
+			binding.Apply(result)
+			state := diagnosisState(t, entityAt(t, service, []spinemodel.AddressEntityType{2}))
+			if state == nil || state.OperatingState == nil || string(*state.OperatingState) != tc.state || state.LastErrorCode != nil {
+				t.Fatalf("state %+v", state)
+			}
+		})
+	}
+}
+
 func TestChargerOutputReapplyAfterWithdraw(t *testing.T) {
 	// Withdraw removes the entity. The same resource is applied again at its stored address.
 	// The new entity gets a measurement table. Reused ids from the deleted entity would leave it empty.
