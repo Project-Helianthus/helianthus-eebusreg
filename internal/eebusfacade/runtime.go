@@ -86,6 +86,7 @@ type serviceBackend struct {
 	outgoingAttempts *firstTrustOutgoingAttemptBridge
 	unsubscribeSPINE func() error
 	useCases         *remoteUseCases
+	output           *outputSession
 	listenerTerminal <-chan error
 	runClaimed       bool
 	serviceStarted   bool
@@ -201,6 +202,7 @@ type runtimeAcquisition struct {
 	useCases                 *remoteUseCases
 	operatorAdmin            *operatorAdminV1Bridge
 	rawMutations             *eebusmutation.Coordinator
+	output                   *outputSession
 }
 
 // acquireRuntimeWithSnapshotSerializer runs the startup steps in order. A failing
@@ -375,12 +377,13 @@ func (acquisition *runtimeAcquisition) openService(serializer runtimeSnapshotSer
 	acquisition.handler = handler
 	acquisition.reader = reader
 	acquisition.service = service
+	acquisition.adoptOutput(service)
 	acquisition.outgoingAttemptBridge.bindLifecycle(service)
 	return nil
 }
 
 func (acquisition *runtimeAcquisition) closeRuntime(cause error) error {
-	releaseOutputService(acquisition.service)
+	acquisition.releaseOutput()
 	acquisition.service.Shutdown()
 	subscriptionErr := acquisition.rawFeatures.closeRemoteSubscriptions()
 	attemptErr := acquisition.outgoingAttemptBridge.shutdown()
@@ -511,24 +514,24 @@ func (acquisition *runtimeAcquisition) startBackend() (Backend, error) {
 		rawFeatures: acquisition.rawFeatures, rawMutations: acquisition.rawMutations, useCases: acquisition.useCases, unsubscribeSPINE: acquisition.unsubscribeSPINE, closeDone: make(chan struct{}),
 	}
 	scoped, ok := acquisition.service.(runtimeScopedService)
-	if !ok {
-		return backend, nil
+	if ok {
+		if !backend.runtimeStartAuthorized() {
+			acquisition.closeRawMutations()
+			return nil, acquisition.closeRuntimeWithSPINE(errRuntimeTrustEffectsDenied)
+		}
+		if err := scoped.StartWithPolicy(); err != nil {
+			acquisition.closeRawMutations()
+			return nil, acquisition.closeRuntimeWithSPINE(fmt.Errorf("start scoped eebus runtime service: %w", err))
+		}
+		terminal := scoped.ListenerTerminal()
+		if terminal == nil {
+			acquisition.closeRawMutations()
+			return nil, acquisition.closeRuntimeWithSPINE(errors.New("scoped eebus runtime service omitted listener terminal signal"))
+		}
+		backend.listenerTerminal = terminal
+		backend.serviceStarted = true
 	}
-	if !backend.runtimeStartAuthorized() {
-		acquisition.closeRawMutations()
-		return nil, acquisition.closeRuntimeWithSPINE(errRuntimeTrustEffectsDenied)
-	}
-	if err := scoped.StartWithPolicy(); err != nil {
-		acquisition.closeRawMutations()
-		return nil, acquisition.closeRuntimeWithSPINE(fmt.Errorf("start scoped eebus runtime service: %w", err))
-	}
-	terminal := scoped.ListenerTerminal()
-	if terminal == nil {
-		acquisition.closeRawMutations()
-		return nil, acquisition.closeRuntimeWithSPINE(errors.New("scoped eebus runtime service omitted listener terminal signal"))
-	}
-	backend.listenerTerminal = terminal
-	backend.serviceStarted = true
+	backend.output = acquisition.takeOutput()
 	return backend, nil
 }
 
@@ -856,7 +859,7 @@ func (backend *serviceBackend) Close() error {
 		backend.handler.waitForSPINEEvents()
 	}
 	if backend.service != nil {
-		releaseOutputService(backend.service)
+		backend.releaseOutput()
 		backend.service.Shutdown()
 	}
 	subscriptionErr := backend.closeRemoteSubscriptions()
@@ -920,7 +923,6 @@ func newEEBusService(config RuntimeConfig, material runtimeMaterial, reader eebu
 	if candidate == nil {
 		return nil, errors.New("released scoped service construction failed")
 	}
-	adoptOutputService(candidate)
 	return candidate, nil
 }
 

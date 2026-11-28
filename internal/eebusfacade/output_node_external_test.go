@@ -1,6 +1,7 @@
 package eebusfacade_test
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,10 +12,23 @@ import (
 	spinemodel "github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
+// outputNodeRuntime is one runtime instance whose binding reads node.
+type outputNodeRuntime struct {
+	eebusruntime.Runtime
+	node *eebusfacade.OutputNode
+}
+
+func (runtime *outputNodeRuntime) OutputNode() (*eebusfacade.OutputNode, error) {
+	if runtime == nil || runtime.node == nil {
+		return nil, errors.New("existing node is unavailable")
+	}
+	return runtime.node, nil
+}
+
 func TestOutputBindingOnRuntimeNode(t *testing.T) {
-	service := eebusfacade.PrepareOutputNodeRuntimeForTest(t)
+	service, node := eebusfacade.OpenPreparedOutputNodeForTest(t)
 	entities := len(service.LocalDevice().Entities())
-	binding, err := eebusruntime.NewOutputBinding(t.TempDir())
+	binding, err := eebusruntime.NewOutputBinding(&outputNodeRuntime{node: node}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +95,9 @@ func TestOutputBindingAddressAcrossRuntimeRestart(t *testing.T) {
 		}
 		return north.Address().Entity, south.Address().Entity
 	}
-	first := eebusfacade.PrepareOutputNodeRuntimeForTest(t)
-	binding, err := eebusruntime.NewOutputBinding(directory)
+	first, firstNode := eebusfacade.OpenPreparedOutputNodeForTest(t)
+	runtime := &outputNodeRuntime{node: firstNode}
+	binding, err := eebusruntime.NewOutputBinding(runtime, directory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +107,8 @@ func TestOutputBindingAddressAcrossRuntimeRestart(t *testing.T) {
 		}
 	}
 	north, south := placed(first.LocalDevice())
-	second := eebusfacade.PrepareOutputNodeRuntimeForTest(t)
+	second, secondNode := eebusfacade.OpenPreparedOutputNodeForTest(t)
+	runtime.node = secondNode
 	for _, result := range []eebusruntime.LensResult{charger, inverter} {
 		if loss := binding.Apply(result); len(loss) != 0 {
 			t.Fatalf("loss on the restarted node %v", loss)
@@ -101,8 +117,8 @@ func TestOutputBindingAddressAcrossRuntimeRestart(t *testing.T) {
 	if gotNorth, gotSouth := placed(second.LocalDevice()); !reflect.DeepEqual(gotNorth, north) || !reflect.DeepEqual(gotSouth, south) {
 		t.Fatalf("kept binding moved entities: north %v to %v, south %v to %v", north, gotNorth, south, gotSouth)
 	}
-	third := eebusfacade.PrepareOutputNodeRuntimeForTest(t)
-	reopened, err := eebusruntime.NewOutputBinding(directory)
+	third, thirdNode := eebusfacade.OpenPreparedOutputNodeForTest(t)
+	reopened, err := eebusruntime.NewOutputBinding(&outputNodeRuntime{node: thirdNode}, directory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,8 +161,8 @@ func TestOutputBindingChargerRejectionOnRuntimeNode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			service := eebusfacade.PrepareOutputNodeRuntimeForTest(t)
-			binding, err := eebusruntime.NewOutputBinding(t.TempDir())
+			service, node := eebusfacade.OpenPreparedOutputNodeForTest(t)
+			binding, err := eebusruntime.NewOutputBinding(&outputNodeRuntime{node: node}, t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}

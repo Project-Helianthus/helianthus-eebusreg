@@ -135,7 +135,7 @@ func TestInverterMonitoringFeatureReject(t *testing.T) {
 	// The production gate returns the existing-node loss and leaves that feature off.
 	node := &monitoringRejectNode{outputBindingFakeNode: newOutputBindingFakeNode()}
 	useOutputBindingNode(t, func() (shipNode, error) { return node, nil })
-	binding, err := NewOutputBinding(t.TempDir())
+	binding, err := NewOutputBinding(nil, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

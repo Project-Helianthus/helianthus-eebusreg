@@ -307,7 +307,7 @@ func TestChargerOutputFeatureReject(t *testing.T) {
 		t.Run(feature, func(t *testing.T) {
 			node := &chargerOutputRejectNode{outputBindingFakeNode: newOutputBindingFakeNode(), reject: feature}
 			useOutputBindingNode(t, func() (shipNode, error) { return node, nil })
-			binding, err := NewOutputBinding(t.TempDir())
+			binding, err := NewOutputBinding(nil, t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -395,7 +395,7 @@ func TestChargerOutputRejectedConnectionLeavesNoMeasurement(t *testing.T) {
 	// and the EVSE entity keeps only the commissioning feature.
 	node := &chargerOutputRejectNode{outputBindingFakeNode: newOutputBindingFakeNode(), reject: "electrical connection"}
 	useOutputBindingNode(t, func() (shipNode, error) { return node, nil })
-	binding, err := NewOutputBinding(t.TempDir())
+	binding, err := NewOutputBinding(nil, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestChargerOutputRejectedOperationFeature(t *testing.T) {
 		t.Run(feature, func(t *testing.T) {
 			node := &chargerOutputRejectNode{outputBindingFakeNode: newOutputBindingFakeNode(), reject: feature}
 			useOutputBindingNode(t, func() (shipNode, error) { return node, nil })
-			binding, err := NewOutputBinding(t.TempDir())
+			binding, err := NewOutputBinding(nil, t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}
