@@ -54,7 +54,7 @@ func TestChargerChargingSymbols(t *testing.T) {
 	requireSymbol(t, finished, "resource.connector", "evse.status.charging", "complete")
 }
 
-func TestChargerProjectionLoss(t *testing.T) {
+func TestChargerUnmappedState(t *testing.T) {
 	cases := []struct {
 		state string
 		fault string
